@@ -70,7 +70,12 @@ test('generic defaults: no repo env is injected and unset keys fall back', () =>
   assert.equal(app.tsconfig, 'tsconfig.json');
   assert.equal(app.apiPrefix, '/api');
   assert.deepEqual(app.alwaysRun, []);
-  assert.deepEqual(app.tiers.ignore, ['**/*.test.ts', '**/*.test.tsx', '**/*.md']);
+  // unit tests under srcDir only: a `*.test.ts` E2E spec under specDir must never be ignored
+  assert.deepEqual(app.tiers.ignore, ['src/**/*.test.ts', 'src/**/*.test.tsx', 'src/**/*.spec.ts', 'src/**/*.spec.tsx', '**/*.md']);
+  const other = findApp(withDefaults({ apps: [{ ...manualApp('a'), srcDir: 'app/' }] }, '/x', { checkFiles: false }));
+  assert.deepEqual(other.tiers.ignore.slice(0, 2), ['app/**/*.test.ts', 'app/**/*.test.tsx']);
+  const flat = findApp(withDefaults({ apps: [{ ...manualApp('a'), srcDir: '.' }] }, '/x', { checkFiles: false }));
+  assert.deepEqual(flat.tiers.ignore.slice(0, 2), ['**/*.test.ts', '**/*.test.tsx']);
   assert.deepEqual(app.adapter, { basePath: '', routeFiles: [], map: {}, name: 'manual' });
   assert.deepEqual(cfg.shared, []);
   assert.deepEqual(cfg.ignore, ['**/*.md', 'docs/**']);
@@ -142,6 +147,8 @@ test('template: each placeholder appears once and the filled-in file loads clean
     assert.equal(app.adapter.name, 'react-router-lazy');
     assert.equal(app.adapter.basePath, '');
     assert.deepEqual(app.run.modeEnv, { dev: {}, preview: {} });
+    // the template states the defaults: unit tests under src only
+    assert.deepEqual(app.tiers.ignore, ['src/**/*.test.ts', 'src/**/*.test.tsx', 'src/**/*.spec.ts', 'src/**/*.spec.tsx', '**/*.md']);
   } finally { warn.mock.restore(); cleanup(); }
 });
 

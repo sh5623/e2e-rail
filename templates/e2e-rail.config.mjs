@@ -31,7 +31,9 @@ export default {
         // package.json are always included; list app entry points and shared shell code here, e.g.
         //   'src/main.tsx', 'src/routes/**', 'src/lib/auth/**', 'src/styles/**', 'index.html'
         full: [],
-        ignore: ['**/*.test.ts', '**/*.test.tsx', '**/*.md'],   // never trigger a run
+        // Never trigger a run: unit tests next to the source (under srcDir only — Playwright also runs `*.test.ts`,
+        // and a test file under specDir is never ignored) and Markdown.
+        ignore: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'src/**/*.spec.ts', 'src/**/*.spec.tsx', '**/*.md'],
       },
 
       run: {

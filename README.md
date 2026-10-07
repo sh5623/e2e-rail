@@ -75,11 +75,11 @@ About 30 minutes per repository.
 
 | # | Changed file | Result (reason) |
 | --- | --- | --- |
-| 1 | matches `ignore`, the app's `tiers.ignore`, or lies in the ledger dir | ignored |
+| 1 | matches `ignore` or the app's `tiers.ignore` (never a test file under `specDir`), or lies in the ledger dir | ignored |
 | 2 | matches `shared` | every app full (`shared:<file>`) |
 | 3 | outside every app root, or outside the config root | every app full (`unknown-root:<file>`) |
 | 4 | matches the app's `tiers.full` (always includes `supportDirs/**`, the Playwright config, `package.json`) | that app full (`tier-full:<glob>`) |
-| 5 | a spec in `specDir` | that spec (`spec-self:<file>`); a spec on disk the index does not know: app full (`spec-unindexed:<file>`) |
+| 5 | a test file (`*.spec.*` or `*.test.*`) in `specDir` | that spec (`spec-self:<file>`); one Playwright does not list (so the index does not know it): app full (`spec-unindexed:<file>`) |
 | 6 | under `supportDirs` (if you took them out of `tiers.full`) | that app full (`support:<file>`) |
 | 7 | under `srcDir` | the specs it reaches (below); a blind spot runs the app full |
 | 8 | any other file of the app | that app full (`app-other:<file>`) |
@@ -97,7 +97,9 @@ spec and every `alwaysRun` spec ride along. The app runs in full instead when th
 
 `map` indexes each spec (cached in `.e2e-rail/map.<app>.json`): its routes (`goto` literals and templates with a
 literal prefix, `basePath` removed), its API globs (`route()` mocks), the source files it imports, its support helpers
-and its Playwright projects (from `playwright test --list`). Literal `goto` calls inside the support helpers a spec
+and its Playwright projects (from `playwright test --list`). The specs are exactly the test files Playwright lists,
+whatever their name (`*.spec.*`, `*.test.*`, a custom `testMatch`) and whatever `tiers.ignore` says; a file it does not
+list has no project to run in and is not indexed. Literal `goto` calls inside the support helpers a spec
 imports are merged into its routes, but they never rescue a spec whose own navigation cannot be read: that spec is
 **unmapped** and runs on every src change. The unmapped share is the ceiling of what selection can save.
 
@@ -139,8 +141,9 @@ Global: `--version`, `--help`, `<command> --help`. Every error is one `e2e-rail:
 bad usage, 1 for anything else. Run-shaping options are first-class flags; after `--` the CLI refuses `--shard`,
 `--test-list`, `--test-list-invert`, `--last-failed`, `--list`, `--only-changed`, `--reporter`, `--output`, `-c` and
 `--config` before anything runs. A run narrowed by `--project`, a `-- --grep` or a file filter prints
-`kind full (filtered)` and never verifies or moves last-green. `run --selection` on a selection with no specs for the
-app prints `<app>: nothing selected (partial, 0 specs)`, runs nothing and records nothing.
+`kind full (filtered)` and never verifies or moves last-green. `run --selection` on a selection that writes no
+test-list line for the app prints `<app>: nothing selected (partial, 0 specs)` (or `…, <n> spec(s), 0 test-list lines`
+when no selected spec has a Playwright project), runs nothing and records nothing.
 
 ## Shadow mode
 
@@ -203,7 +206,7 @@ temp dir and ledger lines into `.e2e-rail/`, which the fingerprint ignores.
 | `adapter.name` | required | `react-router-lazy` or `manual` |
 | `adapter.routeFiles` · `basePath` · `map` | `[]` · `''` · `{}` | route-table globs (needed to narrow); the prefix the router adds; for `manual`: `{ '<route>': ['src/…'] }` |
 | `apiPrefix` · `alwaysRun` | `/api` · `[]` | API URL prefix read from source literals; spec slugs that run in every selection |
-| `tiers.full` · `tiers.ignore` | support dirs, Playwright config, `package.json` · test and Markdown files | globs that run the app in full · that never trigger a run |
+| `tiers.full` · `tiers.ignore` | support dirs, Playwright config, `package.json` · unit tests under `srcDir` (`<srcDir>/**/*.test.ts`, `*.test.tsx`, `*.spec.ts`, `*.spec.tsx`) and `**/*.md` | globs that run the app in full · that never trigger a run (a test file under `specDir` is never ignored: Playwright runs `*.test.*` too) |
 | `run.preview` | none | `{ build: '<command>', dist: '<dir>' }` for `--mode preview` |
 | `run.workers` · `run.modeEnv` · `run.env` · `run.port` | `{ ci: 1 }` · `{}` · `{}` · none | measured worker counts; env per mode; env for every run (e2e-rail injects none); informational |
 | `shared` · `ignore` | `[]` · `['**/*.md', 'docs/**']` | repo-relative globs that run every app in full · that never trigger a run |

@@ -75,11 +75,11 @@ codex plugin add e2e-rail@e2e-rail-codex
 
 | # | 변경 파일 | 결과(이유) |
 | --- | --- | --- |
-| 1 | `ignore`, 앱의 `tiers.ignore` 에 맞거나 원장 디렉터리 안 | 무시 |
+| 1 | `ignore` 나 앱의 `tiers.ignore` 에 맞거나(`specDir` 아래 테스트 파일은 예외) 원장 디렉터리 안 | 무시 |
 | 2 | `shared` 에 맞음 | 전 앱 전수(`shared:<file>`) |
 | 3 | 어느 앱 root 에도 속하지 않거나 설정 root 밖 | 전 앱 전수(`unknown-root:<file>`) |
 | 4 | 앱의 `tiers.full` 에 맞음(`supportDirs/**`, Playwright 설정, `package.json` 은 항상 포함) | 그 앱 전수(`tier-full:<glob>`) |
-| 5 | `specDir` 의 spec | 그 spec(`spec-self:<file>`). 인덱스가 모르는 디스크 위 spec 이면 앱 전수(`spec-unindexed:<file>`) |
+| 5 | `specDir` 의 테스트 파일(`*.spec.*` 또는 `*.test.*`) | 그 spec(`spec-self:<file>`). Playwright 가 나열하지 않아 인덱스가 모르는 파일이면 앱 전수(`spec-unindexed:<file>`) |
 | 6 | `supportDirs` 아래(`tiers.full` 에서 뺐을 때) | 그 앱 전수(`support:<file>`) |
 | 7 | `srcDir` 아래 | 닿는 spec(아래). 사각지대가 있으면 앱 전수 |
 | 8 | 그 밖의 앱 파일 | 그 앱 전수(`app-other:<file>`) |
@@ -96,9 +96,10 @@ codex plugin add e2e-rail@e2e-rail-codex
 
 `map` 은 spec 마다(캐시 `.e2e-rail/map.<app>.json`) 라우트(`goto` 리터럴과 리터럴 접두를 가진 템플릿, `basePath` 제거),
 API 글롭(`route()` 목), import 하는 소스 파일, support 헬퍼, Playwright 프로젝트(`playwright test --list` 기준)를
-색인한다. spec 이 import 하는 support 헬퍼 안의 리터럴 `goto` 는 그 spec 의 라우트에 합쳐지지만, 자기 navigation 을
-읽을 수 없는 spec 을 구해 주지는 않는다. 그런 spec 은 **unmapped** 이고 모든 src 변경마다 돈다. unmapped 비율이 선택이
-아낄 수 있는 상한이다.
+색인한다. spec 은 Playwright 가 나열하는 테스트 파일 그대로다. 이름(`*.spec.*`, `*.test.*`, 사용자 `testMatch`)이나
+`tiers.ignore` 와 상관없고, 나열되지 않는 파일은 돌 프로젝트가 없으니 색인하지 않는다. spec 이 import 하는 support
+헬퍼 안의 리터럴 `goto` 는 그 spec 의 라우트에 합쳐지지만, 자기 navigation 을 읽을 수 없는 spec 을 구해 주지는
+않는다. 그런 spec 은 **unmapped** 이고 모든 src 변경마다 돈다. unmapped 비율이 선택이 아낄 수 있는 상한이다.
 
 `react-router-lazy` 어댑터는 `adapter.routeFiles` 에서 `path` + lazy `import()` 쌍을 읽는다. 리프는 정확한 경로로,
 `children` 을 가진 라우트는 레이아웃이라 그 모듈을 `<path>/*`(루트 레이아웃은 `*`)로 매핑한다. 레이아웃은 아래의 모든
@@ -137,8 +138,9 @@ Playwright 버전, preview 모드면 빌드된 `dist` 해시. `id` 는 그 전�
 2, 그 밖은 1 로 끝난다. 실행 모양을 바꾸는 옵션은 CLI 자체 플래그다. `--` 뒤의 `--shard`, `--test-list`,
 `--test-list-invert`, `--last-failed`, `--list`, `--only-changed`, `--reporter`, `--output`, `-c`, `--config` 는
 실행 전에 거부된다. `--project`, `-- --grep`, 파일 필터로 좁힌 실행은 `kind full (filtered)` 로 찍히고 검증도
-last-green 이동도 하지 않는다. 그 앱에 spec 이 없는 선택으로 `run --selection` 을 하면
-`<app>: nothing selected (partial, 0 specs)` 를 찍고 아무것도 돌리거나 기록하지 않는다.
+last-green 이동도 하지 않는다. 그 앱의 test-list 줄을 하나도 쓰지 않는 선택으로 `run --selection` 을 하면
+`<app>: nothing selected (partial, 0 specs)`(선택된 spec 에 Playwright 프로젝트가 없으면 `…, <n> spec(s), 0 test-list lines`)를
+찍고 아무것도 돌리거나 기록하지 않는다.
 
 ## 섀도 모드
 
@@ -199,7 +201,7 @@ light 두 자리를 나눠 쓴다. 기다리는 heavy 가 있으면 새 light �
 | `adapter.name` | 필수 | `react-router-lazy` 또는 `manual` |
 | `adapter.routeFiles` · `basePath` · `map` | `[]` · `''` · `{}` | 라우트 표 글롭(좁히려면 필요), 라우터가 붙이는 접두, `manual` 용 `{ '<route>': ['src/…'] }` |
 | `apiPrefix` · `alwaysRun` | `/api` · `[]` | 소스 리터럴에서 읽는 API URL 접두, 모든 선택에 들어가는 spec slug |
-| `tiers.full` · `tiers.ignore` | support 디렉터리, Playwright 설정, `package.json` · 테스트·Markdown 파일 | 앱 전수로 만드는 글롭 · 실행을 일으키지 않는 글롭 |
+| `tiers.full` · `tiers.ignore` | support 디렉터리, Playwright 설정, `package.json` · `srcDir` 아래 단위 테스트(`<srcDir>/**/*.test.ts`, `*.test.tsx`, `*.spec.ts`, `*.spec.tsx`)와 `**/*.md` | 앱 전수로 만드는 글롭 · 실행을 일으키지 않는 글롭(`specDir` 아래 테스트 파일은 무시되지 않는다. Playwright 는 `*.test.*` 도 돌린다) |
 | `run.preview` | 없음 | `--mode preview` 용 `{ build: '<command>', dist: '<dir>' }` |
 | `run.workers` · `run.modeEnv` · `run.env` · `run.port` | `{ ci: 1 }` · `{}` · `{}` · 없음 | 측정한 워커 수, 모드별 env, 모든 실행의 env(e2e-rail 은 주입하지 않는다), 참고용 |
 | `shared` · `ignore` | `[]` · `['**/*.md', 'docs/**']` | 전 앱 전수로 만드는 레포 기준 글롭 · 실행을 일으키지 않는 글롭 |

@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +17,19 @@ export function readJson(filePath) {
 // A stub JSON report (`stub/<name>.json`) as the stub CLI emits it: every `<ABS_APP_DIR>` replaced by `appDirAbs`.
 export function stubReport(appDirAbs, name) {
   return JSON.parse(readFileSync(path.join(appDirAbs, 'stub', `${name}.json`), 'utf-8').replaceAll('<ABS_APP_DIR>', appDirAbs));
+}
+
+// Makes the stub's `--list` output (stub/list.json of a temp copy of sample-app) report more test files, the way
+// Playwright lists a new spec. `files` are app-relative under e2e/ (Playwright's rootDir there).
+export function listInStub(root, files, projects = ['chromium']) {
+  const abs = path.join(root, 'stub/list.json');
+  const list = JSON.parse(readFileSync(abs, 'utf-8'));
+  for (const rel of files) {
+    const file = path.posix.relative('e2e', rel);
+    const tests = projects.map((projectName) => ({ projectName, status: 'skipped', results: [] }));
+    list.suites.push({ title: file, file, suites: [], specs: [{ title: 't', file, tests }] });
+  }
+  writeFileSync(abs, JSON.stringify(list));
 }
 
 // Copies a fixture into a fresh temp dir, `git init`s it and makes one commit.

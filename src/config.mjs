@@ -35,6 +35,14 @@ function assertGlobArray(value, label) {
   }
 }
 
+// Unit tests next to the source and Markdown never trigger a run. Only under srcDir: Playwright's default testMatch
+// takes `*.test.*` too, so a bare `**/*.test.ts` would hide E2E specs (a test file under specDir is never ignored).
+function defaultIgnore(srcDir) {
+  const base = path.posix.normalize(String(srcDir).split(path.sep).join('/')).replace(/\/+$/, '');
+  const under = base === '.' || base === '' ? '' : `${base}/`;
+  return [`${under}**/*.test.ts`, `${under}**/*.test.tsx`, `${under}**/*.spec.ts`, `${under}**/*.spec.tsx`, '**/*.md'];
+}
+
 export async function loadConfig(root) {
   const abs = path.join(root, CONFIG_FILE);
   if (!existsSync(abs)) throw new ConfigError(`${CONFIG_FILE} not found in ${root}. Run \`e2e-rail init\` first.`);
@@ -60,14 +68,15 @@ export function withDefaults(raw, root, { checkFiles = true } = {}) {
     warnUnknown(a.run, RUN_KEYS, `app ${a.name} run`);
     const specDir = a.specDir ?? 'e2e';
     const supportDirs = a.supportDirs ?? [`${specDir}/support`];
+    const srcDir = a.srcDir ?? 'src';
     return {
       ...a, specDir, supportDirs,
-      srcDir: a.srcDir ?? 'src', tsconfig: a.tsconfig ?? 'tsconfig.json', apiPrefix: a.apiPrefix ?? '/api',
+      srcDir, tsconfig: a.tsconfig ?? 'tsconfig.json', apiPrefix: a.apiPrefix ?? '/api',
       alwaysRun: a.alwaysRun ?? [],
       adapter: { basePath: '', routeFiles: [], map: {}, ...a.adapter },
       tiers: {
         full: [...new Set([...supportDirs.map((d) => `${d}/**`), a.playwrightConfig, 'package.json', ...(a.tiers?.full ?? [])])],
-        ignore: a.tiers?.ignore ?? ['**/*.test.ts', '**/*.test.tsx', '**/*.md'],
+        ignore: a.tiers?.ignore ?? defaultIgnore(srcDir),
       },
       run: {
         port: a.run?.port, preview: a.run?.preview ?? null,

@@ -315,6 +315,16 @@ test('run --selection: test list rebuilt from the selection it reads ([id]); ful
   assert.equal(skip.stdout, 'web: nothing selected (partial, 0 specs)\n');
   assert.ok(!existsSync(argvFile), 'Playwright was not started');
   assert.deepEqual(ledgerLines(root), []);
+  // I5: what counts is the test-list lines; a spec without a Playwright project writes none
+  const selAbs = at('.e2e-rail/selection.json');
+  const hand = JSON.parse(readFileSync(selAbs, 'utf8'));
+  Object.assign(hand.apps.web, { rootDir: 'e2e', specs: [{ file: 'e2e/orders.spec.ts', projects: [], reasons: ['hand-made'] }] });
+  writeFileSync(selAbs, JSON.stringify(hand));
+  const noLines = run(['run', '--selection', '--no-lock'], { STUB_PW_ARGV_FILE: argvFile });
+  assert.equal(noLines.code, 0, noLines.out);
+  assert.equal(noLines.stdout, 'web: nothing selected (partial, 1 spec(s), 0 test-list lines)\n');
+  assert.ok(!existsSync(argvFile), 'Playwright was not started');
+  assert.deepEqual(ledgerLines(root), []);
 
   writeFileSync(at('src/components/Table.ts'), TABLE_EDIT);
   const sel1 = JSON.parse(run(['select', '--base', 'HEAD', '--json']).stdout);

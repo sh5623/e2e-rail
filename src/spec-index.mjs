@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { appDir, ledgerDir } from './config.mjs';
 import { hashFiles, sha256 } from './util/hash.mjs';
-import { matchAny, walk } from './util/glob.mjs';
+import { walk } from './util/glob.mjs';
 import { parseFile, readCompilerOptions } from './util/ts.mjs';
 import { listTests, toAppRel } from './util/playwright.mjs';
 
@@ -10,9 +10,8 @@ import { listTests, toAppRel } from './util/playwright.mjs';
 // source files it imports and the support helpers it uses. The selector trusts this file, so everything here errs
 // on the wide side: what cannot be read becomes a wildcard or `unmapped`, never a guess that could hide a spec.
 
-const INDEX_VERSION = 1; // part of the cache key: bump when the index shape or the resolution rules change
+const INDEX_VERSION = 2; // part of the cache key: bump when the index shape or the resolution rules change
 const CODE_EXTS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'];
-const SPEC_RE = /\.spec\.[cm]?[tj]sx?$/;
 const UNKNOWN = '\0'; // stands in for a template substitution that could not be resolved
 
 export const slugOf = (rel) => path.posix.basename(rel).replace(/(\.spec)?\.[cm]?[tj]sx?$/, '');
@@ -275,15 +274,8 @@ export function indexSpec({ ts, dirAbs, app, specRel, tests = {}, options }) {
   return makeIndexer({ ts, dirAbs, app, options: opts })(specRel, tests[specRel] ?? []);
 }
 
-export function specFiles(config, app) {
-  const dirAbs = appDir(config, app);
-  return walk(path.join(dirAbs, app.specDir), { exts: CODE_EXTS })
-    .filter((r) => SPEC_RE.test(r))
-    .map((r) => path.posix.join(app.specDir, r));
-}
-
 // Everything the index is derived from: spec/support/tsconfig/playwright-config content plus the config values
-// that shape resolution (basePath, directories, ignore globs).
+// that shape resolution (basePath, directories).
 export function specIndexKey({ config, app }) {
   const dirAbs = appDir(config, app);
   const files = new Set([app.playwrightConfig, app.tsconfig]);
@@ -291,24 +283,24 @@ export function specIndexKey({ config, app }) {
     for (const r of walk(path.join(dirAbs, d), { exts: CODE_EXTS })) files.add(path.posix.join(d, r));
   }
   const content = hashFiles(dirAbs, [...files].filter((f) => existsSync(path.join(dirAbs, f))));
-  return sha256(JSON.stringify([INDEX_VERSION, app.adapter.basePath, app.specDir, app.supportDirs, app.srcDir, app.tiers.ignore, content]));
+  return sha256(JSON.stringify([INDEX_VERSION, app.adapter.basePath, app.specDir, app.supportDirs, app.srcDir, content]));
 }
 
-// `tests` is listTests()'s `{ rootDir, tests }`. Specs = `*.spec.*` files under specDir plus whatever else Playwright
-// lists there (a custom testMatch), minus tiers.ignore. A test file Playwright lists outside specDir is not read (the
-// cache key does not cover it) but is still indexed, always `unmapped`, so the selector cannot silently skip it.
+// `tests` is listTests()'s `{ rootDir, tests }`. The specs are exactly the test files Playwright lists, whatever their
+// name (`*.spec.*`, `*.test.*`, a custom testMatch) and whatever tiers.ignore says: a file Playwright runs is never
+// dropped, and a file it does not list has no project to run in, so it is not indexed. A listed file under specDir is
+// read; one outside specDir is not (the cache key does not cover it) but is indexed `unmapped`, so the selector cannot
+// silently skip it.
 export function buildSpecIndex({ config, app, ts, tests }) {
   const dirAbs = appDir(config, app);
   const index = makeIndexer({ ts, dirAbs, app, options: readCompilerOptions(ts, dirAbs, app.tsconfig).options });
   const inSpecDir = (rel) => rel.startsWith(`${app.specDir}/`);
-  const known = new Set(specFiles(config, app));
-  for (const rel of Object.keys(tests.tests)) if (inSpecDir(rel)) known.add(rel);
   const specs = {};
-  for (const rel of [...known].sort()) {
-    if (!matchAny(app.tiers.ignore, rel) && existsSync(path.join(dirAbs, rel))) specs[rel] = index(rel, tests.tests[rel] ?? []);
-  }
   for (const rel of Object.keys(tests.tests).sort()) {
-    if (!inSpecDir(rel)) specs[rel] = { routes: [], apis: [], imports: [], supports: [], projects: [...tests.tests[rel]], unmapped: true };
+    const projects = [...tests.tests[rel]];
+    specs[rel] = inSpecDir(rel) && existsSync(path.join(dirAbs, rel))
+      ? index(rel, projects)
+      : { routes: [], apis: [], imports: [], supports: [], projects, unmapped: true };
   }
   return { generatedAt: new Date().toISOString(), key: specIndexKey({ config, app }), rootDir: tests.rootDir, specs };
 }

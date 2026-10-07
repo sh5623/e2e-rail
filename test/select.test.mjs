@@ -14,7 +14,7 @@ import { findMain, loadOrBuildGraph } from '../src/graph.mjs';
 import { getAdapter } from '../src/adapters/index.mjs';
 import { execCapture } from '../src/util/exec.mjs';
 import { gitHead } from '../src/util/git.mjs';
-import { fixtureDir, makeTempRepo } from './helpers.mjs';
+import { fixtureDir, listInStub, makeTempRepo } from './helpers.mjs';
 
 async function setup() {
   const t = makeTempRepo('sample-app');
@@ -60,6 +60,12 @@ test('classifyFile follows the table top-down (tier-full beats src)', async () =
     assert.equal(kind('./src/components/Table.ts'), 'src');
     assert.equal(kind('vite.config.ts'), 'app-other');
     assert.equal(kind('src/x.test.ts'), 'ignore');
+    // the fixture's tiers.ignore is `**/*.test.ts`: it never hides a test file under specDir (Playwright runs those)
+    assert.equal(kind('e2e/checkout.test.ts'), 'spec');
+    assert.equal(classifyFile(config, 'e2e/checkout.test.ts').reason, 'spec-self:e2e/checkout.test.ts');
+    assert.equal(kind('e2e/nested/x.test.tsx'), 'spec');
+    assert.equal(kind('e2e/notes.md'), 'ignore', 'only test files are protected');
+    assert.equal(classifyFile({ ...config, ignore: ['**/*.spec.ts'] }, 'e2e/cart.spec.ts').kind, 'spec', 'nor does the top-level ignore');
     assert.equal(kind('.e2e-rail/map.web.json'), 'ignore', "e2e-rail's own ledger never selects anything");
     assert.equal(classifyFile(config, 'src/shell/Header.ts').reason, 'tier-full:src/shell/**');
     assert.equal(classifyFile(config, 'e2e/cart.spec.ts').reason, 'spec-self:e2e/cart.spec.ts');
@@ -77,6 +83,8 @@ test('classifyFile with several apps: unknown-root, the deepest owning root, app
   assert.equal(classifyFile(cfg, 'apps/b/e2e/y.spec.ts').app.name, 'b');
   assert.equal(classifyFile(cfg, 'packages/ui/x.ts').kind, 'shared');
   assert.equal(classifyFile(cfg, 'apps/a/src/x.test.ts').kind, 'ignore');
+  assert.equal(classifyFile(cfg, 'apps/a/src/x.spec.tsx').kind, 'ignore', 'the default ignores unit tests under srcDir');
+  assert.equal(classifyFile(cfg, 'apps/a/e2e/y.test.ts').kind, 'spec', 'and never an E2E file named *.test.ts');
   const nested = withDefaults({
     apps: [
       { name: 'top', root: '.', playwrightConfig: 'playwright.config.ts', adapter: { name: 'manual' } },
@@ -175,6 +183,7 @@ test('a spec importing app code is selected when anything that code depends on c
       "test('f', async ({ page }) => { void format; await page.goto('/app/orders'); });",
       '',
     ].join('\n'));
+    listInStub(root, ['e2e/format.spec.ts']);
     const sel = await computeSelection({ config, changedFiles: ['src/lib/price.ts'], ctx: realCtx(config, ts) });
     assert.equal(sel.apps.web.mode, 'partial');
     const f = sel.apps.web.specs.find((s) => s.file === 'e2e/format.spec.ts');
@@ -258,6 +267,49 @@ test('a spec the index does not know, and a support helper outside tiers.full, w
     const s = await computeSelection({ config, changedFiles: ['e2e/support/paths.ts'], ctx: noCtx });
     assert.equal(s.apps.web.mode, 'full');
     assert.deepEqual(s.apps.web.reasons, ['support:e2e/support/paths.ts']);
+  } finally { cleanup(); }
+});
+
+test('C2: an E2E file named *.test.ts that Playwright lists is selected by a route change and by its own edit', async () => {
+  const { root, config, ts, cleanup } = await setup();
+  try {
+    // the review repro: cart.spec.ts renamed to cart.test.ts (the fixture's tiers.ignore is `**/*.test.ts`)
+    execCapture('git', ['mv', 'e2e/cart.spec.ts', 'e2e/cart.test.ts'], { cwd: root });
+    const listAbs = path.join(root, 'stub/list.json');
+    writeFileSync(listAbs, readFileSync(listAbs, 'utf8').replaceAll('cart.spec.ts', 'cart.test.ts'));
+    execCapture('git', ['commit', '-qam', 'rename'], { cwd: root });
+    const ctx = realCtx(config, ts);
+    const page = await computeSelection({ config, changedFiles: ['src/features/cart/CartPage.ts'], ctx });
+    assert.equal(page.apps.web.mode, 'partial');
+    assert.deepEqual(files(page), ['e2e/cart.test.ts', 'e2e/smoke.spec.ts']);
+    const cart = page.apps.web.specs.find((s) => s.file === 'e2e/cart.test.ts');
+    assert.deepEqual(cart.projects, ['chromium', 'mobile-chrome']);
+    assert.ok(cart.reasons.some((r) => r.startsWith('route:cart ← ')), cart.reasons.join(' | '));
+    assert.deepEqual(testListLines(page.apps.web).slice(0, 2), ['[chromium] › cart.test.ts', '[mobile-chrome] › cart.test.ts']);
+    const own = await computeSelection({ config, changedFiles: ['e2e/cart.test.ts'], ctx });
+    assert.deepEqual(files(own), ['e2e/cart.test.ts']);
+    assert.deepEqual(own.apps.web.specs[0].reasons, ['spec-self:e2e/cart.test.ts']);
+  } finally { cleanup(); }
+});
+
+test('I5: a spec with no Playwright project is never selected; its own edit counts as unindexed', async () => {
+  const { config, ts, cleanup } = await setup();
+  try {
+    const real = realCtx(config, ts);
+    const ctx = {
+      forApp: async (app) => {
+        const c = await real.forApp(app);
+        const specs = { ...c.index.specs, 'e2e/orders.spec.ts': { ...c.index.specs['e2e/orders.spec.ts'], projects: [] } };
+        return { ...c, index: { ...c.index, specs } };
+      },
+    };
+    const sel = await computeSelection({ config, changedFiles: ['src/features/orders/services/orders.ts'], ctx });
+    assert.equal(sel.apps.web.mode, 'partial');
+    assert.deepEqual(files(sel), ['e2e/order-detail.spec.ts', 'e2e/smoke.spec.ts']);
+    assert.ok(sel.apps.web.specs.every((s) => s.projects.length > 0));
+    const own = await computeSelection({ config, changedFiles: ['e2e/orders.spec.ts'], ctx });
+    assert.equal(own.apps.web.mode, 'full');
+    assert.deepEqual(own.apps.web.reasons, ['spec-unindexed:e2e/orders.spec.ts']);
   } finally { cleanup(); }
 });
 

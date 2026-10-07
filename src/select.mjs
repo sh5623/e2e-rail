@@ -14,7 +14,8 @@ import { getAdapter } from './adapters/index.mjs';
 // by a guess: whatever it cannot attribute (no base, a file outside every rule, an unreadable route table, a blind spot
 // in the import graph) makes that app run in full, with the reason recorded.
 
-const SPEC_RE = /\.spec\.[cm]?[tj]sx?$/; // the spec index's rule for spec files
+// A test file by name: Playwright's default testMatch takes `*.spec.*` and `*.test.*` alike.
+const TEST_RE = /\.(spec|test)\.[cm]?[jt]sx?$/;
 const toPosix = (p) => p.split(path.sep).join('/');
 // A configured directory as a clean relative POSIX prefix; '' is the base itself.
 const dirRel = (d) => {
@@ -47,15 +48,19 @@ export function classifyFile(config, repoRel) {
   // Outside the config root (git reports the whole repository, R39): no glob or app root of this config describes it.
   if (rel === '..' || rel.startsWith('../') || path.posix.isAbsolute(rel)) return { kind: 'unknown-root', reason: `unknown-root:${rel}` };
   const ledger = ledgerRel(config);
-  if (matchAny(config.ignore, rel) || (ledger && under(rel, ledger))) return { kind: 'ignore', reason: 'ignore' };
+  if (ledger && under(rel, ledger)) return { kind: 'ignore', reason: 'ignore' };
   const owner = owningApp(config, rel);
-  if (owner && matchAny(owner.app.tiers.ignore, owner.appRel)) return { kind: 'ignore', ...owner, reason: 'ignore' };
+  // An ignore glob never hides a test file under specDir (`**/*.test.ts` would drop the specs Playwright lists by that
+  // name); shared and tiers.full, which only widen, still come first.
+  const testFile = Boolean(owner) && under(owner.appRel, dirRel(owner.app.specDir)) && TEST_RE.test(owner.appRel);
+  if (!testFile && matchAny(config.ignore, rel)) return { kind: 'ignore', reason: 'ignore' };
+  if (!testFile && owner && matchAny(owner.app.tiers.ignore, owner.appRel)) return { kind: 'ignore', ...owner, reason: 'ignore' };
   if (matchAny(config.shared, rel)) return { kind: 'shared', reason: `shared:${rel}` };
   if (!owner) return { kind: 'unknown-root', reason: `unknown-root:${rel}` };
   const { app, appRel } = owner;
   const full = app.tiers.full.find((g) => matchGlob(g, appRel));
   if (full) return { kind: 'tier-full', ...owner, reason: `tier-full:${full}` };
-  if (under(appRel, dirRel(app.specDir)) && SPEC_RE.test(appRel)) return { kind: 'spec', ...owner, reason: `spec-self:${appRel}` };
+  if (testFile) return { kind: 'spec', ...owner, reason: `spec-self:${appRel}` };
   if (app.supportDirs.some((d) => under(appRel, dirRel(d)))) return { kind: 'support', ...owner, reason: `support:${appRel}` };
   if (under(appRel, dirRel(app.srcDir))) return { kind: 'src', ...owner, reason: `src:${appRel}` };
   return { kind: 'app-other', ...owner, reason: `app-other:${appRel}` };
@@ -115,10 +120,13 @@ function narrow(config, app, p, c) {
     p.specs.set(file, cur);
   };
   p.rootDir = index.rootDir ?? null;
+  // A spec with no Playwright project has no test-list line to run in, so it is never selected (I5). The index holds
+  // only listed files, which always have one; an entry without (a hand-edited cache) counts as unindexed.
+  const runnable = (file) => Boolean(index.specs[file]?.projects?.length);
 
   for (const s of p.spec) {
-    if (index.specs[s]) add(s, `spec-self:${s}`);
-    else if (existsSync(path.join(dirAbs, s))) widen(`spec-unindexed:${s}`); // on disk but unknown: projects unknown too
+    if (runnable(s)) add(s, `spec-self:${s}`);
+    else if (existsSync(path.join(dirAbs, s))) widen(`spec-unindexed:${s}`); // on disk but not listed: projects unknown too
     // else: a deleted spec has nothing left to run
   }
   if (!p.src.length) return;
@@ -137,6 +145,7 @@ function narrow(config, app, p, c) {
   }))];
   const above = dependents(graph, p.src);
   for (const [file, info] of Object.entries(index.specs)) {
+    if (!runnable(file)) continue;
     for (const r of routes) for (const sr of info.routes) if (routeMatches(r.route, sr)) add(file, `route:${r.route} ← ${r.file}`);
     for (const g of info.apis) for (const lit of literals) if (apiMatches(g, lit)) add(file, `api:${g} ← ${lit}`);
     for (const imp of info.imports) if (above.has(imp)) add(file, `import:${imp}`);

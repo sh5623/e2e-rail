@@ -51,13 +51,16 @@ function fromSelection(config, app, id) {
     console.log(`${app.name}: selection ${sel.id} runs this app in full (${a.reasons.slice(0, 3).join(' | ') || 'no reason recorded'}); running the full suite`);
     return { selectionId: sel.id, testList: null };
   }
-  if (!a.specs.length) {
-    console.log(`${app.name}: nothing selected (partial, 0 specs)`);
+  // Nothing to run is decided on the lines, not the specs: a spec with no Playwright project writes no line, and an
+  // empty list would run nothing (R56 records that as a failure).
+  const lines = testListLines(a);
+  if (!lines.length) {
+    console.log(`${app.name}: nothing selected (partial, ${a.specs.length ? `${a.specs.length} spec(s), 0 test-list lines` : '0 specs'})`);
     return { skip: true };
   }
   const abs = path.join(ledgerDir(config), `test-list.${app.name}.txt`);
   mkdirSync(path.dirname(abs), { recursive: true });
-  writeFileSync(abs, `${testListLines(a).join('\n')}\n`);
+  writeFileSync(abs, `${lines.join('\n')}\n`);
   return { selectionId: sel.id, testList: abs };
 }
 

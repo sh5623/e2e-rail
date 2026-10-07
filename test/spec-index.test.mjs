@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  buildSpecIndex, loadOrBuildSpecIndex, normalizeRoute, routeMatches, slugOf, specFiles, specIndexKey,
+  buildSpecIndex, loadOrBuildSpecIndex, normalizeRoute, routeMatches, slugOf, specIndexKey,
 } from '../src/spec-index.mjs';
 import { appDir, findApp, loadConfig } from '../src/config.mjs';
 import { loadTypeScript } from '../src/util/ts.mjs';
 import { listTests } from '../src/util/playwright.mjs';
-import { makeTempRepo } from './helpers.mjs';
+import { listInStub, makeTempRepo } from './helpers.mjs';
 
 async function setup(root) {
   const config = await loadConfig(root);
@@ -16,6 +16,9 @@ async function setup(root) {
   const ts = await loadTypeScript(root);
   return { config, app, ts };
 }
+
+// What `playwright test --list` would report for these app-relative test files (one project each).
+const listed = (...files) => ({ rootDir: 'e2e', tests: Object.fromEntries(files.map((f) => [f, ['chromium']])) });
 
 function put(root, rel, text) {
   const abs = path.join(root, rel);
@@ -87,7 +90,6 @@ test('buildSpecIndex resolves literal, const, imported object, template and unma
     assert.equal(s['e2e/cart.spec.ts'].unmapped, false);
     assert.equal(s['e2e/smoke.spec.ts'].unmapped, true);
     assert.deepEqual(s['e2e/smoke.spec.ts'].routes, []);
-    assert.deepEqual(specFiles(config, app), Object.keys(s));
     assert.equal(slugOf('e2e/order-detail.spec.ts'), 'order-detail');
   } finally { cleanup(); }
 });
@@ -138,7 +140,7 @@ test('goto/route arguments that cannot be resolved never throw and never narrow'
       '});',
     ].join('\n'));
     const { config, app, ts } = await setup(root);
-    const s = buildSpecIndex({ config, app, ts, tests: { rootDir: 'e2e', tests: {} } }).specs;
+    const s = buildSpecIndex({ config, app, ts, tests: listed('e2e/mixed.spec.ts', 'e2e/helper-nav.spec.ts', 'e2e/bare-goto.spec.ts', 'e2e/shadow.spec.ts', 'e2e/cycle.spec.ts') }).specs;
     assert.deepEqual(s['e2e/mixed.spec.ts'].routes, ['orders']);
     assert.equal(s['e2e/mixed.spec.ts'].unmapped, true, 'one unresolved goto keeps the spec unmapped even when another one resolves');
     assert.deepEqual(s['e2e/helper-nav.spec.ts'].routes, []);
@@ -149,7 +151,7 @@ test('goto/route arguments that cannot be resolved never throw and never narrow'
     assert.equal(s['e2e/shadow.spec.ts'].unmapped, true);
     assert.deepEqual(s['e2e/cycle.spec.ts'].routes, ['**']);
     assert.equal(s['e2e/cycle.spec.ts'].unmapped, true);
-    assert.deepEqual(s['e2e/cycle.spec.ts'].projects, []);
+    assert.deepEqual(s['e2e/cycle.spec.ts'].projects, ['chromium']);
   } finally { cleanup(); }
 });
 
@@ -173,7 +175,7 @@ test('goto templates: full synthesis, id segment, anything-else widens to **', a
       '});',
     ].join('\n'));
     const { config, app, ts } = await setup(root);
-    const e = buildSpecIndex({ config, app, ts, tests: { rootDir: 'e2e', tests: {} } }).specs['e2e/templates.spec.ts'];
+    const e = buildSpecIndex({ config, app, ts, tests: listed('e2e/templates.spec.ts') }).specs['e2e/templates.spec.ts'];
     assert.deepEqual(e.routes, ['', '**', 'cart', 'orders/*', 'orders/**', 'orders/1', 'orders/history']);
     assert.equal(e.unmapped, false);
   } finally { cleanup(); }
@@ -198,7 +200,7 @@ test('imports follow one hop only; src files reached through helpers and dynamic
       '});',
     ].join('\n'));
     const { config, app, ts } = await setup(root);
-    const e = buildSpecIndex({ config, app, ts, tests: { rootDir: 'e2e', tests: {} } }).specs['e2e/hops.spec.ts'];
+    const e = buildSpecIndex({ config, app, ts, tests: listed('e2e/hops.spec.ts') }).specs['e2e/hops.spec.ts'];
     assert.deepEqual(e.routes, ['one']);
     assert.equal(e.unmapped, true, 'A1 needs a second hop, so it is unresolved');
     assert.deepEqual(e.supports, ['e2e/support/chain1.ts', 'e2e/support/uses-src.ts']);
@@ -224,7 +226,7 @@ test('route() arguments: literals and templates become globs; predicate and rege
       '});',
     ].join('\n'));
     const { config, app, ts } = await setup(root);
-    const e = buildSpecIndex({ config, app, ts, tests: { rootDir: 'e2e', tests: {} } }).specs['e2e/apis.spec.ts'];
+    const e = buildSpecIndex({ config, app, ts, tests: listed('e2e/apis.spec.ts') }).specs['e2e/apis.spec.ts'];
     // Skipped matchers add nothing: widening them to ** would tie the spec to every API change (graph axis covers it).
     assert.deepEqual(e.apis, ['**/api/**', '**/api/items', '**/api/things/*']);
     assert.deepEqual(e.routes, ['']);
@@ -254,7 +256,7 @@ test('support-module gotos: literal ones are merged into routes, unresolvable on
       '});',
     ].join('\n'));
     const { config, app, ts } = await setup(root);
-    const s = buildSpecIndex({ config, app, ts, tests: { rootDir: 'e2e', tests: {} } }).specs;
+    const s = buildSpecIndex({ config, app, ts, tests: listed('e2e/merge.spec.ts', 'e2e/generic-helper.spec.ts') }).specs;
     assert.deepEqual(s['e2e/merge.spec.ts'].routes, ['cart', 'orders']);
     assert.equal(s['e2e/merge.spec.ts'].unmapped, false);
     assert.deepEqual(s['e2e/merge.spec.ts'].supports, ['e2e/support/open-cart.ts']);
@@ -278,7 +280,7 @@ test('unmapped is decided by the spec own navigation: support routes never rescu
       '});',
     ].join('\n'));
     const { config, app, ts } = await setup(root);
-    const e = buildSpecIndex({ config, app, ts, tests: { rootDir: 'e2e', tests: {} } }).specs['e2e/helper-only.spec.ts'];
+    const e = buildSpecIndex({ config, app, ts, tests: listed('e2e/helper-only.spec.ts') }).specs['e2e/helper-only.spec.ts'];
     assert.deepEqual(e.routes, ['login'], 'the helper literal goto is merged');
     assert.equal(e.unmapped, true, 'the spec itself has no readable goto, so it stays unmapped');
   } finally { cleanup(); }
@@ -303,6 +305,24 @@ test('test files Playwright lists outside specDir are indexed as unmapped, never
       routes: [], apis: [], imports: [], supports: [], projects: ['chromium'], unmapped: true,
     });
     assert.deepEqual(idx.specs['e2e/cart.spec.ts'].routes, ['cart'], 'specs under specDir are unaffected');
+  } finally { cleanup(); }
+});
+
+test('C2: the index holds exactly the files Playwright lists, whatever their name and whatever tiers.ignore says', async () => {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  try {
+    // the fixture's tiers.ignore is `**/*.test.ts`, the old default: it must not hide an E2E file Playwright runs
+    put(root, 'e2e/checkout.test.ts', "import { test } from '@playwright/test';\ntest('c', async ({ page }) => { await page.goto('/app/cart'); });\n");
+    put(root, 'e2e/unlisted.spec.ts', "import { test } from '@playwright/test';\ntest('u', async ({ page }) => { await page.goto('/app/orders'); });\n");
+    listInStub(root, ['e2e/checkout.test.ts'], ['chromium', 'mobile-chrome']);
+    const { config, app, ts } = await setup(root);
+    assert.ok(app.tiers.ignore.includes('**/*.test.ts'), 'precondition');
+    const s = buildSpecIndex({ config, app, ts, tests: listTests(appDir(config, app), app.playwrightConfig) }).specs;
+    assert.deepEqual(s['e2e/checkout.test.ts'], {
+      routes: ['cart'], apis: [], imports: [], supports: [], projects: ['chromium', 'mobile-chrome'], unmapped: false,
+    });
+    assert.equal(s['e2e/unlisted.spec.ts'], undefined, 'a file Playwright does not list has no project to run in');
+    assert.ok(Object.values(s).every((e) => e.projects.length > 0));
   } finally { cleanup(); }
 });
 
