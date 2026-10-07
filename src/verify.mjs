@@ -1,5 +1,6 @@
 import { computeFingerprint } from './fingerprint.mjs';
 import { completeShardSet, latestFull, readRuns } from './ledger.mjs';
+import { isMeasure } from './measure.mjs';
 
 // Fingerprint fields `differing` can name, in the order they are listed.
 const FIELDS = ['head', 'diff', 'untracked', 'config', 'playwright', 'dist'];
@@ -38,12 +39,16 @@ export function verifiedShardSet({ config, app, mode = 'dev' }) {
   return distMissing(app, mode, fingerprint) ? null : shardSetOf(countedRuns(config, app, mode), app, fingerprint);
 }
 
+// I4: a selected run stands for a selection only when it was made from one (`run --selection` records its id) and is
+// not a worker measurement; an ad-hoc `--test-list` run says nothing about what a change needs.
+const isSelectionRun = (r) => r.kind === 'selected' && typeof r.selectionId === 'string' && r.selectionId !== '' && !isMeasure(r);
+
 // "Has exactly this code (fingerprint) already passed?" answered from the ledger (spec §8). Only runs of this app, in
 // this mode, with this fingerprint id that passed and were not narrowed (`filtered`) count. `require: 'full'` wants a
-// full run or a complete shard set; `'selected'` also takes a selected run. Exit codes: 0 verified, 20 stale (a
-// different fingerprint, with the fields that moved since the last full pass), 21 insufficient (this fingerprint only
-// has runs that do not satisfy `require`). In preview mode an app with a `run.preview` build is never verified while
-// its dist is missing (stale, `differing` names `dist`).
+// full run or a complete shard set; `'selected'` also takes a selected run made from a selection (isSelectionRun).
+// Exit codes: 0 verified, 20 stale (a different fingerprint, with the fields that moved since the last full pass),
+// 21 insufficient (this fingerprint only has runs that do not satisfy `require`). In preview mode an app with a
+// `run.preview` build is never verified while its dist is missing (stale, `differing` names `dist`).
 export function verify({ config, app, mode = 'dev', require = 'full', maxAgeMin = null }) {
   if (!REQUIRES.includes(require)) throw new Error(`e2e-rail: unknown --require "${require}" (expected ${REQUIRES.join(' or ')})`);
   if (maxAgeMin !== null && !(typeof maxAgeMin === 'number' && Number.isFinite(maxAgeMin) && maxAgeMin >= 0)) {
@@ -54,13 +59,13 @@ export function verify({ config, app, mode = 'dev', require = 'full', maxAgeMin 
   const matching = counted.filter((r) => r.fingerprint.id === fingerprint.id);
   const isFresh = (r) => maxAgeMin === null || Date.now() - Date.parse(r.ts) <= maxAgeMin * 60_000; // an unreadable ts is not fresh
 
-  // What satisfies `require` among `runs`: a full run, a complete shard set, and for `selected` a selected run.
+  // What satisfies `require` among `runs`: a full run, a complete shard set, and for `selected` a selection's run.
   const settle = (runs) => {
     const full = latestFull(runs, app.name, fingerprint.id);
     if (full) return { run: full };
     const shards = shardSetOf(runs, app, fingerprint);
     if (shards) return { run: newestOf(shards, runs), shards };
-    const selected = require === 'selected' ? [...runs].reverse().find((r) => r.kind === 'selected') : null;
+    const selected = require === 'selected' ? [...runs].reverse().find(isSelectionRun) : null;
     return selected ? { run: selected } : null;
   };
 

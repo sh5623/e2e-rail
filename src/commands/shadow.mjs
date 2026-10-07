@@ -42,7 +42,7 @@ export default async function shadow(argv) {
   if (s.recent.length) console.log('recent:');
   for (const r of s.recent) {
     const missed = missedOf(r);
-    console.log(`  ${r.ts} ${r.runId} ${outcome(r)}${missed.length ? ` · missed ${missed.join(', ')}` : ''}`);
+    console.log(`  ${r.ts}${r.app ? ` ${r.app}` : ''} ${r.runId} ${outcome(r)}${missed.length ? ` · missed ${missed.join(', ')}` : ''}`);
   }
   return 0;
 }

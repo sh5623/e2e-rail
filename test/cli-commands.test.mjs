@@ -255,7 +255,13 @@ test('select → run --selection → verify round trip with exit codes', () => w
   const v1 = run(['verify']);
   assert.equal(v1.code, 21, v1.out);
   assert.match(v1.stdout, /^insufficient: /);
-  assert.equal(run(['verify', '--require', 'selected']).code, 0);
+  // I4: the selected line names the selection the run came from and whether it ran while trust=shadow
+  const vs = run(['verify', '--require', 'selected']);
+  assert.equal(vs.code, 0, vs.out);
+  const selId = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8')).id;
+  assert.equal(vs.stdout, `verified: selected@${r.stdout.match(RUN_ID)[0]} (selection ${selId}, shadowed) (just now)\n`);
+  const vj = JSON.parse(run(['verify', '--require', 'selected', '--json']).stdout);
+  assert.deepEqual([vj.kind, vj.selectionId, vj.shadowed], ['selected', selId, true]);
 
   const f = run(['run', '--full', '--no-lock']);
   assert.equal(f.code, 0, f.out);
@@ -319,6 +325,12 @@ test('run --test-list that matches nothing is a failure (R56): rc 1, a failed: l
   const lost = run(['run', '--test-list', 'lost.txt', '--no-lock']);
   assert.equal(lost.code, 1, lost.out);
   assert.match(lost.stdout, /^ {2}failed: test list line matched no tests: \[chromium\] › renamed\.spec\.ts$/m);
+  // I4: a passing ad-hoc test list is no selection's run: `verify --require selected` does not take it
+  writeFileSync(at('ok.txt'), '[chromium] › orders.spec.ts\n');
+  assert.equal(run(['run', '--test-list', 'ok.txt', '--no-lock']).code, 0);
+  const v = run(['verify', '--require', 'selected']);
+  assert.equal(v.code, 21, v.out);
+  assert.equal(v.stdout, 'insufficient: this code has only selected run(s); --require selected needs a full run, a complete shard set or a selected run from `run --selection`\n');
 }));
 
 test('run --selection: test list rebuilt from the selection it reads ([id]); full selection runs full; 0 specs skips', () => withRepo(({ root, run, at }) => {

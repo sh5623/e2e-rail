@@ -116,8 +116,9 @@ Playwright 버전, preview 모드면 빌드된 `dist` 해시. `id` 는 그 전�
 필터 없이 통과한 전수 실행은 자기 head 를 `.e2e-rail/last-green.<app>` 에 쓰고, 이것이 다음 선택의 base 가 된다.
 
 `verify` 는 원장으로 «정확히 이 코드가 통과했는가» 에 답한다. 이 앱 · 이 모드 · 이 지문 · 통과 · 필터 없음인 실행만
-센다. `--require full` 은 전수 실행이나 완성된 샤드 세트를, `--require selected` 는 선택 실행까지 받는다. 재실행은
-절대 세지 않는다. preview 모드는 dist 가 없거나 낡았으면(git 이 아는 어떤 파일보다 오래됨) 먼저 다시 빌드하고,
+센다. `--require full` 은 전수 실행이나 완성된 샤드 세트를, `--require selected` 는 `run --selection` 으로 만든 선택
+실행까지 받는다(`verified: selected@<run-id> (selection <id>[, shadowed]) (<age>)` 를 찍는다). 임의의 `--test-list`
+실행과 `measure workers` 실행은 세지 않는다. 재실행은 절대 세지 않는다. preview 모드는 dist 가 없거나 낡았으면(git 이 아는 어떤 파일보다 오래됨) 먼저 다시 빌드하고,
 `--no-build` 면 대신 거부한다.
 
 ## 명령

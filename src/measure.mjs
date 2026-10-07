@@ -6,7 +6,7 @@ import { runTests } from './run.mjs';
 
 // `measureWorkers` tags its runs with this passthrough arg: recorded in the ledger line's `command`, never passed on.
 export const MEASURE_TAG = '--e2e-rail-purpose=measure';
-const isMeasure = (r) => typeof r.command === 'string' && r.command.split(' ').includes(MEASURE_TAG);
+export const isMeasure = (r) => typeof r.command === 'string' && r.command.split(' ').includes(MEASURE_TAG);
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const byFileProject = (a, b) => cmp(a.file, b.file) || cmp(a.project, b.project);

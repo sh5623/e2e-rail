@@ -5,6 +5,7 @@ import path from 'node:path';
 import { verify } from '../src/verify.mjs';
 import { demote, promote, readState, recordShadow, shadowStatus, statePath, writeState } from '../src/shadow.mjs';
 import { runTests } from '../src/run.mjs';
+import { MEASURE_TAG } from '../src/measure.mjs';
 import { appendRun, readRuns } from '../src/ledger.mjs';
 import { computeFingerprint } from '../src/fingerprint.mjs';
 import { amendSelection, codeIdOf, computeSelection, writeSelection } from '../src/select.mjs';
@@ -94,6 +95,22 @@ test('verify: verified after a full run; stale after an edit (names the differin
     assert.equal(verify({ config, app, require: 'selected' }).status, 'verified');
     await run(config, app, { lastFailed: true });
     assert.equal(verify({ config, app }).status, 'insufficient');
+  });
+});
+
+test('verify --require selected (I4): only a selected run made from a selection counts; ad-hoc and measure runs do not', async () => {
+  await withRepo(async ({ config, app }) => {
+    synth(config, app, { kind: 'selected', selectionId: null });               // `run --test-list <file>`
+    synth(config, app, { kind: 'selected', selectionId: '' });
+    synth(config, app, { kind: 'selected', selectionId: 'sel-m', command: `playwright test --test-list x --workers 2 ${MEASURE_TAG}` });
+    const i = verify({ config, app, require: 'selected' });
+    assert.equal(i.status, 'insufficient'); assert.equal(i.exitCode, 21); assert.deepEqual(i.have, ['selected']);
+    const ok = synth(config, app, { kind: 'selected', selectionId: 'sel-1', shadowed: true });
+    const v = verify({ config, app, require: 'selected' });
+    assert.equal(v.status, 'verified'); assert.equal(v.run.id, ok.id); assert.equal(v.run.selectionId, 'sel-1');
+    synth(config, app, { kind: 'selected', selectionId: null });               // a newer ad-hoc run does not displace it
+    assert.equal(verify({ config, app, require: 'selected' }).run.id, ok.id);
+    assert.equal(verify({ config, app }).status, 'insufficient', 'never a full verification');
   });
 });
 
@@ -343,6 +360,7 @@ test('shadow: hit advances the streak, a miss resets it, trivial/unpaired do not
     const r0 = await run(config, app);
     const u = recordShadow({ config, app, runId: r0.entry.id });
     assert.equal(u.unpaired, true); assert.equal(u.hit, null); assert.equal(shadowStatus(config).streak, 0);
+    assert.equal(u.app, 'web', 'M14: a record names its app (the shadow state is shared by every app)');
     // partial selection + passing full run → hit
     writeSelection(config, await computeSelection({ config, changedFiles: ['src/components/Table.ts'], ctx: c }));
     const r1 = await run(config, app);

@@ -121,5 +121,7 @@ test('real playwright: a list that matches nothing (wrong base, empty file) or l
     assert.deepEqual(report.suites.map((s) => s.file), ['b.spec.ts']);
     assert.deepEqual(flattenSuites(report, root).map((t) => [t.file, t.title, t.project]), [['e2e/b.spec.ts', 'b runs', 'narrow']]);
     assert.deepEqual(flattenSuites(report, root).map((t) => t.titlePath), [['group', 'b runs']]);
+    // I4: a passing list run made from no selection does not satisfy `--require selected`
+    assert.equal(verify({ config, app, require: 'selected' }).status, 'insufficient');
   });
 });

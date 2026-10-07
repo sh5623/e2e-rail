@@ -53,7 +53,9 @@ pnpm exec e2e-rail verify --app <app> --mode <mode> --require full
 - exit 21 `insufficient: this code has only <kinds> run(s); --require full needs …` — expected after a selected run.
 
 After a selected run you may also quote `verify --app <app> --mode <mode> --require selected`
-(`verified: selected@<run-id>`), but the status stays "selected", never "full pass".
+(`verified: selected@<run-id> (selection <selection-id>, shadowed) (<age>)`; `, shadowed` only while trust is shadow),
+but the status stays "selected", never "full pass". Only a run made by `run --selection` counts there: an ad-hoc
+`--test-list` run or a `measure workers` run leaves `insufficient:`.
 
 ## 3. Report (fixed format)
 ```

@@ -103,7 +103,7 @@ export function recordShadow({ config, app, runId }) {
   const codeId = run.fingerprint?.codeId ?? null;
   const sel = pairedSelection(config, codeId);
   const rec = {
-    ts: new Date().toISOString(), runId, fp: run.fingerprint?.id ?? null, codeId, selectionId: sel?.id ?? null,
+    ts: new Date().toISOString(), app: app.name, runId, fp: run.fingerprint?.id ?? null, codeId, selectionId: sel?.id ?? null,
     hit: null, trivial: false, unpaired: !sel, missed: [], removedMissed: [], streak: state.streak,
   };
   if (sel) {

@@ -12,13 +12,15 @@ function ago(ts) {
 }
 
 // The one line skills quote: verified (0), stale (20) with what moved and where to narrow from, insufficient (21).
+// A selected run names the selection it ran, and whether it ran while trust=shadow (I4).
 function line(res, { app, mode, require, maxAgeMin }) {
   if (res.status === 'verified') {
     const what = res.shards ? `shards×${res.shards.length}` : res.run.kind;
-    return `verified: ${what}@${res.run.id} (${ago(res.run.ts)})`;
+    const selection = res.run.kind === 'selected' && !res.shards ? ` (selection ${res.run.selectionId}${res.run.shadowed ? ', shadowed' : ''})` : '';
+    return `verified: ${what}@${res.run.id}${selection} (${ago(res.run.ts)})`;
   }
   if (res.status === 'insufficient') {
-    const wants = require === 'full' ? 'a full run or a complete shard set' : 'a full, shard-set or selected run';
+    const wants = require === 'full' ? 'a full run or a complete shard set' : 'a full run, a complete shard set or a selected run from `run --selection`';
     return `insufficient: this code has only ${res.have.join('/')} run(s); --require ${require} needs ${wants}`;
   }
   if (res.expired) return `stale: ${res.expired.runId} passed this exact code ${res.expired.ageMin} min ago, older than --max-age ${maxAgeMin}`;
@@ -46,7 +48,8 @@ export default async function verifyCommand(argv) {
   if (values.json) {
     console.log(JSON.stringify({
       status: res.status, exitCode: res.exitCode, app: app.name, mode, require,
-      runId: res.run?.id ?? null, kind: res.run?.kind ?? null, shards: res.shards?.map((r) => r.id) ?? null,
+      runId: res.run?.id ?? null, kind: res.run?.kind ?? null, selectionId: res.run?.selectionId ?? null,
+      shadowed: res.run ? Boolean(res.run.shadowed) : null, shards: res.shards?.map((r) => r.id) ?? null,
       differing: res.differing ?? null, lastVerifiedHead: res.lastVerifiedHead ?? null, have: res.have ?? null,
       expired: res.expired ?? null, fingerprint: res.fingerprint,
     }, null, 2));

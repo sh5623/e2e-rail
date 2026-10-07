@@ -120,7 +120,9 @@ unfiltered passing full run writes its head to `.e2e-rail/last-green.<app>`, the
 
 `verify` answers "has exactly this code passed?" from the ledger: only runs of this app, in this mode, with this
 fingerprint, that passed and were not filtered count. `--require full` wants a full run or a complete shard set;
-`--require selected` also takes a selected run. A rerun never counts. Preview mode rebuilds a missing or stale dist
+`--require selected` also takes a selected run made by `run --selection` (it prints
+`verified: selected@<run-id> (selection <id>[, shadowed]) (<age>)`); an ad-hoc `--test-list` run or a `measure workers`
+run does not count. A rerun never counts. Preview mode rebuilds a missing or stale dist
 (older than any file git knows) before it runs; `--no-build` refuses instead.
 
 ## Commands
