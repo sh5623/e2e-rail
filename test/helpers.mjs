@@ -14,6 +14,11 @@ export function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, 'utf-8'));
 }
 
+// A stub JSON report (`stub/<name>.json`) as the stub CLI emits it: every `<ABS_APP_DIR>` replaced by `appDirAbs`.
+export function stubReport(appDirAbs, name) {
+  return JSON.parse(readFileSync(path.join(appDirAbs, 'stub', `${name}.json`), 'utf-8').replaceAll('<ABS_APP_DIR>', appDirAbs));
+}
+
 // Copies a fixture into a fresh temp dir, `git init`s it and makes one commit.
 // root is realpath-normalized (macOS: /var/... vs /private/var/...).
 export function makeTempRepo(fixtureName) {

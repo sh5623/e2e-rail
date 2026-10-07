@@ -6,7 +6,7 @@ import path from 'node:path';
 import { sha256, hashFiles } from '../src/util/hash.mjs';
 import { newId } from '../src/util/id.mjs';
 import { globToRegExp, matchGlob, matchAny, walk, expandGlob } from '../src/util/glob.mjs';
-import { execCapture } from '../src/util/exec.mjs';
+import { execCapture, execInherit } from '../src/util/exec.mjs';
 import {
   gitHead,
   gitDiffHash,
@@ -193,4 +193,13 @@ test('newId: prefix, UTC stamp and 4 hex chars', () => {
   assert.match(newId('sel'), /^sel-\d{8}-\d{6}-[0-9a-f]{4}$/);
   assert.equal(newId('run', new Date('2026-10-07T15:30:12.345Z')).slice(0, 19), 'run-20261007-153012');
   assert.ok(new Set(Array.from({ length: 8 }, () => newId('x'))).size > 1, 'random suffix');
+});
+
+test('execInherit: shell command lines, the child handed out, a signal death as 128 + its number', async () => {
+  assert.deepEqual(await execInherit('exit 3', [], { shell: true }), { status: 3, signal: null });
+  let child = null;
+  const r = await execInherit(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { onSpawn: (c) => { child = c; c.kill('SIGTERM'); } });
+  assert.ok(child);
+  assert.deepEqual(r, process.platform === 'win32' ? r : { status: 143, signal: 'SIGTERM' });
+  assert.equal((await execInherit('e2e-rail-no-such-command', [])).status, 1);
 });

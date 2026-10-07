@@ -1,0 +1,150 @@
+import { mkdirSync, readFileSync } from 'node:fs';
+import { constants } from 'node:os';
+import path from 'node:path';
+import { appDir, ledgerDir } from './config.mjs';
+import { computeFingerprint, distStale } from './fingerprint.mjs';
+import { appendRun, writeLastGreen } from './ledger.mjs';
+import { acquire, describeHolders, lockDir } from './lock.mjs';
+import { execInherit } from './util/exec.mjs';
+import { newId } from './util/id.mjs';
+import { flattenSuites, playwrightCli, toAppRel } from './util/playwright.mjs';
+
+const MODES = ['dev', 'preview'];
+const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+const ANSI = /\u001b\[[0-9;]*m/g;
+
+export function kindOf({ lastFailed, shard, testList }) {
+  if (lastFailed) return 'rerun';
+  if (shard) return 'shard';
+  if (testList) return 'selected';
+  return 'full';
+}
+
+// One row per (spec file, project): failed if any test failed, skipped only if every test was skipped, else passed.
+// durationMs adds up every attempt; retries is the most any test needed. Failures keep the first line of the last
+// attempt's error; flaky lists each (file, project) that passed only on a retry.
+export function parsePlaywrightReport(report, appDirAbs) {
+  const rows = new Map();
+  const failures = [];
+  const flaky = [];
+  for (const t of flattenSuites(report, appDirAbs)) {
+    const key = `${t.file}\0${t.project}`;
+    if (!rows.has(key)) rows.set(key, { file: t.file, project: t.project, durationMs: 0, retries: 0, tests: 0, failed: 0, skipped: 0 });
+    const row = rows.get(key);
+    row.tests += 1;
+    row.durationMs += t.results.reduce((sum, r) => sum + (r.duration ?? 0), 0);
+    row.retries = Math.max(row.retries, t.results.length - 1);
+    if (t.status === 'unexpected') {
+      row.failed += 1;
+      const last = t.results.at(-1);
+      const message = last?.error?.message ?? last?.errors?.[0]?.message ?? '';
+      failures.push({ file: t.file, title: t.title, project: t.project, error: message.replace(ANSI, '').split('\n')[0] });
+    } else if (t.status === 'flaky') {
+      if (!flaky.some((f) => f.file === t.file && f.project === t.project)) flaky.push({ file: t.file, project: t.project });
+    } else if (t.status === 'skipped') row.skipped += 1;
+  }
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  const specs = [...rows.values()]
+    .map((r) => ({ file: r.file, project: r.project, status: r.failed ? 'failed' : r.skipped === r.tests ? 'skipped' : 'passed', durationMs: r.durationMs, retries: r.retries }))
+    .sort((a, b) => cmp(a.file, b.file) || cmp(a.project, b.project));
+  return { specs, failures, flaky };
+}
+
+function readReport(abs) {
+  try {
+    const report = JSON.parse(readFileSync(abs, 'utf8'));
+    return report && typeof report === 'object' ? report : null;
+  } catch { return null; } // Playwright died before writing it, or was cut off mid-write
+}
+
+const refuse = (message) => { console.error(message); return { rc: 1, entry: null }; };
+const staleDist = (preview) => `e2e-rail: dist (${preview.dist}) is missing or older than its sources. Run \`${preview.build}\` or drop --no-build.`;
+
+// Runs the host's Playwright once and appends exactly one ledger line; returns Playwright's exit code untouched.
+// `kind` is derived from what runs (a caller's `kind` is ignored): a run with a test list is never recorded as full.
+// Order: lock → (preview) build if dist is stale → fingerprint → spawn. The fingerprint is taken under the lock, right
+// before Playwright starts, so code edited while the run waited for the lock is not credited to the old code.
+export async function runTests({
+  config, app, mode = 'dev', testList = null, lastFailed = false, workers, project, shard = null, blob = false,
+  lock = true, build = true, selectionId = null, passthrough = [],
+}) {
+  if (!MODES.includes(mode)) throw new Error(`e2e-rail: unknown mode "${mode}" (expected ${MODES.join(' or ')})`);
+  const dirAbs = appDir(config, app);
+  const cli = playwrightCli(dirAbs);
+  const kind = kindOf({ lastFailed, shard, testList });
+  workers ??= process.env.CI ? app.run.workers.ci : app.run.workers.local;
+  const preview = mode === 'preview' ? app.run.preview : null;
+  if (preview && !build && distStale({ config, app })) return refuse(staleDist(preview));
+
+  const id = newId('run');
+  const reportAbs = path.join(ledgerDir(config), 'reports', `${id}.json`);
+  const args = ['test', '--config', app.playwrightConfig];
+  if (testList) args.push('--test-list', testList);
+  if (lastFailed) args.push('--last-failed');
+  if (workers != null) args.push('--workers', String(workers));
+  if (project) args.push('--project', project);
+  // A planned shard's test list already is that shard; with --shard Playwright would split it once more.
+  if (shard && !testList) args.push('--shard', `${shard.index}/${shard.count}`);
+  args.push(`--reporter=${blob ? 'blob,json' : 'list,json'}`);
+  const forwarded = passthrough.filter((a) => !a.startsWith('--e2e-rail-')); // e2e-rail's own tags: recorded, not passed
+  const command = `playwright ${[...args, ...passthrough].join(' ')}`;
+  const env = {
+    ...app.run.env, ...(app.run.modeEnv[mode] ?? {}),
+    PLAYWRIGHT_JSON_OUTPUT_FILE: reportAbs, PLAYWRIGHT_JSON_OUTPUT_NAME: reportAbs,
+  };
+  const cls = kind === 'full' || kind === 'shard' || workers == null ? 'heavy' : 'light';
+
+  // A signal while a child runs goes on to that child (Playwright shuts down and reports); the run then ends normally
+  // and releases the lock. Between children (waiting for the lock), it exits, and the exit listener releases the lock.
+  let child = null;
+  const track = (c) => { child = c; };
+  const onSignal = (sig) => {
+    if (child) child.kill(sig);
+    else process.exit(128 + (constants.signals[sig] ?? 0));
+  };
+  for (const s of SIGNALS) process.on(s, onSignal);
+  let held = null;
+  try {
+    if (lock) {
+      held = await acquire({
+        dir: lockDir(config), cls, purpose: `${app.name}:${kind}`,
+        onWait: (st) => console.error(`e2e-rail: waiting for the ${cls} lock (${describeHolders(st)})`),
+      });
+    }
+    if (preview && distStale({ config, app })) {
+      if (!build) return refuse(staleDist(preview)); // the sources changed while this run waited for the lock
+      const b = await execInherit(preview.build, [], { cwd: config.root, shell: true, onSpawn: track });
+      child = null;
+      if (b.status !== 0) {
+        console.error(`e2e-rail: \`${preview.build}\` failed (rc ${b.status}); Playwright was not started.`);
+        return { rc: b.status, entry: null };
+      }
+      if (distStale({ config, app })) {
+        return refuse(`e2e-rail: \`${preview.build}\` finished but dist (${preview.dist}) is still missing or older than its sources; check run.preview.dist.`);
+      }
+    }
+    const fingerprint = computeFingerprint({ config, app, mode });
+    mkdirSync(path.dirname(reportAbs), { recursive: true });
+    const t0 = Date.now();
+    const { status } = await execInherit(process.execPath, [cli, ...args, ...forwarded], { cwd: dirAbs, env, onSpawn: track });
+    child = null;
+    const durationMs = Date.now() - t0;
+    const lockInfo = held && {
+      class: held.class, requestedAt: held.requestedAt, acquiredAt: held.acquiredAt, releasedAt: held.release(),
+      waitMs: held.waitMs, loadAtStart: held.loadAtStart,
+    };
+    const report = readReport(reportAbs);
+    const entry = appendRun(config, {
+      id, app: app.name, mode, kind, fingerprint, selectionId, shard, workers: workers ?? null, project: project ?? null,
+      command, lock: lockInfo, rc: status, durationMs,
+      rootDir: report?.config?.rootDir ? toAppRel(dirAbs, report.config.rootDir) : null,
+      ...parsePlaywrightReport(report ?? { suites: [] }, dirAbs),
+    });
+    // last-green is the base the next selection diffs from: only an unfiltered full pass may move it.
+    if (status === 0 && kind === 'full' && !project && forwarded.length === 0) writeLastGreen(config, app.name, fingerprint.head);
+    return { rc: status, entry };
+  } finally {
+    held?.release();
+    for (const s of SIGNALS) process.removeListener(s, onSignal);
+  }
+}
