@@ -50,6 +50,26 @@ test('readCompilerOptions reports a broken tsconfig', async () => {
   } finally { cleanup(); }
 });
 
+test('readCompilerOptions rejects a solution-style tsconfig that holds no paths and names the referenced configs', async () => {
+  const { dir, cleanup } = scratch();
+  try {
+    const ts = await loadTypeScript(dir);
+    const app = { compilerOptions: { baseUrl: '.', paths: { '@/*': ['./src/*'] } }, include: ['src'] };
+    mkdirSync(path.join(dir, 'src'));
+    writeFileSync(path.join(dir, 'src/a.ts'), 'export {};\n');
+    writeFileSync(path.join(dir, 'tsconfig.app.json'), JSON.stringify(app));
+    writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({ files: [], references: [{ path: './tsconfig.app.json' }] }));
+    assert.throws(() => readCompilerOptions(ts, dir, 'tsconfig.json'), (e) => /solution-style/.test(e.message) && /compilerOptions\.paths/.test(e.message) && e.message.includes('tsconfig.app.json'));
+    assert.deepEqual(readCompilerOptions(ts, dir, 'tsconfig.app.json').options.paths['@/*'], ['./src/*']); // the referenced file itself is fine
+
+    // paths kept in the root file (what apps/bfm does), or no references at all, are not solution-style problems
+    writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({ files: [], references: [{ path: './tsconfig.app.json' }], compilerOptions: app.compilerOptions }));
+    assert.deepEqual(readCompilerOptions(ts, dir, 'tsconfig.json').options.paths['@/*'], ['./src/*']);
+    writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({ include: ['nothing-here'] }));
+    assert.deepEqual(readCompilerOptions(ts, dir, 'tsconfig.json').fileNames, []);
+  } finally { cleanup(); }
+});
+
 test('playwright stub is found from the app dir and lists tests per project', () => {
   assert.match(playwrightCli(app), /node_modules\/@playwright\/test\/cli\.js$/);
   assert.equal(playwrightVersion(app), '1.61.0');

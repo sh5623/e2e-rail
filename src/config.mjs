@@ -9,7 +9,7 @@ const ADAPTERS = new Set(['react-router-lazy', 'manual']);
 const TOP_KEYS = ['apps', 'shared', 'ignore', 'shadow', 'ledger'];
 const APP_KEYS = [
   'name', 'root', 'playwrightConfig', 'specDir', 'supportDirs', 'srcDir', 'tsconfig',
-  'adapter', 'apiPrefix', 'alwaysRun', 'tiers', 'run',
+  'adapter', 'apiPrefix', 'alwaysRun', 'tiers', 'run', 'main',
 ];
 const ADAPTER_KEYS = ['name', 'routeFiles', 'basePath', 'map'];
 const TIERS_KEYS = ['full', 'ignore'];

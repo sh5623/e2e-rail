@@ -20,6 +20,14 @@ export function readCompilerOptions(ts, appDirAbs, tsconfigRel) {
   const { config, error } = ts.readConfigFile(cfgPath, (p) => readFileSync(p, 'utf8'));
   if (error) throw new Error(`tsconfig: ${ts.flattenDiagnosticMessageText(error.messageText, '\n')}`);
   const parsed = ts.parseJsonConfigFileContent(config, ts.sys, path.dirname(cfgPath), undefined, cfgPath);
+  // A solution-style config (Vite's default: no files of its own, only `references`) carries no `paths`, so every
+  // alias import would silently stop resolving. Refuse it and name the referenced configs instead.
+  const refs = parsed.projectReferences ?? [];
+  const noInputs = parsed.fileNames.length === 0 || parsed.errors.some((e) => e.code === 18002 || e.code === 18003);
+  if (refs.length > 0 && noInputs && !parsed.options.paths) {
+    const names = refs.map((r) => path.relative(appDirAbs, r.path).split(path.sep).join('/')).join(', ');
+    throw new Error(`tsconfig ${tsconfigRel} is solution-style (no files of its own, only "references": ${names}) and has no compilerOptions.paths. Set the app's \`tsconfig\` to the referenced config that holds compilerOptions.paths (e.g. tsconfig.app.json).`);
+  }
   return { options: parsed.options, fileNames: parsed.fileNames };
 }
 

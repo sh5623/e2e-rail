@@ -116,6 +116,15 @@ test('unknown keys only warn, never block', () => {
   } finally { warn.mock.restore(); }
 });
 
+test('app.main is a known key: no warning, value kept', () => {
+  const warn = mock.method(console, 'warn', () => {});
+  try {
+    const cfg = withDefaults({ apps: [{ ...manualApp('a'), main: 'src/bootstrap.ts' }] }, '/x', { checkFiles: false });
+    assert.equal(cfg.apps[0].main, 'src/bootstrap.ts');
+    assert.equal(warn.mock.callCount(), 0, warn.mock.calls.map((c) => c.arguments.join(' ')).join('\n'));
+  } finally { warn.mock.restore(); }
+});
+
 test('template: each placeholder appears once and the filled-in file loads cleanly with generic defaults', async () => {
   const template = readFileSync(path.join(repoRoot, 'templates', CONFIG_FILE), 'utf-8');
   const fill = { __APP_NAME__: 'web', __APP_ROOT__: '.', __PW_CONFIG__: 'playwright.config.ts' };
