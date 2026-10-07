@@ -33,9 +33,10 @@ export function gitChangedFiles(root, base, head = 'HEAD') {
   return splitZ(r.stdout).sort();
 }
 
-// Tracked changes vs HEAD (relative to `root`) plus untracked files.
+// Tracked changes vs HEAD (relative to `root`) plus untracked files. `--no-renames`: a staged rename reports the old
+// path too (what imported it changed as well).
 export function gitUncommittedFiles(root) {
-  const tracked = splitZ(git(root, ['diff', 'HEAD', '--relative', '--name-only', '-z']).stdout);
+  const tracked = splitZ(git(root, ['diff', 'HEAD', '--relative', '--no-renames', '--name-only', '-z']).stdout);
   return [...new Set([...tracked, ...gitUntracked(root)])].sort();
 }
 

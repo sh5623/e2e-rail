@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, symlinkSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { sha256, hashFiles } from '../src/util/hash.mjs';
+import { newId } from '../src/util/id.mjs';
 import { globToRegExp, matchGlob, matchAny, walk, expandGlob } from '../src/util/glob.mjs';
 import { execCapture } from '../src/util/exec.mjs';
 import {
@@ -105,4 +106,59 @@ test('git changed/uncommitted files are relative to the given root, not the git 
     assert.ok(moved.includes('main.ts'));
     assert.ok(moved.every((p) => !p.startsWith('apps/')));
   } finally { cleanup(); }
+});
+
+test('gitUncommittedFiles reports both sides of a staged rename (R23)', () => {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  try {
+    execCapture('git', ['mv', 'src/lib/dead.ts', 'src/lib/alive.ts'], { cwd: root });
+    assert.deepEqual(gitUncommittedFiles(root), ['src/lib/alive.ts', 'src/lib/dead.ts']);
+  } finally { cleanup(); }
+});
+
+test('hashFiles skips directories and missing paths, hashes symlinks by link text (R23)', () => {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  try {
+    const base = hashFiles(root, ['src/main.ts']);
+    mkdirSync(path.join(root, 'nested'));
+    writeFileSync(path.join(root, 'nested/x.ts'), 'export {}\n');
+    assert.equal(hashFiles(root, ['nested/', 'src/main.ts']), base, 'a directory entry (untracked nested repo) is skipped');
+    assert.equal(hashFiles(root, ['gone.ts', 'src/main.ts']), base, 'a missing path is skipped');
+
+    symlinkSync('src', path.join(root, 'dir-link'));
+    symlinkSync('no-such-target', path.join(root, 'broken-link'));
+    const dirLink = hashFiles(root, ['dir-link']);
+    hashFiles(root, ['broken-link']); // no ENOENT
+    assert.notEqual(dirLink, hashFiles(root, []), 'a symlink to a directory still counts, by its link text');
+
+    symlinkSync('src/main.ts', path.join(root, 'file-link'));
+    const before = hashFiles(root, ['file-link']);
+    unlinkSync(path.join(root, 'file-link'));
+    symlinkSync('src/router.ts', path.join(root, 'file-link'));
+    assert.notEqual(hashFiles(root, ['file-link']), before, 'retargeting the link changes the hash');
+    const retargeted = hashFiles(root, ['file-link']);
+    writeFileSync(path.join(root, 'src/router.ts'), '// edited\n', { flag: 'a' });
+    assert.notEqual(hashFiles(root, ['file-link']), retargeted, 'a link to a file also covers the file it points at');
+  } finally { cleanup(); }
+});
+
+test('gitUntrackedHash survives an untracked nested repo and symlinks (R23)', () => {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  try {
+    const nested = path.join(root, 'nested');
+    mkdirSync(nested);
+    writeFileSync(path.join(nested, 'x.ts'), 'export {}\n');
+    for (const args of [['init', '-q'], ['config', 'user.email', 't@t'], ['config', 'user.name', 't'], ['add', 'x.ts'], ['commit', '-qm', 'n']]) {
+      execCapture('git', args, { cwd: nested });
+    }
+    symlinkSync('missing', path.join(root, 'broken-link'));
+    assert.deepEqual(gitUntracked(root), ['broken-link', 'nested/']);
+    assert.match(gitUntrackedHash(root), /^[0-9a-f]{64}$/);
+  } finally { cleanup(); }
+});
+
+test('newId: prefix, UTC stamp and 4 hex chars', () => {
+  assert.match(newId('sel'), /^sel-\d{8}-\d{6}-[0-9a-f]{4}$/);
+  assert.equal(newId('run', new Date('2026-10-07T15:30:12.345Z')).slice(0, 19), 'run-20261007-153012');
+  assert.ok(new Set(Array.from({ length: 8 }, () => newId('x'))).size > 1, 'random suffix');
 });
