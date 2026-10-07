@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.2.0 — 2026-10-08
+
+Fixes from an external audit (each P1 reproduced with real Playwright 1.63). The invariant they restore: a run is
+never presented as a verification it is not, and nothing narrows by guessing.
+
+### Breaking
+
+- `@playwright/test` ≥ 1.56 (peer dependency; was ≥ 1.44). Selected and shard runs use `--test-list`, which
+  Playwright has from 1.56.0. `run`, `map`, `select` and `shard plan` refuse an older one:
+  `@playwright/test 1.56.0 or newer is required (found <x>): selected and shard runs use --test-list`.
+- Arguments after `--` are classified by an allow-list. Only `--headed`, `--quiet`, `--trace <mode>`,
+  `--repeat-each <n>`, `--fail-on-flaky-tests`, `--forbid-only`, `--fully-parallel`, `--max-failures <n>`, `-x` and
+  `-j`/`--workers <n>` leave a run what its kind says; every other argument, an unknown one included, makes it
+  `filtered`. A run that passed `--retries`, `--timeout` or `-u` used to verify and no longer does. `--ui`, `--debug`,
+  `--run-agents` and `--last-failed-file` are refused. The `filtered:` line now reads
+  `filtered: <options> narrow or relax the run; not a verification`.
+- `verify --require selected` counts a selected run only while `selections/<id>.json` exists and was computed for the
+  code the run tested.
+
+### Fixes
+
+- **Passthrough that skips or relaxes checks verified as full (A, P1).** `-G` (`--grep-invert`) and its attached form
+  `-Gpattern`, `--ignore-snapshots`, `-u`/`--update-snapshots`, `--update-source-method`, `--no-deps`,
+  `--pass-with-no-tests`, `--retries`, `--timeout`, `--global-timeout`, `--tsconfig`, `--browser` and `--add-reporter`
+  were neutral: a full run that ignored a failing snapshot or left a failing test out verified and moved last-green.
+  They now make the run `filtered`. Short clusters are read as commander reads them (`-xc file` holds `-c`: refused).
+- **A dirty-tree pass moved last-green to HEAD (B, P1).** The fingerprint gains `clean` (no tracked change against
+  HEAD, no untracked non-ignored file outside the ledger dir; not part of `id`). last-green moves only for a full pass,
+  or a complete `shard merge`, of a clean tree; otherwise the run prints
+  `last-green not moved: the working tree had uncommitted changes`. A dirty pass still verifies its own code. `verify`
+  offers only a clean pass's head as `last verified head`, and says
+  `no full pass of a committed tree yet, so no base to narrow from` when every pass had uncommitted changes.
+- **A stale selection ran and verified (C, P1).** `run --selection` on a selection computed for other code computes it
+  again from the same base, head and uncommitted setting (same apps), prints
+  `selection <old> was for other code — reselected as <new>`, carries over its `--add` entries (not its `--remove`
+  entries) and runs the new one. When the code changes while a selection run waits for the lock, the run stops under
+  the lock with `the code changed while waiting for the lock (selection <id> no longer matches); run it again`, writes
+  no ledger line and releases the lock.
+- **The declared minimum Playwright could not run selected runs (D, P2).** Besides the floor above: running the
+  contract suite on 1.56.0 showed that 1.56.x and 1.57.x match a `--test-list` line only on a test's whole title path
+  (1.58.0 made it a prefix), so the file-level lines e2e-rail writes matched nothing there. On those versions a run
+  lists the tests under the lock and hands Playwright one whole-title line per test the list covers
+  (`.e2e-rail/reports/<run-id>.test-list.txt`); the list, the ledger's `command` and the empty-list check stay as
+  written. CI runs the contract suite on 1.56.0 too.
+
+### Docs
+
+- A seeded-failure drill for the shadow period (E): in the shadow skill and both READMEs — break a selected spec on a
+  scratch branch, check that `select` names it and `run --selection` fails, see a planted unrelated failure fail the
+  full run, never `shadow record` a drill, revert.
+
 ## 0.1.0 — 2026-10-07
 
 First release.

@@ -1,6 +1,6 @@
 {
   "name": "e2e-rail",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Change-aware selection, verification ledger and sharding for Playwright E2E. Runtime-agnostic core with Claude Code and Codex skill layers.",
   "type": "module",
   "bin": { "e2e-rail": "bin/e2e-rail.mjs" },
