@@ -1,0 +1,156 @@
+# e2e-rail: the full E2E suite split across GitHub Actions jobs (Playwright's native sharding), merged and verified.
+# Copy to .github/workflows/e2e.yml and set the env block and the build command. Every e2e-rail command runs from the
+# repository root, where e2e-rail.config.mjs lives.
+#
+# Why the plumbing:
+# - dist is built once and shared, so every shard and the merge job fingerprint the same build.
+# - each shard job ships its ledger line to the merge job, so `shard merge` can say whether every shard of one split
+#   passed on this exact code (complete: yes) and `verify` can count the set as a full run.
+# - downloads land in $RUNNER_TEMP, outside the work tree: an untracked file in the work tree changes the fingerprint.
+#   This relies on the .gitignore lines `e2e-rail init` adds (.e2e-rail/, test-results/, playwright-report/,
+#   blob-report/) and on dist being ignored.
+name: e2e
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  E2E_APP: web             # the app's name in e2e-rail.config.mjs
+  E2E_APP_DIR: apps/web    # its root
+  E2E_DIST: apps/web/dist  # its run.preview.dist, from the repository root
+  E2E_SHARDS: 4            # keep equal to the length of matrix.shard below
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -F web build   # the app's run.preview.build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: ${{ env.E2E_DIST }}
+          retention-days: 1
+
+  e2e:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -C "$E2E_APP_DIR" exec playwright install --with-deps
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: ${{ env.E2E_DIST }}
+      # The build job built this dist from this commit. Restored files can carry older times than this checkout, and
+      # --mode preview rebuilds a dist older than its sources, so mark it fresh (the dist hash ignores file times).
+      - run: find "$E2E_DIST" -type f -exec touch {} +
+      - run: pnpm exec e2e-rail run --app "$E2E_APP" --full --shard ${{ matrix.shard }}/${{ env.E2E_SHARDS }} --blob --mode preview
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: blob-report-${{ matrix.shard }}
+          path: ${{ env.E2E_APP_DIR }}/blob-report
+          retention-days: 1
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-ledger-${{ matrix.shard }}
+          path: .e2e-rail/ledger.jsonl
+          retention-days: 1
+
+  merge:
+    needs: e2e
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Ledger history across workflow runs: durations for `shard plan` and `measure`. Optional.
+      - uses: actions/cache@v4
+        with:
+          path: .e2e-rail/ledger.jsonl
+          key: e2e-rail-ledger-${{ github.run_id }}
+          restore-keys: e2e-rail-ledger-
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: ${{ env.E2E_DIST }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: blob-report-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/blob-report
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: e2e-ledger-*
+          path: ${{ runner.temp }}/ledgers
+      # The ledger is append-only JSON lines: adding the shards' lines is appending.
+      - run: mkdir -p .e2e-rail && cat "$RUNNER_TEMP"/ledgers/*/ledger.jsonl >> .e2e-rail/ledger.jsonl
+      - run: pnpm exec e2e-rail shard merge --app "$E2E_APP" --dir "$RUNNER_TEMP/blob-report" --mode preview
+      - run: pnpm exec e2e-rail verify --app "$E2E_APP" --mode preview --require full
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: ${{ env.E2E_APP_DIR }}/playwright-report
+
+# ── Variant: planned shards, balanced by measured durations ──────────────────────────────────────────────────────────
+# Add a plan job and replace the e2e job's run step. The plan's lists live in the ledger dir, which the fingerprint
+# ignores, so downloading them changes nothing. Each list must run as --shard <i>/<count> of its own plan; any other
+# index or count, or an edited list, is refused before Playwright starts.
+#
+#  plan:
+#    runs-on: ubuntu-latest
+#    steps:
+#      - uses: actions/checkout@v4
+#      - uses: pnpm/action-setup@v4
+#      - uses: actions/setup-node@v4
+#        with:
+#          node-version: 22
+#          cache: pnpm
+#      - run: pnpm install --frozen-lockfile
+#      - uses: actions/cache/restore@v4   # durations from earlier merge jobs; without them specs weigh the same
+#        with:
+#          path: .e2e-rail/ledger.jsonl
+#          key: e2e-rail-ledger-${{ github.run_id }}
+#          restore-keys: e2e-rail-ledger-
+#      - run: pnpm exec e2e-rail shard plan --app "$E2E_APP" --count "$E2E_SHARDS"
+#      - uses: actions/upload-artifact@v4
+#        with:
+#          name: shard-plan
+#          path: .e2e-rail/shards/${{ env.E2E_APP }}/
+#          retention-days: 1
+#
+#  e2e job: needs: [build, plan], and in place of its run step:
+#      - uses: actions/download-artifact@v4
+#        with:
+#          name: shard-plan
+#          path: .e2e-rail/shards/${{ env.E2E_APP }}
+#      - run: pnpm exec e2e-rail run --app "$E2E_APP" --test-list ".e2e-rail/shards/$E2E_APP/${{ matrix.shard }}.txt" --shard ${{ matrix.shard }}/${{ env.E2E_SHARDS }} --blob --mode preview
+#      # A planned list runs without Playwright's --shard, so every job writes the same blob file name: make it unique.
+#      - if: ${{ !cancelled() }}
+#        run: for f in "$E2E_APP_DIR"/blob-report/*.zip; do mv "$f" "${f%.zip}-${{ matrix.shard }}.zip"; done

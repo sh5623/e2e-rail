@@ -1,0 +1,99 @@
+# e2e-rail: the full E2E suite split across the builds of one CodeBuild batch (build-graph), merged and verified.
+# Same shape as github-actions-shard.yml: build once → N native Playwright shards → merge + verify.
+# Use it as the project's buildspec with batch builds enabled. Set the env block, the build command and a bucket the
+# service role can read and write; builds of one batch hand dist, blob reports and ledger lines over through it.
+# Every e2e-rail command runs from the repository root, where e2e-rail.config.mjs lives. Hand-off files land in a
+# temp dir outside the work tree: an untracked file in the work tree changes the fingerprint.
+version: 0.2
+
+batch:
+  fast-fail: false
+  build-graph:
+    - identifier: build
+      env:
+        variables:
+          E2E_STEP: build
+    - identifier: shard_1
+      depend-on:
+        - build
+      env:
+        variables:
+          E2E_STEP: shard
+          E2E_SHARD: "1"
+    - identifier: shard_2
+      depend-on:
+        - build
+      env:
+        variables:
+          E2E_STEP: shard
+          E2E_SHARD: "2"
+    - identifier: shard_3
+      depend-on:
+        - build
+      env:
+        variables:
+          E2E_STEP: shard
+          E2E_SHARD: "3"
+    - identifier: shard_4
+      depend-on:
+        - build
+      env:
+        variables:
+          E2E_STEP: shard
+          E2E_SHARD: "4"
+    - identifier: merge
+      depend-on:
+        - shard_1
+        - shard_2
+        - shard_3
+        - shard_4
+      env:
+        variables:
+          E2E_STEP: merge
+
+env:
+  shell: bash
+  variables:
+    E2E_APP: web                          # the app's name in e2e-rail.config.mjs
+    E2E_APP_DIR: apps/web                 # its root
+    E2E_DIST: apps/web/dist               # its run.preview.dist, from the repository root
+    E2E_SHARDS: "4"                       # the number of shard_<i> builds above
+    E2E_BUCKET: s3://your-bucket/e2e-rail # hand-off between the builds of one batch
+
+phases:
+  install:
+    commands:
+      - corepack enable
+      - pnpm install --frozen-lockfile
+      - if [ "$E2E_STEP" = shard ]; then pnpm -C "$E2E_APP_DIR" exec playwright install --with-deps; fi
+  build:
+    commands:
+      - |
+        handoff="$E2E_BUCKET/$CODEBUILD_RESOLVED_SOURCE_VERSION"   # one batch per commit at a time
+        case "$E2E_STEP" in
+          build)
+            pnpm -F web build                                       # the app's run.preview.build
+            aws s3 sync "$E2E_DIST" "$handoff/dist" --delete
+            ;;
+          shard)
+            aws s3 sync "$handoff/dist" "$E2E_DIST" --delete
+            # Built from this commit by the build step; s3 sync keeps older file times, and --mode preview rebuilds a
+            # dist older than its sources, so mark it fresh (the dist hash ignores file times).
+            find "$E2E_DIST" -type f -exec touch {} +
+            rc=0
+            pnpm exec e2e-rail run --app "$E2E_APP" --full --shard "$E2E_SHARD/$E2E_SHARDS" --blob --mode preview || rc=$?
+            aws s3 sync "$E2E_APP_DIR/blob-report" "$handoff/blob-report"
+            aws s3 cp .e2e-rail/ledger.jsonl "$handoff/ledger/$E2E_SHARD.jsonl"
+            exit "$rc"
+            ;;
+          merge)
+            aws s3 sync "$handoff/dist" "$E2E_DIST" --delete
+            tmp=$(mktemp -d)
+            aws s3 sync "$handoff/blob-report" "$tmp/blob-report"
+            aws s3 sync "$handoff/ledger" "$tmp/ledger"
+            mkdir -p .e2e-rail
+            cat "$tmp"/ledger/*.jsonl >> .e2e-rail/ledger.jsonl   # append-only JSON lines: concatenating is appending
+            pnpm exec e2e-rail shard merge --app "$E2E_APP" --dir "$tmp/blob-report" --mode preview
+            pnpm exec e2e-rail verify --app "$E2E_APP" --mode preview --require full
+            ;;
+        esac

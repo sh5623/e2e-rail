@@ -1,0 +1,38 @@
+# e2e-rail: the shadow-period gate for an existing CodeBuild buildspec.
+# The full suite stays the gate. Next to it e2e-rail computes the selection for the same code and records whether
+# that selection would have caught every failure (shadow record). After enough hits in a row `shadow status` says
+# promotable, and a human decides whether to run `shadow promote`.
+# Merge the env, cache and build parts into your buildspec. Run from the repository root.
+version: 0.2
+
+env:
+  shell: bash
+  variables:
+    E2E_APP: web   # the app's name in e2e-rail.config.mjs
+
+cache:
+  paths:
+    # The ledger, the shadow state (trust, streak) and last-green must outlive the build, or the streak never grows.
+    # Prefer an S3 cache: a local cache is best effort.
+    - .e2e-rail/**/*
+
+phases:
+  build:
+    commands:
+      - |
+        # 1. The selection this code would run. The base is the last full pass (git history must reach it; without a
+        #    base the selection is full, which shadow record counts as trivial). Exit 10 = full: never fails the build.
+        base="${E2E_BASE:-$(cat ".e2e-rail/last-green.$E2E_APP" 2>/dev/null)}"
+        pnpm exec e2e-rail select --app "$E2E_APP" --base "$base" || echo "e2e-rail select exited $? (10 = full selection)"
+        # 2. The gate: the full suite. The log goes outside the work tree (an untracked file there changes the fingerprint).
+        log=$(mktemp)
+        pnpm exec e2e-rail run --app "$E2E_APP" --full --mode preview | tee "$log"
+        rc=${PIPESTATUS[0]}
+        # 3. Pair the run with the selection. The run id is the second word of the summary line:
+        #    run-id <id> · kind full · rc <rc> · <ms>ms · failures <n>
+        run_id=$(sed -n 's/^run-id \([^ ]*\) .*/\1/p' "$log" | tail -n 1)
+        if [ -n "$run_id" ]; then
+          pnpm exec e2e-rail shadow record --app "$E2E_APP" --run "$run_id" || echo "shadow record skipped"
+        fi
+        pnpm exec e2e-rail shadow status
+        exit "$rc"

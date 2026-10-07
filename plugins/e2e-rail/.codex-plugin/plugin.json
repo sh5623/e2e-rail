@@ -1,0 +1,28 @@
+{
+  "name": "e2e-rail",
+  "version": "0.1.0",
+  "description": "Change-aware Playwright E2E selection, verification ledger and sharding — Codex skills over the e2e-rail CLI.",
+  "author": {
+    "name": "Seungho"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "e2e-rail (Codex)",
+    "shortDescription": "Select, verify and shard Playwright E2E by change.",
+    "longDescription": "Codex-native skills and SessionStart doctrine over the runtime-agnostic e2e-rail CLI installed in the repo.",
+    "developerName": "Seungho",
+    "category": "Engineering",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use $e2e-rail:init to set this repo up.",
+      "Use $e2e-rail:select to decide the E2E scope for this change.",
+      "Use $e2e-rail:gate to run and report it."
+    ]
+  },
+  "homepage": "https://github.com/sh5623/e2e-rail",
+  "repository": "https://github.com/sh5623/e2e-rail.git",
+  "license": "MIT"
+}
