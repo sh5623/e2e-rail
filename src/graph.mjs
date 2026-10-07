@@ -12,7 +12,7 @@ import { toAppRel } from './util/playwright.mjs';
 // So an edge the graph cannot see is made visible (glob / template / require.context / new URL edges), recorded as a
 // blind spot (`missing`, `opaque`), or both; affectedEntries widens on every blind spot.
 
-const GRAPH_VERSION = 2; // part of the cache key: bump when the edge rules change
+const GRAPH_VERSION = 3; // part of the cache key: bump when the edge rules change
 const SRC_EXTS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'];
 const MAIN_CANDIDATES = ['main.tsx', 'main.ts', 'main.jsx', 'main.js', 'index.tsx', 'index.ts', 'index.jsx', 'index.js'];
 // An unresolved import of one of these is a bundler asset, not a module the graph is missing.
@@ -26,7 +26,7 @@ export function srcFiles(config, app) {
 }
 
 // The tsconfig and every file it `extends` (relative path or package specifier): `paths` in any of them reshapes edges.
-function tsconfigChain(dirAbs, tsconfigRel) {
+export function tsconfigChain(dirAbs, tsconfigRel) {
   const seen = new Set();
   const resolveExtends = (fromAbs, spec) => {
     const isFile = (p) => existsSync(p) && statSync(p).isFile();
@@ -126,7 +126,7 @@ function expandBraces(p) {
 }
 
 // Does the specifier fall under one of the tsconfig `paths` patterns (an internal alias)?
-function pathsMatcher(options) {
+export function pathsMatcher(options) {
   const patterns = Object.keys(options.paths ?? {}).map((k) => {
     const i = k.indexOf('*');
     return i < 0 ? [k, null] : [k.slice(0, i), k.slice(i + 1)];
@@ -134,13 +134,16 @@ function pathsMatcher(options) {
   return (spec) => patterns.some(([pre, suf]) => (suf === null ? spec === pre : spec.length >= pre.length + suf.length && spec.startsWith(pre) && spec.endsWith(suf)));
 }
 
-// A specifier the compiler could not resolve, but that points inside the app: relative, absolute or a `paths` alias.
-// Assets (by extension, or a `?raw`/`?url`/`?inline` suffix) are bundler business and not a missing module; bare
-// packages and virtual modules are not ours.
-function isInternalMiss(spec, matchesPaths) {
+// A specifier the compiler could not resolve, but that points inside the app: relative, absolute, a `paths` alias, or
+// one that looks like an alias (`@/`, `~/`, `#`) even when no `paths` entry declares it (a Vite-only alias, a package
+// `imports` map). Assets (by extension, or a `?raw`/`?url`/`?inline` suffix) are bundler business and not a missing
+// module; bare packages and virtual modules are not ours.
+const ALIAS_LIKE = /^(@\/|~\/|#)/;
+export function isInternalMiss(spec, matchesPaths) {
   const clean = spec.split('?')[0];
   const query = spec.slice(clean.length + 1);
-  const internal = clean === '.' || clean === '..' || clean.startsWith('./') || clean.startsWith('../') || clean.startsWith('/') || matchesPaths(clean);
+  const internal = clean === '.' || clean === '..' || clean.startsWith('./') || clean.startsWith('../') || clean.startsWith('/')
+    || ALIAS_LIKE.test(clean) || matchesPaths(clean);
   if (!internal || ASSET_EXTS.has(path.posix.extname(clean).toLowerCase())) return false;
   return !/(^|&)(raw|url|inline)(&|=|$)/.test(query);
 }

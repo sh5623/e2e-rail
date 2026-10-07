@@ -286,6 +286,24 @@ test('an internal import that cannot be resolved lands in graph.missing and ever
   } finally { cleanup(); }
 });
 
+test('M11: an unresolved alias-looking specifier (@/, ~/, #) is missing even when no tsconfig paths declare it', async () => {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  try {
+    // the fixture's tsconfig declares only "@/*"; ~/ and # would come from a Vite alias or a package imports map
+    write(root, 'src/lib/aliased.ts', "import a from '~/lib/x';\nimport b from '#internal/y';\nimport c from 'left-pad-nope';\nexport default [a, b, c];\n");
+    assert.deepEqual((await setup(root)).graph.missing, [
+      { from: 'src/lib/aliased.ts', spec: '~/lib/x' },
+      { from: 'src/lib/aliased.ts', spec: '#internal/y' },
+    ]);
+    // a tsconfig without `paths`: the app's `@/…` imports no longer resolve, and they count as missing, not as packages
+    write(root, 'tsconfig.nopaths.json', JSON.stringify({ compilerOptions: { module: 'ESNext', moduleResolution: 'Bundler', strict: true, noEmit: true }, include: ['src'] }));
+    const s = await setup(root, { tsconfig: 'tsconfig.nopaths.json' });
+    assert.ok(s.graph.missing.some((m) => m.from === 'src/main.ts' && m.spec === '@/store/session'), JSON.stringify(s.graph.missing));
+    assert.ok(!s.graph.missing.some((m) => m.spec === 'left-pad-nope'));
+    assert.deepEqual(affected(s, ['src/components/Table.ts']).unresolved, ['src/components/Table.ts']);
+  } finally { cleanup(); }
+});
+
 test('assets, bare packages and ?raw/?url queries are not missing; a code file behind a query still gets its edge', async () => {
   const { root, cleanup } = makeTempRepo('sample-app');
   try {

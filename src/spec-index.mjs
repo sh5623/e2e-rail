@@ -5,6 +5,7 @@ import { hashFiles, sha256 } from './util/hash.mjs';
 import { walk } from './util/glob.mjs';
 import { parseFile, readCompilerOptions } from './util/ts.mjs';
 import { listTests, toAppRel } from './util/playwright.mjs';
+import { isInternalMiss, pathsMatcher } from './graph.mjs';
 
 // Spec index (spec §4): for every Playwright spec, the routes it visits, the API globs it intercepts, the app
 // source files it imports and the support helpers it uses. The selector trusts this file, so everything here errs
@@ -132,16 +133,24 @@ function makeIndexer({ ts, dirAbs, app, options }) {
   const isE2e = (rel) => isSupport(rel) || under(rel, app.specDir); // the tree whose constants we may read (spec §4 rule 3)
 
   const resolutions = new Map();
+  const failed = new Set(); // `${fromRel}\0${specifier}` the compiler could not resolve at all
   // App-relative path of the file `specifier` means from `fromRel`, or null for libraries and files outside the app.
   function resolveSpecifier(fromRel, specifier) {
     const k = `${fromRel}\0${specifier}`;
     if (!resolutions.has(k)) {
       const hit = ts.resolveModuleName(specifier, path.join(dirAbs, fromRel), options, ts.sys).resolvedModule;
+      if (!hit) failed.add(k);
       const rel = hit && !hit.isExternalLibraryImport ? toAppRel(dirAbs, hit.resolvedFileName) : null;
       resolutions.set(k, rel && rel !== '..' && !rel.startsWith('../') && !rel.split('/').includes('node_modules') ? rel : null);
     }
     return resolutions.get(k);
   }
+  // T1: an import in the e2e tree that points inside the app (relative, absolute, a `paths` alias or alias-looking,
+  // the graph's rule) and does not resolve hides whatever that module would add: its gotos, mocks and src imports. A
+  // JSON fixture carries none of those, so it never counts.
+  const matchesPaths = pathsMatcher(options);
+  const blind = (m) => m.specifiers.some((s) => failed.has(`${m.rel}\0${s}`) && isInternalMiss(s, matchesPaths)
+    && path.posix.extname(s.split('?')[0]).toLowerCase() !== '.json');
 
   const modules = new Map();
   const load = (rel) => {
@@ -263,7 +272,7 @@ function makeIndexer({ ts, dirAbs, app, options }) {
     const sorted = (set) => [...set].sort();
     return {
       routes: sorted(routes), apis: sorted(apis), imports: sorted(imports), supports: sorted(supports),
-      projects: [...projects], unmapped: own.size === 0 || ownUnresolved,
+      projects: [...projects], unmapped: own.size === 0 || ownUnresolved || reach.some(blind),
     };
   };
 }

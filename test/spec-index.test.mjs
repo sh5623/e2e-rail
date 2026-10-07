@@ -308,6 +308,34 @@ test('test files Playwright lists outside specDir are indexed as unmapped, never
   } finally { cleanup(); }
 });
 
+test('T1: an import in the e2e tree that points inside the app and does not resolve makes the spec unmapped', async () => {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  try {
+    const spec = (name, imports) => put(root, `e2e/${name}.spec.ts`, [
+      "import { test } from '@playwright/test';", ...imports,
+      "test('t', async ({ page }) => { await page.goto('/app/orders'); });", '',
+    ].join('\n'));
+    spec('relative', ["import { a } from './support/gone';"]);
+    spec('alias', ["import { a } from '@/features/gone/x';"]); // matches the tsconfig `paths` key "@/*"
+    spec('tilde', ["import { a } from '~/helpers';"]); // alias-looking, no `paths` entry
+    spec('hash', ["import { a } from '#fixtures/data';"]); // a package `imports` map entry that does not resolve
+    spec('dynamic', ["const load = () => import('./support/later');"]);
+    put(root, 'e2e/support/broken.ts', "import { x } from './gone-too';\nexport const helper = x;\n");
+    spec('via-helper', ["import { helper } from './support/broken';"]); // the hole is one hop down
+    spec('bare', ["import { a } from 'some-missing-package';"]); // a package: not ours to resolve
+    spec('json', ["import data from './fixtures/orders.json';"]); // a data fixture carries no navigation
+    spec('fine', ["import { PATHS } from './support/paths';"]);
+    const names = ['relative', 'alias', 'tilde', 'hash', 'dynamic', 'via-helper', 'bare', 'json', 'fine'];
+    const { config, app, ts } = await setup(root);
+    const s = buildSpecIndex({ config, app, ts, tests: listed(...names.map((n) => `e2e/${n}.spec.ts`)) }).specs;
+    const unmapped = Object.fromEntries(names.map((n) => [n, s[`e2e/${n}.spec.ts`].unmapped]));
+    assert.deepEqual(unmapped, {
+      relative: true, alias: true, tilde: true, hash: true, dynamic: true, 'via-helper': true, bare: false, json: false, fine: false,
+    });
+    assert.deepEqual(s['e2e/relative.spec.ts'].routes, ['orders'], 'its readable routes are kept; it just runs on every src change');
+  } finally { cleanup(); }
+});
+
 test('C2: the index holds exactly the files Playwright lists, whatever their name and whatever tiers.ignore says', async () => {
   const { root, cleanup } = makeTempRepo('sample-app');
   try {
