@@ -55,3 +55,25 @@ missed:   <spec — coupling — proposed fix> (one per line) | none
 status:   <the status line, verbatim>
 decision: promotion proposed to a human | not promotable (streak <s>/<n>) | trust already selected | demotion proposed
 ```
+
+## 6. Seeded-failure drill (during the shadow period)
+A streak counts what the selection caught; a drill shows it catches a real break. Run one now and then, and before
+proposing promotion — always on a scratch branch, never on the branch you ship:
+```sh
+git switch -c e2e-drill
+```
+1. Pick a recent change and break the code it touches so that a spec that should be selected fails (an assertion it
+   checks, a label it reads).
+2. Select and run on that broken code:
+   ```sh
+   pnpm exec e2e-rail select --app <app> --base <base>
+   pnpm exec e2e-rail run --app <app> --selection --mode <mode>
+   ```
+   The spec must be in the selection (a reason naming the broken file) and `run --selection` must fail. A selection
+   without it, or a passing run, is a selector miss: name the coupling and propose a fix as in step 4.
+3. Plant a failure in an UNRELATED spec as well and run `run --app <app> --full --mode <mode>`: the full run fails and,
+   paired with the selection, would show as a miss. That is expected. A miss resets the streak only when the failure
+   is genuine, so never `shadow record` a drill's full run.
+4. Then revert: `git switch -` and `git branch -D e2e-drill`, and select again on the real code.
+
+Report: `drill: <spec> selected (<reason>) · run --selection failed as expected` or `drill: missed <spec> — <coupling>`.

@@ -135,6 +135,29 @@ test('gate: verify in the run mode, fixed report tokens, shadowed and filtered r
   }
 });
 
+test('E: the shadow skill and both READMEs carry the seeded-failure drill: break a selected spec, a planted unrelated failure, a scratch branch, never recorded', () => {
+  const sections = {
+    'skills/shadow/SKILL.md': /^## \d+\. Seeded-failure drill/m,
+    'README.md': /^### Seeded-failure drill/m,
+    'README.ko.md': /^### 씨앗 실패 훈련 \(seeded-failure drill\)/m,
+  };
+  for (const [rel, heading] of Object.entries(sections)) {
+    const md = read(rel);
+    const at = md.search(heading);
+    assert.ok(at >= 0, `${rel}: drill heading`);
+    const nl = md.indexOf('\n', at);
+    const next = md.slice(nl).search(/^##+ /m); // the drill runs to the next heading, or to the end
+    const drill = next < 0 ? md.slice(at) : md.slice(at, nl + next);
+    for (const token of ['select --app <app> --base', 'run --app <app> --selection', 'shadow record', 'revert', 'git switch -c']) {
+      assert.ok(drill.includes(token), `${rel}: ${token}`);
+    }
+  }
+  const skill = read('skills/shadow/SKILL.md');
+  assert.match(skill, /scratch branch/);
+  assert.match(skill, /UNRELATED spec/);
+  assert.match(skill, /never `shadow record` a drill/i);
+});
+
 test('select: the selection block carries change, selected, added/removed, mobile, unmapped and final', () => {
   const md = read('skills/select/SKILL.md');
   for (const field of ['change:', 'selected:', 'added:', 'removed:', 'mobile:', 'unmapped:', 'final:']) assert.ok(md.includes(field), field);

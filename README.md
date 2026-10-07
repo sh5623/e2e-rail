@@ -180,6 +180,17 @@ alone. Filtered, rerun, selected and shard runs are refused, and so is a failed 
 `shadow status` prints `promotable yes`, a human may run `shadow promote`; nothing promotes automatically.
 `shadow demote` returns to shadow with streak 0. Shadow mode costs nothing: the full run happens anyway.
 
+### Seeded-failure drill
+
+A streak counts what the selection caught; a drill shows that it catches a real break. During the shadow period, on a
+scratch branch (`git switch -c e2e-drill`), pick a recent change and break the code it touches so that a spec that
+should be selected fails. Run `select --app <app> --base <base>` and check that the spec is in the selection, with a
+reason naming the broken file; then `run --app <app> --selection` must fail. A selection without the spec, or a passing
+run, is a selector miss to fix like a shadow miss. Plant a failure in an UNRELATED spec as well: the full run fails
+and, paired with the selection, shows as a miss. That is expected; a miss resets the streak only when the failure is
+genuine, so a drill's full runs are never recorded with `shadow record`. Then revert: leave the scratch branch and
+delete it.
+
 ## Locks, workers and sharding
 
 **Lock.** One lock serves the whole machine (every repository and worktree), in a private 0700 directory under the
