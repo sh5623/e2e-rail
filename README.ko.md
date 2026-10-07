@@ -137,14 +137,20 @@ Playwright 버전, preview 모드면 빌드된 `dist` 해시. `id` 는 그 전�
 
 공통: `--version`, `--help`, `<command> --help`. 모든 오류는 stderr 의 `e2e-rail: <message>` 한 줄이고, 사용법 오류는
 2, 그 밖은 1 로 끝난다. 실행 모양을 바꾸는 옵션은 CLI 자체 플래그다. `--` 뒤의 `--shard`, `--test-list`,
-`--test-list-invert`, `--last-failed`, `--list`, `--only-changed`, `--reporter`, `--output`, `-c`, `--config` 는
-실행 전에 거부된다. `--project`, `-- --grep`, 파일 필터로 좁힌 실행은 `kind full (filtered)` 로 찍히고 검증도
-last-green 이동도 하지 않는다. 그 앱의 test-list 줄을 하나도 쓰지 않는 선택으로 `run --selection` 을 하면
+`--test-list-invert`, `--last-failed`, `--last-failed-file`, `--list`, `--only-changed`, `--reporter`, `--output`,
+`-c`, `--config`, `--ui`, `--debug`, `--run-agents` 는 실행 전에 거부된다. `--` 뒤에서 실행을 그 kind 그대로 두는 것은
+`--headed`, `--quiet`, `--trace <mode>`, `--repeat-each <n>`, `--fail-on-flaky-tests`, `--forbid-only`,
+`--fully-parallel`, `--max-failures <n>`, `-x`, `-j`/`--workers <n>` 뿐이다. 그 밖의 모든 인자 — 테스트 필터(`-g`,
+`-G`, `--grep`, `--grep-invert`, `--project`, 파일), 검사를 건너뛰거나 느슨하게 하는 옵션(`--ignore-snapshots`, `-u`,
+`--retries`, `--timeout`, `--no-deps`, `--pass-with-no-tests` 등), e2e-rail 이 모르는 옵션 — 은 `--project` 와 같이
+실행을 filtered 로 만든다. 그 실행은 `kind full (filtered)` 와
+`filtered: <options> narrow or relax the run; not a verification` 를 찍고, 검증도 last-green 이동도 하지 않는다.
+그 앱의 test-list 줄을 하나도 쓰지 않는 선택으로 `run --selection` 을 하면
 `<app>: nothing selected (partial, 0 specs)`(선택된 spec 에 Playwright 프로젝트가 없으면 `…, <n> spec(s), 0 test-list lines`)를
 찍고 아무것도 돌리거나 기록하지 않는다. test list(선택, 샤드 계획, `--test-list <file>`)로 돈 실행에서 목록이 어떤
 테스트와도 맞지 않으면 Playwright 는 0 으로 끝나지만 실패로 기록된다(rc 1, `failed: test list matched no tests`). 맞는
-테스트가 없는 줄이 하나라도 있어도 그렇다(`failed: test list line matched no tests: <line>`). 단 `--project` 나 `--grep` 으로
-일부러 좁힌 실행은 줄 검사를 하지 않는다.
+테스트가 없는 줄이 하나라도 있어도 그렇다(`failed: test list line matched no tests: <line>`). 단 일부러 좁힌(filtered)
+실행은 줄 검사를 하지 않는다.
 
 ## 섀도 모드
 

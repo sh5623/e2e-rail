@@ -31,7 +31,9 @@ pnpm exec e2e-rail run --app <app> --full --mode <mode>
 The exit code is Playwright's. The summary line is the record:
 `run-id <id> · kind <full|selected|rerun|shard> · rc <rc> · <ms>ms · failures <n>`, then up to ten
 `failed: <file> › <title> [<project>] — <error>` lines. Lines that limit what you may claim:
-- `kind full (filtered)` with `filtered: …` — `--project` or a `-- --grep`/file filter narrowed the run.
+- `kind full (filtered)` with `filtered: <options> narrow or relax the run; not a verification` — `--project`, or after
+  `--` anything outside the allow-list below (a `--grep`/`-G`/file filter, `--ignore-snapshots`, `-u`, `--retries`, an
+  option e2e-rail does not know), narrowed or relaxed the run.
 - `shadowed: a selected run does not replace a full run while trust=shadow`.
 - `<app>: nothing selected (partial, 0 specs)` (or `…, <n> spec(s), 0 test-list lines`) — nothing ran, nothing was
   recorded, nothing is verified.
@@ -43,9 +45,12 @@ The exit code is Playwright's. The summary line is the record:
 - `e2e-rail: <build command> failed (rc <n>); Playwright was not started.` — nothing ran or was recorded.
 
 Run-shaping options never go after `--`. Only `--shard`, `--test-list`, `--last-failed` and `--project` have e2e-rail
-flags (use those); `--reporter`, `--config`, `--list`, `--only-changed`, `--output` and `--test-list-invert` are not
-supported at all. The CLI refuses each of them after `--` before anything runs, except `--project`, which there makes
-the run `filtered`. Full and shard runs, and runs without a worker count, take the machine-wide exclusive lock;
+flags (use those); `--reporter`, `--config`, `--list`, `--only-changed`, `--output`, `--test-list-invert`,
+`--last-failed-file`, `--ui`, `--debug` and `--run-agents` are not supported at all. The CLI refuses each of them after
+`--` before anything runs, except `--project`, which there makes the run `filtered`. After `--` only `--headed`,
+`--quiet`, `--trace <mode>`, `--repeat-each <n>`, `--fail-on-flaky-tests`, `--forbid-only`, `--fully-parallel`,
+`--max-failures <n>`, `-x` and `-j`/`--workers <n>` keep a run a verification; anything else makes it `filtered`.
+Full and shard runs, and runs without a worker count, take the machine-wide exclusive lock;
 `waiting for the heavy lock (…)` on stderr means another run holds it. Wait; do not kill and retry.
 
 ## 2. Verify (always, in the run's mode)

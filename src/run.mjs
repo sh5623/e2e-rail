@@ -16,23 +16,73 @@ const MODES = ['dev', 'preview'];
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 const ANSI = /\u001b\[[0-9;]*m/g;
 
-// R46: passthrough options that change what runs, which config is used or where the report goes. Passed through, they
-// would make a sliced or empty run look like an unfiltered full one, so runTests refuses them and names what to use.
+// Passthrough arguments (after `--`) are read the way Playwright's commander reads them, and fall in three groups:
+//   refused (R46)   first-class runTests parameters, or what desynchronises the report or fingerprint, or what is no
+//                   recorded run at all; runTests throws before the lock, the build and the ledger.
+//   neutral         the allow-list below: they change how the run behaves, never which tests run or what a test
+//                   checks. A run with only these (and e2e-rail's own `--e2e-rail-*` tags) can verify.
+//   everything else filters (R44, refined by v0.2.0 A): a test filter (`-g`, `-G`, `--grep`, `--grep-invert`,
+//                   `--project`, a positional file filter), an option that skips or relaxes a check
+//                   (`--ignore-snapshots`, `-u`, `--retries`, `--timeout`, `--no-deps`, `--pass-with-no-tests`, …), and
+//                   any option e2e-rail does not know, today's or a future one. The run is recorded `filtered`: it
+//                   never verifies and never moves last-green. Never narrow by guessing: unknown is not neutral.
 const NOT_FINGERPRINTED = "it is not supported: the app's playwrightConfig is the one fingerprinted (set it in e2e-rail.config.mjs)";
 const REJECTED = new Map([
   ['--test-list', 'use the testList parameter (CLI: --test-list <file>)'],
   ['--test-list-invert', 'it is not supported'],
   ['--shard', 'use the shard parameter (CLI: --shard i/n)'],
   ['--last-failed', 'use the lastFailed parameter (CLI: --last-failed)'],
+  ['--last-failed-file', "it is not supported (e2e-rail's --last-failed reruns the failures Playwright recorded last)"],
   ['--list', 'it is not supported (it lists tests without running them)'],
   ['--only-changed', 'it is not supported (`e2e-rail select` picks the specs a change reaches)'],
   ['-c', NOT_FINGERPRINTED],
   ['--config', NOT_FINGERPRINTED],
   ['--reporter', 'it is not supported: e2e-rail sets the reporters itself (blob: the blob parameter, CLI --blob)'],
   ['--output', 'it is not supported'],
+  ['--ui', 'it is not supported (an interactive UI session is not a recorded run)'],
+  ['--debug', 'it is not supported (a debugging session is not a recorded run)'],
+  ['--run-agents', 'it is not supported (agents writing test code is not a recorded run)'],
 ]);
-// `--opt`, `--opt value`, `--opt=value`; and `-cvalue`, which commander reads as `-c value`.
-const rejectedOption = (arg) => (/^-c[^-]/.test(arg) ? '-c' : [...REJECTED.keys()].find((opt) => arg === opt || arg.startsWith(`${opt}=`)) ?? null);
+
+// Playwright's own options (`playwright test --help`) by what they take: a value (commander takes the next argument,
+// whatever it looks like, or `--opt=value` / `-ovalue`), an optional value (the next argument only when it is no
+// option), several values (`--project a b`). Short letters map to their long option. Anything else is a flag.
+const TAKES_VALUE = new Set([
+  '--add-reporter', '--browser', '--config', '--grep', '--grep-invert', '--global-timeout', '--workers', '--last-failed-file',
+  '--max-failures', '--output', '--project', '--repeat-each', '--reporter', '--retries', '--run-agents', '--shard', '--test-list',
+  '--test-list-invert', '--timeout', '--trace', '--tsconfig', '--ui-host', '--ui-port', '--update-source-method',
+]);
+const OPTIONAL_VALUE = new Set(['--debug', '--only-changed', '--update-snapshots']);
+const VARIADIC = new Set(['--project']);
+const SHORT = new Map([['c', '--config'], ['g', '--grep'], ['G', '--grep-invert'], ['j', '--workers'], ['u', '--update-snapshots'], ['x', '-x'], ['h', '--help']]);
+const takesValue = (long) => TAKES_VALUE.has(long) || OPTIONAL_VALUE.has(long);
+
+// The allow-list: option → does this value (undefined: none given) keep the run a verification?
+const flag = (v) => v === undefined;
+const atLeast = (min) => (v) => /^\d+$/.test(v ?? '') && Number(v) >= min;
+const TRACE_MODES = new Set(['on', 'off', 'on-first-retry', 'on-all-retries', 'retain-on-failure', 'retain-on-first-failure', 'retain-on-failure-and-retries']);
+const NEUTRAL = new Map([
+  ['--headed', flag], ['--quiet', flag], ['--fail-on-flaky-tests', flag], ['--forbid-only', flag], ['--fully-parallel', flag], ['-x', flag],
+  ['--trace', (v) => TRACE_MODES.has(v)],
+  ['--repeat-each', atLeast(1)],
+  ['--max-failures', atLeast(0)],
+  ['--workers', (v) => /^\d+%?$/.test(v ?? '') && Number.parseInt(v, 10) >= 1], // -j, --workers: a count or a share of the cores
+]);
+
+// The refused option `arg` names, or null: `--opt`, `--opt=value`, and a short cluster as commander reads it (`-c`,
+// `-cvalue`, `-xc` = `-x -c`; in `-Gc` the c is -G's value). Every argument is checked, values of other options too:
+// refusing is the safe side.
+function rejectedOption(arg) {
+  if (/^-[^-]/.test(arg)) {
+    for (const ch of arg.slice(1)) {
+      if (ch === 'c') return '-c';
+      const long = SHORT.get(ch);
+      if (!long || takesValue(long)) return null; // an unknown letter, or one whose value is the rest
+    }
+    return null;
+  }
+  return [...REJECTED.keys()].find((opt) => opt.startsWith('--') && (arg === opt || arg.startsWith(`${opt}=`))) ?? null;
+}
 
 export function assertPassthrough(passthrough) {
   for (const arg of passthrough) {
@@ -41,31 +91,47 @@ export function assertPassthrough(passthrough) {
   }
 }
 
-// Playwright options whose next argument is their value (not a positional file filter), and the ones that narrow
-// which tests run.
-const VALUE_OPTIONS = new Set([
-  '-g', '--grep', '--grep-invert', '--project', '--retries', '--repeat-each', '--timeout', '--trace', '-j', '--workers',
-  '--max-failures', '--global-timeout', '--browser', '--tsconfig', '--ui-host', '--ui-port', '--update-source-method',
-]);
-const FILTER_OPTION = /^(--grep|--grep-invert|--project)(=|$)|^-g/;
-const SNAPSHOT_MODE = /^(all|changed|missing|none)$/;
-
-// R44: did this run narrow the suite beyond what its kind says? `project`, a test filter option in `passthrough`, or a
-// positional argument (a file or file:line filter). e2e-rail's own `--e2e-rail-*` tags never count. An unknown option
-// followed by a bare word reads as filtered: the safe side, since a filtered run never moves last-green. An option
-// runTests refuses (R46) counts as filtered too, for callers that ask without running.
-export function isFiltered({ project = null, passthrough = [] } = {}) {
-  if (project) return true;
-  const args = passthrough.filter((a) => !a.startsWith('--e2e-rail-'));
+// What in this run narrows or relaxes it, as typed (`--grep`, `-G`, `--ignore-snapshots`, `e2e/x.spec.ts`), in order
+// and once each: e2e-rail's own `project` first, then every passthrough argument outside the allow-list, refused ones
+// included (for callers that ask without running). [] = the run is what its kind says.
+export function filteredBy({ project = null, passthrough = [] } = {}) {
+  const out = project ? ['--project'] : [];
+  const add = (what) => { if (!out.includes(what)) out.push(what); };
+  const args = passthrough.filter((a) => !a.startsWith('--e2e-rail-')); // e2e-rail's own tags: recorded, not passed
+  // One occurrence of option `long`, spelled `typed`, at args[i] with its inline value (`--opt=v`, `-ov`) if any: takes
+  // its value(s) the way commander does, adds it unless the allow-list takes it, returns the last index it used.
+  const option = (typed, long, inline, i) => {
+    let value = inline;
+    let last = i;
+    if (value === undefined && i + 1 < args.length) {
+      if (TAKES_VALUE.has(long) || (OPTIONAL_VALUE.has(long) && !args[i + 1].startsWith('-'))) value = args[(last = i + 1)];
+    }
+    if (VARIADIC.has(long)) while (last + 1 < args.length && !args[last + 1].startsWith('-')) last += 1;
+    if (!NEUTRAL.get(long)?.(value)) add(typed);
+    return last;
+  };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === '--') return args.length > i + 1;
-    if (rejectedOption(a) || FILTER_OPTION.test(a) || !a.startsWith('-')) return true;
-    if (VALUE_OPTIONS.has(a)) i += 1;
-    else if ((a === '-u' || a === '--update-snapshots') && SNAPSHOT_MODE.test(args[i + 1] ?? '')) i += 1;
+    if (a === '--') { args.slice(i + 1).forEach(add); break; } // the rest are file filters, whatever they look like
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      const name = eq < 0 ? a : a.slice(0, eq);
+      i = option(name, name, eq < 0 ? undefined : a.slice(eq + 1), i);
+    } else if (/^-[^-]/.test(a)) {
+      // a short cluster: flags until a letter that takes a value, which takes the rest of the argument (or the next)
+      for (let k = 1; k < a.length; k++) {
+        const long = SHORT.get(a[k]);
+        if (!long) { add(`-${a[k]}`); break; }
+        if (takesValue(long)) { i = option(`-${a[k]}`, long, a.slice(k + 1) || undefined, i); break; }
+        option(`-${a[k]}`, long, undefined, i);
+      }
+    } else add(a); // a positional argument filters test files
   }
-  return false;
+  return out;
 }
+
+// R44: did this run narrow or relax the suite beyond what its kind says? See filteredBy.
+export const isFiltered = (opts = {}) => filteredBy(opts).length > 0;
 
 export function kindOf({ lastFailed, shard, testList }) {
   if (lastFailed) return 'rerun';
@@ -131,8 +197,8 @@ const LIST_FAILURE = { file: null, title: null, project: null };
 // the wrong base, a renamed or deleted spec, an empty file). Returns the failures that make such a run fail: one when
 // the report holds no test at all, else one per list line that no reported test matches (a partial loss is no pass
 // either). `listText` null = the list could not be read back, so nothing can show that it ran. `perLine: false` skips
-// the line check for a run that narrows on purpose (`--project`, `--grep`, `--last-failed`): there a line may match
-// nothing by design, and such a run never verifies anyway.
+// the line check for a run that is `filtered` or a `--last-failed` rerun: there a line may match nothing by design,
+// and such a run never verifies anyway.
 export function testListShortfall(listText, report, appDirAbs, { perLine = true } = {}) {
   const tests = flattenSuites(report ?? { suites: [] }, appDirAbs);
   if (!tests.length) return [{ ...LIST_FAILURE, error: 'test list matched no tests' }];

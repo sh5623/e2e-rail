@@ -5,7 +5,7 @@
 // (npm run test:contract). The fixture's specs use no browser fixtures, so no browser download is needed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,17 +41,22 @@ async function withContractApp(fn) {
   }
 }
 
-// Writes `.e2e-rail/list.txt` (no lines: an empty file) and runs `runTests({ testList, workers: 1, selectionId })`
-// against the real Playwright in a child process. Returns { rc, entry }; the child's own output is only shown when the
-// driver itself fails.
+// Runs `runTests({ workers: 1, ...options })` against the real Playwright in a child process. Returns { rc, entry };
+// the child's own output is only shown when the driver itself fails.
+function drive(root, options) {
+  mkdirSync(path.join(root, '.e2e-rail'), { recursive: true });
+  const resultFile = path.join(root, '.e2e-rail/driver-result.json');
+  const r = execCapture(process.execPath, [driver, root, resultFile, JSON.stringify({ workers: 1, ...options })], { cwd: root });
+  assert.equal(r.status, 0, `run-driver failed (rc ${r.status}):\n${r.stderr}\n${r.stdout}`);
+  return JSON.parse(readFileSync(resultFile, 'utf8'));
+}
+
+// Writes `.e2e-rail/list.txt` (no lines: an empty file) and runs it as `runTests({ testList, workers: 1, selectionId })`.
 function runList(root, lines, selectionId) {
   mkdirSync(path.join(root, '.e2e-rail'), { recursive: true });
   const list = path.join(root, '.e2e-rail/list.txt');
   writeFileSync(list, lines.length ? `${lines.join('\n')}\n` : '');
-  const resultFile = path.join(root, '.e2e-rail/driver-result.json');
-  const r = execCapture(process.execPath, [driver, root, resultFile, list, ...(selectionId ? [selectionId] : [])], { cwd: root });
-  assert.equal(r.status, 0, `run-driver failed (rc ${r.status}):\n${r.stderr}\n${r.stdout}`);
-  return JSON.parse(readFileSync(resultFile, 'utf8'));
+  return drive(root, { testList: list, selectionId: selectionId ?? null });
 }
 const reportOf = (root, entry) => JSON.parse(readFileSync(path.join(root, '.e2e-rail/reports', `${entry.id}.json`), 'utf8'));
 const rows = (entry) => entry.specs.map((s) => [s.file, s.project, s.status]);
@@ -123,5 +128,33 @@ test('real playwright: a list that matches nothing (wrong base, empty file) or l
     assert.deepEqual(flattenSuites(report, root).map((t) => t.titlePath), [['group', 'b runs']]);
     // I4: a passing list run made from no selection does not satisfy `--require selected`
     assert.equal(verify({ config, app, require: 'selected' }).status, 'insufficient');
+  });
+});
+
+test('real playwright: a full run that passes only because -G left a failing test out or --ignore-snapshots skipped a failing snapshot is filtered and never verifies', { skip }, async () => {
+  await withContractApp(async ({ root, config, app }) => {
+    // committed, so the tree is clean: what keeps last-green in place below is the filter alone
+    writeFileSync(path.join(root, 'e2e/c.spec.ts'), "import { test, expect } from '@playwright/test';\ntest('c regression', () => { expect(1).toBe(2); });\n");
+    writeFileSync(path.join(root, 'e2e/d.spec.ts'), "import { test, expect } from '@playwright/test';\ntest('d snapshot', () => { expect('actual').toMatchSnapshot('value.txt'); });\n");
+    mkdirSync(path.join(root, 'e2e/d.spec.ts-snapshots'));
+    writeFileSync(path.join(root, `e2e/d.spec.ts-snapshots/value-chromium-${process.platform}.txt`), 'expected');
+    const git = (...args) => assert.equal(execCapture('git', args, { cwd: root }).status, 0, args.join(' '));
+    git('add', '--', 'e2e');
+    git('commit', '-qm', 'c and d fail');
+
+    const plain = drive(root, {});
+    assert.equal(plain.rc, 1);
+    assert.deepEqual(plain.entry.failures.map((f) => [f.file, f.title]).sort(), [['e2e/c.spec.ts', 'c regression'], ['e2e/d.spec.ts', 'd snapshot']]);
+    for (const passthrough of [['-Gc regression', '--ignore-snapshots'], ['--ignore-snapshots', '-G', 'c regression']]) {
+      const { rc, entry } = drive(root, { passthrough });
+      assert.equal(rc, 0, passthrough.join(' '));
+      assert.equal(entry.kind, 'full');
+      assert.equal(entry.filtered, true, passthrough.join(' '));
+      assert.ok(!entry.specs.some((s) => s.file === 'e2e/c.spec.ts'), '-G left c out');
+      assert.deepEqual(entry.specs.find((s) => s.file === 'e2e/d.spec.ts')?.status, 'passed', 'the snapshot was not checked');
+      assert.equal(verify({ config, app }).status, 'stale');
+      assert.equal(verify({ config, app }).lastVerifiedHead, null);
+      assert.equal(existsSync(path.join(root, '.e2e-rail/last-green.web')), false);
+    }
   });
 });

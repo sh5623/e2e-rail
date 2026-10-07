@@ -4,10 +4,10 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { runTests, parsePlaywrightReport, parseTestList, testListShortfall, kindOf, isFiltered } from '../src/run.mjs';
+import { runTests, parsePlaywrightReport, parseTestList, testListShortfall, kindOf, isFiltered, filteredBy, assertPassthrough } from '../src/run.mjs';
 import { verify } from '../src/verify.mjs';
 import { acquire, lockDir, lockStatus } from '../src/lock.mjs';
-import { readRuns } from '../src/ledger.mjs';
+import { readLastGreen, readRuns } from '../src/ledger.mjs';
 import { promote, statePath } from '../src/shadow.mjs';
 import { planShards } from '../src/shard.mjs';
 import { loadConfig, findApp } from '../src/config.mjs';
@@ -275,17 +275,56 @@ fs.writeFileSync(e.PLAYWRIGHT_JSON_OUTPUT_FILE, fs.readFileSync('stub/report-pas
   });
 });
 
-test('isFiltered (R44): project, test-filter options and positional filters; option values and e2e-rail tags are not', () => {
-  const f = (passthrough, project) => isFiltered({ project, passthrough });
-  for (const pt of [['--grep', 'x'], ['--grep=x'], ['--grep=foo'], ['-g', 'x'], ['-gx'], ['--grep-invert', 'x'], ['--project', 'chromium'], ['--project=chromium'],
-    ['--only-changed'], ['--only-changed', 'main'], ['--last-failed'], ['--shard=2/4'], ['--test-list', 'x'], ['--list'], ['e2e/cart.spec.ts'], ['e2e/cart.spec.ts:12'], ['--', 'cart'], ['--trace', 'on', 'cart']]) {
-    assert.equal(f(pt), true, pt.join(' '));
+// v0.2.0 (A): an allow-list. Only these leave a run a verification; every other passthrough argument (a test filter, an
+// option that relaxes a check, an option e2e-rail does not know) makes it `filtered`; a few are refused outright.
+const NEUTRAL_PASSTHROUGH = [
+  [], ['--'], ['--headed'], ['--quiet'], ['--trace', 'on'], ['--trace=retain-on-failure'], ['--repeat-each', '3'], ['--repeat-each=2'],
+  ['--fail-on-flaky-tests'], ['--forbid-only'], ['--fully-parallel'], ['--max-failures', '2'], ['--max-failures=1'], ['-x'],
+  ['-j', '4'], ['-j4'], ['-j50%'], ['--workers', '2'], ['--workers=50%'], ['-xj2'],
+  ['--e2e-rail-purpose=measure'], ['--', '--e2e-rail-purpose=measure'], ['--headed', '--trace', 'on', '-x', '-j', '2', '--repeat-each', '2', '--quiet'],
+];
+// [passthrough, what the `filtered:` line names]
+const FILTERED_PASSTHROUGH = [
+  // test filters
+  [['-g', 'x'], ['-g']], [['-gx'], ['-g']], [['--grep', 'x'], ['--grep']], [['--grep=x'], ['--grep']],
+  [['-G', 'x'], ['-G']], [['-Gfoo'], ['-G']], [['-xGfoo'], ['-G']], [['--grep-invert', 'x'], ['--grep-invert']], [['--grep-invert=x'], ['--grep-invert']],
+  [['--project', 'chromium'], ['--project']], [['--project=chromium'], ['--project']], [['--project', 'a', 'b'], ['--project']],
+  [['e2e/cart.spec.ts'], ['e2e/cart.spec.ts']], [['e2e/cart.spec.ts:12'], ['e2e/cart.spec.ts:12']], [['--', 'cart'], ['cart']],
+  [['--', '-x'], ['-x']], [['--trace', 'on', 'cart'], ['cart']],
+  // options that skip or relax a check
+  [['--ignore-snapshots'], ['--ignore-snapshots']], [['-u'], ['-u']], [['-u', 'all'], ['-u']], [['-uall'], ['-u']], [['-xu'], ['-u']],
+  [['--update-snapshots'], ['--update-snapshots']], [['--update-snapshots', 'changed'], ['--update-snapshots']], [['--update-snapshots=all'], ['--update-snapshots']],
+  [['--update-source-method', 'overwrite'], ['--update-source-method']], [['--update-source-method=3way'], ['--update-source-method']],
+  [['--no-deps'], ['--no-deps']], [['--pass-with-no-tests'], ['--pass-with-no-tests']],
+  [['--retries', '2'], ['--retries']], [['--retries=2'], ['--retries']], [['--timeout', '1000'], ['--timeout']], [['--timeout=0'], ['--timeout']],
+  [['--global-timeout', '1'], ['--global-timeout']], [['--global-timeout=1'], ['--global-timeout']],
+  [['--tsconfig', 'tsconfig.e2e.json'], ['--tsconfig']], [['--tsconfig=x.json'], ['--tsconfig']],
+  [['--browser', 'webkit'], ['--browser']], [['--browser=webkit'], ['--browser']], [['--add-reporter', 'dot'], ['--add-reporter']], [['--add-reporter=dot'], ['--add-reporter']],
+  // unknown or future options, help, a neutral option with a value it does not take or a value outside its range
+  [['--future-option'], ['--future-option']], [['--future-option=v'], ['--future-option']], [['-z'], ['-z']], [['-xz'], ['-z']],
+  [['--help'], ['--help']], [['-h'], ['-h']], [['--ui-host', 'localhost'], ['--ui-host']], [['--ui-port=0'], ['--ui-port']],
+  [['--headed=true'], ['--headed']], [['--trace', 'bogus'], ['--trace']], [['--trace'], ['--trace']], [['--repeat-each', '0'], ['--repeat-each']],
+  [['--workers', '0'], ['--workers']], [['-j', 'max'], ['-j']], [['--max-failures=-1'], ['--max-failures']],
+  [['--trace', 'on', '--ignore-snapshots', '-Gb', 'e2e/a.spec.ts'], ['--ignore-snapshots', '-G', 'e2e/a.spec.ts']],
+];
+
+test('passthrough (A): neutral only by allow-list; filters, relaxed checks and unknown options make the run filtered, named in order', () => {
+  for (const pt of NEUTRAL_PASSTHROUGH) {
+    assert.equal(isFiltered({ passthrough: pt }), false, pt.join(' ') || '(none)');
+    assert.deepEqual(filteredBy({ passthrough: pt }), [], pt.join(' ') || '(none)');
+    assert.doesNotThrow(() => assertPassthrough(pt), pt.join(' '));
   }
-  for (const pt of [[], ['--trace', 'on'], ['--retries', '2', '--timeout=1000'], ['-j', '2'], ['--headed', '-x'], ['-u', 'all'], ['-u'],
-    ['--', '--e2e-rail-purpose=measure'], ['--e2e-rail-purpose=measure'], ['--']]) {
-    assert.equal(f(pt), false, pt.join(' ') || '(none)');
+  for (const [pt, names] of FILTERED_PASSTHROUGH) {
+    assert.equal(isFiltered({ passthrough: pt }), true, pt.join(' '));
+    assert.deepEqual(filteredBy({ passthrough: pt }), names, pt.join(' '));
+    assert.doesNotThrow(() => assertPassthrough(pt), pt.join(' '));
   }
-  assert.equal(f([], 'chromium'), true);
+  // e2e-rail's own --project flag, and an option runTests refuses (for callers that ask without running)
+  assert.equal(isFiltered({ project: 'chromium' }), true);
+  assert.deepEqual(filteredBy({ project: 'chromium', passthrough: ['--retries', '1'] }), ['--project', '--retries']);
+  for (const pt of [['--only-changed'], ['--last-failed'], ['--shard=2/4'], ['--test-list', 'x'], ['--list'], ['--ui'], ['-xc', 'other.config.ts']]) {
+    assert.equal(isFiltered({ passthrough: pt }), true, pt.join(' '));
+  }
   assert.equal(isFiltered({}), false);
 });
 
@@ -307,6 +346,27 @@ test('a --grep full run is recorded filtered and leaves last-green alone; a plai
   });
 });
 
+test('A (audit repros): a pass that skipped snapshot checks or left a failing test out with -G is filtered: no verification, no last-green', async () => {
+  await withRepo(async ({ root, config, app, argvFile }) => {
+    // the code fails in full (a snapshot regression, a failing test B) ...
+    process.env.STUB_PW_RC = '1'; process.env.STUB_PW_REPORT = path.join(root, 'stub/report-fail.json');
+    assert.equal((await runTests({ config, app, workers: 1, lock: false })).rc, 1);
+    delete process.env.STUB_PW_RC; delete process.env.STUB_PW_REPORT;
+    // ... and passes once Playwright ignores the snapshots or skips B
+    for (const passthrough of [['--ignore-snapshots'], ['-GB regression'], ['-G', 'B regression'], ['--grep-invert=B'], ['-u'], ['--retries', '3'], ['--future-flag']]) {
+      const { rc, entry } = await runTests({ config, app, workers: 1, lock: false, passthrough });
+      assert.equal(rc, 0, passthrough.join(' '));
+      assert.equal(entry.kind, 'full');
+      assert.equal(entry.filtered, true, passthrough.join(' '));
+      assert.deepEqual(readJson(argvFile).slice(-passthrough.length), passthrough, 'passed on to Playwright as given');
+      const v = verify({ config, app });
+      assert.equal(v.status, 'stale', passthrough.join(' '));
+      assert.equal(v.lastVerifiedHead, null, 'not even a baseline');
+      assert.equal(readLastGreen(config, 'web'), null, passthrough.join(' '));
+    }
+  });
+});
+
 const REJECTED = {
   '--test-list': /use the testList parameter \(CLI: --test-list <file>\)/,
   '--test-list-invert': /it is not supported/,
@@ -318,6 +378,11 @@ const REJECTED = {
   '--config': /not supported: the app's playwrightConfig is the one fingerprinted/,
   '--reporter': /not supported: e2e-rail sets the reporters itself/,
   '--output': /it is not supported/,
+  // A: interactive, not a recorded run, or a first-class flag's business
+  '--ui': /not supported \(an interactive UI session is not a recorded run\)/,
+  '--debug': /not supported \(a debugging session is not a recorded run\)/,
+  '--run-agents': /not supported \(agents writing test code is not a recorded run\)/,
+  '--last-failed-file': /not supported \(e2e-rail's --last-failed reruns the failures Playwright recorded last\)/,
 };
 
 test('R46: passthrough options that change what runs are refused, before the lock, the build and the ledger', async () => {
@@ -326,10 +391,12 @@ test('R46: passthrough options that change what runs are refused, before the loc
     const held = await acquire({ dir: lockDir(config), cls: 'heavy', pollMs: 20 });
     const refusedFast = (p) => Promise.race([p, sleep(5000).then(() => { throw new Error('not refused before taking the lock'); })]);
     try {
-      const cases = Object.keys(REJECTED).flatMap((opt) => [[opt], [opt, 'value'], [`${opt}=value`]]);
-      cases.push(['-cother.config.ts'], ['--grep', 'x', '--shard', '1/2']);
-      for (const passthrough of cases) {
-        const opt = passthrough.find((a) => a.startsWith('-') && a !== '--grep').replace(/=.*$/, '').replace(/^-c.+$/, '-c');
+      // [passthrough, the option the refusal names]
+      const cases = Object.keys(REJECTED).flatMap((opt) => [[[opt], opt], [[opt, 'value'], opt], [[`${opt}=value`], opt]]);
+      // short clusters as commander reads them: flags until one that takes a value, which takes the rest
+      cases.push([['-cother.config.ts'], '-c'], [['-xc', 'other.config.ts'], '-c'], [['-xcother.config.ts'], '-c'], [['-c'], '-c']);
+      cases.push([['--grep', 'x', '--shard', '1/2'], '--shard'], [['--headed', '--ui'], '--ui'], [['-x', '--debug=cli'], '--debug']);
+      for (const [passthrough, opt] of cases) {
         await assert.rejects(refusedFast(runTests({ config, app, mode: 'preview', passthrough })), (e) => {
           assert.ok(e.message.startsWith(`e2e-rail: ${opt} cannot be passed through to Playwright`), `${passthrough.join(' ')} → ${e.message}`);
           assert.match(e.message, REJECTED[opt]);

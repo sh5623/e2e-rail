@@ -141,14 +141,20 @@ run does not count. A rerun never counts. Preview mode rebuilds a missing or sta
 
 Global: `--version`, `--help`, `<command> --help`. Every error is one `e2e-rail: <message>` line on stderr: exit 2 for
 bad usage, 1 for anything else. Run-shaping options are first-class flags; after `--` the CLI refuses `--shard`,
-`--test-list`, `--test-list-invert`, `--last-failed`, `--list`, `--only-changed`, `--reporter`, `--output`, `-c` and
-`--config` before anything runs. A run narrowed by `--project`, a `-- --grep` or a file filter prints
-`kind full (filtered)` and never verifies or moves last-green. `run --selection` on a selection that writes no
+`--test-list`, `--test-list-invert`, `--last-failed`, `--last-failed-file`, `--list`, `--only-changed`, `--reporter`,
+`--output`, `-c`, `--config`, `--ui`, `--debug` and `--run-agents` before anything runs. After `--` only `--headed`,
+`--quiet`, `--trace <mode>`, `--repeat-each <n>`, `--fail-on-flaky-tests`, `--forbid-only`, `--fully-parallel`,
+`--max-failures <n>`, `-x` and `-j`/`--workers <n>` leave a run what its kind says. Anything else there — a test
+filter (`-g`, `-G`, `--grep`, `--grep-invert`, `--project`, a file), an option that skips or relaxes a check
+(`--ignore-snapshots`, `-u`, `--retries`, `--timeout`, `--no-deps`, `--pass-with-no-tests`, …) or an option e2e-rail
+does not know — makes the run filtered, as `--project` does: it prints `kind full (filtered)` and
+`filtered: <options> narrow or relax the run; not a verification`, and never verifies or moves last-green.
+`run --selection` on a selection that writes no
 test-list line for the app prints `<app>: nothing selected (partial, 0 specs)` (or `…, <n> spec(s), 0 test-list lines`
 when no selected spec has a Playwright project), runs nothing and records nothing. A run from a test list (a
 selection, a shard plan or `--test-list <file>`) whose list matches no test is recorded as a failure (rc 1,
 `failed: test list matched no tests`) although Playwright exits 0 there; so is one with a line that matches nothing
-(`failed: test list line matched no tests: <line>`), unless `--project` or `--grep` narrowed the run on purpose.
+(`failed: test list line matched no tests: <line>`), unless the run is filtered (narrowed on purpose).
 
 ## Shadow mode
 

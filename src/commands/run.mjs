@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { findApp, ledgerDir, loadConfig } from '../config.mjs';
-import { runTests } from '../run.mjs';
+import { filteredBy, runTests } from '../run.mjs';
 import { codeIdOf, readSelection, testListLines } from '../select.mjs';
 import { oneOf, parse, positiveInt, printUsage, UsageError } from './_args.mjs';
 
@@ -92,7 +92,8 @@ export default async function run(argv) {
     blob: Boolean(values.blob), lock: !values['no-lock'], build: !values['no-build'], selectionId, passthrough,
   });
   if (!entry) return rc; // refused or the preview build failed: runTests said why, no ledger line
-  // A narrowed run (--project, --grep, a file filter) is never a full pass, whatever its kind: both lines say so.
+  // A narrowed or relaxed run (--project, -- --grep/-G, a file filter, --ignore-snapshots, --retries, an option
+  // e2e-rail does not know) is never a verification, whatever its kind: both lines say so.
   const kind = `${entry.kind}${entry.filtered ? ' (filtered)' : ''}`;
   console.log(`run-id ${entry.id} · kind ${kind} · rc ${entry.rc} · ${entry.durationMs}ms · failures ${entry.failures.length}`);
   for (const f of entry.failures.slice(0, SHOWN_FAILURES)) {
@@ -103,7 +104,7 @@ export default async function run(argv) {
   if (entry.shard?.plan?.startsWith('adhoc:')) {
     console.log('note: this test list has no `shard plan` manifest beside it, so the run is recorded as an adhoc shard and never completes a full set (use the lists `e2e-rail shard plan` writes)');
   }
-  if (entry.filtered) console.log('filtered: --project/--grep run is not a full verification');
+  if (entry.filtered) console.log(`filtered: ${filteredBy({ project: values.project, passthrough }).join(' ')} narrow or relax the run; not a verification`);
   if (entry.shadowed) console.log('shadowed: a selected run does not replace a full run while trust=shadow');
   return rc;
 }

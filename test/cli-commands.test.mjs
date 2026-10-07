@@ -308,13 +308,28 @@ test('a filtered full run says so: --project and --grep print kind full (filtere
   assert.doesNotMatch(plain.stdout, /\(filtered\)/);
   assert.doesNotMatch(plain.stdout, /^filtered:/m);
   assert.equal(ledgerLines(root).at(-1).filtered, false);
-  for (const args of [['--project', 'chromium'], ['--', '--grep', 'cart']]) {
+  // A: whatever narrows or relaxes the run is named, e2e-rail's own --project included
+  const cases = [
+    [['--project', 'chromium'], '--project'], [['--', '--grep', 'cart'], '--grep'], [['--', '-Gcart'], '-G'],
+    [['--', '--ignore-snapshots'], '--ignore-snapshots'], [['--project', 'chromium', '--', '--retries', '2', 'e2e/cart.spec.ts'], '--project --retries e2e/cart.spec.ts'],
+  ];
+  for (const [args, names] of cases) {
     const r = run(['run', '--full', '--no-lock', ...args]);
     assert.equal(r.code, 0, `${args.join(' ')} → ${r.out}`);
     assert.match(r.stdout, /^run-id run-\S+ · kind full \(filtered\) · rc 0 · \d+ms · failures 0$/m, args.join(' '));
-    assert.match(r.stdout, /^filtered: --project\/--grep run is not a full verification$/m, args.join(' '));
+    assert.ok(r.stdout.split('\n').includes(`filtered: ${names} narrow or relax the run; not a verification`), `${args.join(' ')} → ${r.stdout}`);
     assert.equal(ledgerLines(root).at(-1).filtered, true);
+    assert.equal(run(['verify']).code, 0, 'the plain full run still verifies this code; the filtered ones changed nothing');
   }
+  // neutral options leave a full run a full run
+  const neutral = run(['run', '--full', '--no-lock', '--', '--headed', '-x', '--trace', 'on', '-j2']);
+  assert.equal(neutral.code, 0, neutral.out);
+  assert.match(neutral.stdout, /^run-id run-\S+ · kind full · rc 0 /m);
+  assert.doesNotMatch(neutral.stdout, /^filtered:/m);
+  // refused before anything runs
+  const ui = run(['run', '--full', '--no-lock', '--', '--ui']);
+  assert.equal(ui.code, 1, ui.out);
+  assert.match(ui.stderr, /^e2e-rail: --ui cannot be passed through to Playwright/m);
 }));
 
 test('run --test-list that matches nothing is a failure (R56): rc 1, a failed: line without a test, the rootDir hint', () => withRepo(({ root, run, at }) => {
