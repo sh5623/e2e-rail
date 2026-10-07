@@ -1,0 +1,90 @@
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync, writeSync } from 'node:fs';
+import path from 'node:path';
+import { ledgerDir } from './config.mjs';
+import { newId } from './util/id.mjs';
+
+// The ledger is append-only: one JSON line per Playwright run, never rewritten or deleted.
+export const ledgerPath = (config) => path.join(ledgerDir(config), 'ledger.jsonl');
+
+// Appends `entry` (spec §7 line) and returns what was written; `id` and `ts` are filled when absent.
+export function appendRun(config, entry) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new TypeError('appendRun: entry must be an object');
+  const { id, ts, ...rest } = entry;
+  const full = { id: id ?? newId('run'), ts: ts ?? new Date().toISOString(), ...rest };
+  mkdirSync(ledgerDir(config), { recursive: true });
+  // One O_APPEND fd: check the last byte, then write the (optional leading newline +) line in a single write.
+  // A crash can leave a partial last line with no newline; without the guard the next entry would be glued onto it
+  // and both would be lost as one corrupt line.
+  const fd = openSync(ledgerPath(config), 'a+');
+  try {
+    const { size } = fstatSync(fd);
+    let lead = '';
+    if (size > 0) {
+      const last = Buffer.alloc(1);
+      readSync(fd, last, 0, 1, size - 1);
+      if (last[0] !== 0x0a) lead = '\n';
+    }
+    writeSync(fd, `${lead}${JSON.stringify(full)}\n`);
+  } finally { closeSync(fd); }
+  return full;
+}
+
+// Entries in append order, optionally for one app. Lines that are not a JSON object are skipped with a warning
+// naming the (1-based) line number; blank lines are skipped silently.
+export function readRuns(config, { app } = {}) {
+  const abs = ledgerPath(config);
+  if (!existsSync(abs)) return [];
+  const out = [];
+  readFileSync(abs, 'utf8').split('\n').forEach((line, i) => {
+    if (!line.trim()) return;
+    let e = null;
+    try { e = JSON.parse(line); } catch { /* reported below */ }
+    if (!e || typeof e !== 'object' || Array.isArray(e)) { console.warn(`ledger: skipping corrupt line ${i + 1}`); return; }
+    if (!app || e.app === app) out.push(e);
+  });
+  return out;
+}
+
+const passed = (r) => r.rc === 0;
+const sameRun = (r, app, fpId) => r.app === app && r.fingerprint?.id === fpId;
+
+// Latest passing `kind: 'full'` run of this exact fingerprint. `selected`, `rerun`, `shard` and failed runs never count.
+export function latestFull(runs, app, fpId) {
+  return [...runs].reverse().find((r) => r.kind === 'full' && passed(r) && sameRun(r, app, fpId)) ?? null;
+}
+
+const validShard = (s) => Number.isInteger(s?.count) && s.count >= 1 && Number.isInteger(s.index) && s.index >= 1 && s.index <= s.count;
+
+// The passing shard runs (ordered by index 1..count) that together make up one full run of this fingerprint, or null.
+// Runs are grouped by `shard.count` and never mixed across counts: a 2-way and a 3-way attempt of the same fingerprint
+// are different splits. If several counts have a complete set, the one that finished most recently wins.
+export function completeShardSet(runs, app, fpId) {
+  const byCount = new Map(); // count -> Map(index -> { run, pos }) (later passing run of an index replaces earlier)
+  runs.forEach((r, pos) => {
+    if (r.kind !== 'shard' || !passed(r) || !sameRun(r, app, fpId) || !validShard(r.shard)) return;
+    const { index, count } = r.shard;
+    if (!byCount.has(count)) byCount.set(count, new Map());
+    byCount.get(count).set(index, { run: r, pos });
+  });
+  let best = null;
+  for (const [count, byIndex] of byCount) {
+    const members = [];
+    for (let i = 1; i <= count; i++) { if (!byIndex.has(i)) break; members.push(byIndex.get(i)); }
+    if (members.length !== count) continue;
+    const finished = Math.max(...members.map((m) => m.pos));
+    if (!best || finished > best.finished) best = { finished, set: members.map((m) => m.run) };
+  }
+  return best ? best.set : null;
+}
+
+// Marker of the last head that passed a full verification (`select --base` falls back to it). Overwritten in place;
+// it is not part of the append-only ledger.
+const lastGreenPath = (config, app) => path.join(ledgerDir(config), `last-green.${app}`);
+export function writeLastGreen(config, app, head) {
+  mkdirSync(ledgerDir(config), { recursive: true });
+  writeFileSync(lastGreenPath(config, app), `${head}\n`);
+}
+export function readLastGreen(config, app) {
+  const p = lastGreenPath(config, app);
+  return existsSync(p) ? readFileSync(p, 'utf8').trim() || null : null;
+}
