@@ -369,6 +369,31 @@ test('specIndexKey tracks spec content, support content, tsconfig and the config
   } finally { cleanup(); }
 });
 
+test('I6, M10: the listing runs in the dev run env; the key covers that env and the tsconfig extends chain', async () => {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  try {
+    const { config, app, ts } = await setup(root);
+    // the stub adds STUB_PW_LIST_PROJECT to every listed test: a config that picks its projects by env
+    app.run.env = { STUB_PW_LIST_PROJECT: 'from-run-env' };
+    app.run.modeEnv.preview = { STUB_PW_LIST_PROJECT: 'preview-only' };
+    const k0 = specIndexKey({ config, app });
+    const a = await loadOrBuildSpecIndex({ config, app, ts });
+    assert.deepEqual(a.specs['e2e/orders.spec.ts'].projects, ['chromium', 'from-run-env'], 'run.env + modeEnv.dev, not preview');
+    app.run.modeEnv.dev = { STUB_PW_LIST_PROJECT: 'dev-only' };
+    assert.notEqual(specIndexKey({ config, app }), k0, 'the env is part of the key');
+    const b = await loadOrBuildSpecIndex({ config, app, ts });
+    assert.deepEqual(b.specs['e2e/orders.spec.ts'].projects, ['chromium', 'dev-only'], 'rebuilt, not served from the cache');
+
+    // a `paths` edit in a file the tsconfig extends moves resolution too
+    const tsconfig = readFileSync(path.join(root, 'tsconfig.json'), 'utf8');
+    writeFileSync(path.join(root, 'tsconfig.base.json'), tsconfig);
+    writeFileSync(path.join(root, 'tsconfig.json'), '{ "extends": "./tsconfig.base.json" }\n');
+    const k1 = specIndexKey({ config, app });
+    writeFileSync(path.join(root, 'tsconfig.base.json'), tsconfig.replace('"./src/*"', '"./src/*", "./lib/*"'));
+    assert.notEqual(specIndexKey({ config, app }), k1, 'tsconfig extends chain');
+  } finally { cleanup(); }
+});
+
 test('loadOrBuildSpecIndex caches by content key and rebuilds after a spec edit', async () => {
   const { root, cleanup } = makeTempRepo('sample-app');
   try {

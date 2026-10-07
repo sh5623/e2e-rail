@@ -211,6 +211,20 @@ test('map --check: one verdict per app — narrowing possible, or why every src 
   assert.match(broken.stdout, /graph: \d+ files · missing 1 · opaque 0/);
   assert.match(broken.stdout, /missing: src\/lib\/broken\.ts → \.\/nope/);
   assert.match(broken.stdout, /verdict: every src change will run full: 1 internal import/);
+  assert.doesNotMatch(broken.stdout, /outside specDir/);
+
+  // M10: a test file Playwright lists outside specDir is indexed unmapped and never read: map --check says so
+  mkdirSync(at('other'));
+  writeFileSync(at('other/outside.spec.ts'), "import { test } from '@playwright/test';\ntest('x', async () => {});\n");
+  const list = JSON.parse(readFileSync(at('stub/list.json'), 'utf8'));
+  list.suites.push({ title: 'outside.spec.ts', file: '../other/outside.spec.ts', suites: [],
+    specs: [{ title: 'x', file: '../other/outside.spec.ts', tests: [{ projectName: 'chromium', status: 'skipped', results: [] }] }] });
+  writeFileSync(at('stub/list.json'), JSON.stringify(list));
+  writeFileSync(at('playwright.config.ts'), '// a second testDir\n', { flag: 'a' }); // what makes Playwright list it (and rebuilds the index)
+  const outside = run(['map', '--check']);
+  assert.equal(outside.code, 0, outside.out);
+  assert.match(outside.stdout, /^ {2}warning: 1 tests outside specDir — set specDir to Playwright rootDir `e2e`$/m);
+  assert.match(outside.stdout, /^ {4}outside: other\/outside\.spec\.ts$/m);
 }));
 
 test('select → run --selection → verify round trip with exit codes', () => withRepo(({ root, run, at }) => {
@@ -450,6 +464,14 @@ test('shard plan → each list run as its shard → merge reports complete; a li
   assert.equal(adhoc.code, 0, adhoc.out);
   assert.match(adhoc.stdout, /^note: .*adhoc/m);
   assert.match(ledgerLines(root).at(-1).shard.plan, /^adhoc:/);
+
+  // I6: a plan lists the tests in the env of the mode its shards run in, and says how to run them
+  const preview = run(['shard', 'plan', '--count', '2', '--mode', 'preview']);
+  assert.equal(preview.code, 0, preview.out);
+  assert.match(preview.stdout, /^plan plan-\S+ · app web · mode preview · 2 shard\(s\)/m);
+  assert.match(preview.stdout, /^run each: e2e-rail run --app web --test-list \.e2e-rail\/shards\/web\/<i>\.txt --shard <i>\/2 --mode preview$/m);
+  assert.equal(JSON.parse(readFileSync(at('.e2e-rail/shards/web/manifest.json'), 'utf8')).mode, 'preview');
+  assert.equal(run(['shard', 'plan', '--count', '2', '--mode', 'staging']).code, 2);
 }));
 
 test('measure slowest / retries / workers print tables from the ledger', () => withRepo(({ run, at }) => {

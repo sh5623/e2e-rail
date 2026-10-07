@@ -76,11 +76,13 @@ export function flattenSuites(report, appDirAbs) {
 //   rootDir: app-relative POSIX path of config.rootDir ('' when it is the app dir). `--test-list` lines are
 //            matched against path.relative(rootDir, file), so callers need it to write them.
 //   tests:   { [specRelToApp]: sorted project names }
-export function listTests(appDirAbs, configRel) {
+// `env` is the run environment of the mode the tests will run in (config runEnv): a Playwright config may choose its
+// projects or testDir by env, so a listing without it can name other tests than the run will see.
+export function listTests(appDirAbs, configRel, env = {}) {
   const r = execCapture('node', [playwrightCli(appDirAbs), 'test', '--list', '--reporter=json', '--config', configRel], {
     cwd: appDirAbs,
     // A CI-wide JSON output path would divert the listing from stdout to a file.
-    env: { PLAYWRIGHT_JSON_OUTPUT_FILE: undefined, PLAYWRIGHT_JSON_OUTPUT_NAME: undefined },
+    env: { ...env, PLAYWRIGHT_JSON_OUTPUT_FILE: undefined, PLAYWRIGHT_JSON_OUTPUT_NAME: undefined },
   });
   if (r.status !== 0) throw new Error(`playwright --list failed:\n${r.stderr || r.stdout}`);
   let report;

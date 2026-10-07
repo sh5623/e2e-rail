@@ -1,11 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { appDir, ledgerDir } from './config.mjs';
+import { appDir, ledgerDir, runEnv } from './config.mjs';
 import { hashFiles, sha256 } from './util/hash.mjs';
 import { walk } from './util/glob.mjs';
 import { parseFile, readCompilerOptions } from './util/ts.mjs';
 import { listTests, toAppRel } from './util/playwright.mjs';
-import { isInternalMiss, pathsMatcher } from './graph.mjs';
+import { isInternalMiss, pathsMatcher, tsconfigChain } from './graph.mjs';
 
 // Spec index (spec §4): for every Playwright spec, the routes it visits, the API globs it intercepts, the app
 // source files it imports and the support helpers it uses. The selector trusts this file, so everything here errs
@@ -283,16 +283,22 @@ export function indexSpec({ ts, dirAbs, app, specRel, tests = {}, options }) {
   return makeIndexer({ ts, dirAbs, app, options: opts })(specRel, tests[specRel] ?? []);
 }
 
-// Everything the index is derived from: spec/support/tsconfig/playwright-config content plus the config values
+// The listing runs in the dev environment (I6): run.env plus modeEnv.dev.
+const indexEnv = (app) => runEnv(app, 'dev');
+
+// Everything the index is derived from: spec/support/playwright-config content, the tsconfig and every file it
+// `extends` (a `paths` edit anywhere in the chain moves resolution), the env the listing runs in, plus the config values
 // that shape resolution (basePath, directories).
 export function specIndexKey({ config, app }) {
   const dirAbs = appDir(config, app);
-  const files = new Set([app.playwrightConfig, app.tsconfig]);
+  const files = new Set([app.playwrightConfig]);
   for (const d of new Set([app.specDir, ...app.supportDirs])) {
     for (const r of walk(path.join(dirAbs, d), { exts: CODE_EXTS })) files.add(path.posix.join(d, r));
   }
   const content = hashFiles(dirAbs, [...files].filter((f) => existsSync(path.join(dirAbs, f))));
-  return sha256(JSON.stringify([INDEX_VERSION, app.adapter.basePath, app.specDir, app.supportDirs, app.srcDir, content]));
+  const tsconfigs = tsconfigChain(dirAbs, app.tsconfig).map((abs) => `${toAppRel(dirAbs, abs)}:${sha256(readFileSync(abs))}`);
+  const env = Object.entries(indexEnv(app)).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return sha256(JSON.stringify([INDEX_VERSION, app.adapter.basePath, app.specDir, app.supportDirs, app.srcDir, content, tsconfigs, env]));
 }
 
 // `tests` is listTests()'s `{ rootDir, tests }`. The specs are exactly the test files Playwright lists, whatever their
@@ -322,7 +328,7 @@ export async function loadOrBuildSpecIndex({ config, app, ts }) {
   const cacheAbs = path.join(ledgerDir(config), `map.${app.name}.json`);
   const cached = readCache(cacheAbs);
   if (cached?.key === specIndexKey({ config, app })) return cached;
-  const idx = buildSpecIndex({ config, app, ts, tests: listTests(appDir(config, app), app.playwrightConfig) });
+  const idx = buildSpecIndex({ config, app, ts, tests: listTests(appDir(config, app), app.playwrightConfig, indexEnv(app)) });
   mkdirSync(path.dirname(cacheAbs), { recursive: true });
   writeFileSync(cacheAbs, `${JSON.stringify(idx, null, 2)}\n`);
   return idx;

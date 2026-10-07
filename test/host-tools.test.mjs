@@ -78,6 +78,9 @@ test('playwright stub is found from the app dir and lists tests per project', ()
   assert.deepEqual(tests['e2e/cart.spec.ts'], ['chromium', 'mobile-chrome']);
   assert.deepEqual(tests['e2e/orders.spec.ts'], ['chromium']);
   assert.deepEqual(Object.keys(tests).sort(), ['e2e/cart.spec.ts', 'e2e/order-detail.spec.ts', 'e2e/orders.spec.ts', 'e2e/smoke.spec.ts']);
+  // I6: the listing runs in the env it is given (a config may pick projects by env); the JSON output path stays unset
+  const withEnv = listTests(app, 'playwright.config.ts', { STUB_PW_LIST_PROJECT: 'by-env', PLAYWRIGHT_JSON_OUTPUT_FILE: '/nowhere.json' });
+  assert.deepEqual(withEnv.tests['e2e/orders.spec.ts'], ['by-env', 'chromium']);
 });
 
 test('playwrightCli explains a missing @playwright/test', () => {

@@ -61,6 +61,15 @@ async function mapApp(config, app, check) {
   console.log(`app ${app.name}: ${specs.length} specs indexed · ${entries.length} route entries · adapter unresolved ${unresolved.length}`);
   for (const u of unresolved) console.log(`  ! ${u}`);
   if (!check) return;
+  // Test files Playwright lists outside specDir are indexed unmapped (never read), and the index cache does not see them
+  // change: specDir should be where Playwright looks.
+  const specDir = path.posix.normalize(app.specDir).replace(/\/+$/, '');
+  const outside = specs.map(([f]) => f).filter((f) => specDir !== '.' && !f.startsWith(`${specDir}/`));
+  if (outside.length) {
+    console.log(`  warning: ${outside.length} tests outside specDir — set specDir to Playwright rootDir \`${index.rootDir || '.'}\``);
+    for (const f of outside.slice(0, 5)) console.log(`    outside: ${f}`);
+    if (outside.length > 5) console.log(`    … and ${outside.length - 5} more`);
+  }
   const graph = await loadOrBuildGraph({ config, app, ts });
   const main = findMain(config, app);
   console.log(`  graph: ${graph.files.length} files · missing ${graph.missing.length} · opaque ${graph.opaque.length} · main ${main ?? 'none'}`);

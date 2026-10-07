@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { constants } from 'node:os';
 import path from 'node:path';
-import { appDir, ledgerDir } from './config.mjs';
+import { appDir, ledgerDir, runEnv } from './config.mjs';
 import { computeFingerprint, distStale } from './fingerprint.mjs';
 import { appendRun, writeLastGreen } from './ledger.mjs';
 import { acquire, describeHolders, lockDir } from './lock.mjs';
@@ -234,10 +234,7 @@ export async function runTests({
   args.push(`--reporter=${blob ? 'blob,json' : 'list,json'}`);
   const forwarded = passthrough.filter((a) => !a.startsWith('--e2e-rail-')); // e2e-rail's own tags: recorded, not passed
   const command = `playwright ${[...args, ...passthrough].join(' ')}`;
-  const env = {
-    ...app.run.env, ...(app.run.modeEnv[mode] ?? {}),
-    PLAYWRIGHT_JSON_OUTPUT_FILE: reportAbs, PLAYWRIGHT_JSON_OUTPUT_NAME: reportAbs,
-  };
+  const env = { ...runEnv(app, mode), PLAYWRIGHT_JSON_OUTPUT_FILE: reportAbs, PLAYWRIGHT_JSON_OUTPUT_NAME: reportAbs };
   const cls = lockClass ?? (kind === 'full' || kind === 'shard' || workers == null ? 'heavy' : 'light');
   const filtered = isFiltered({ project, passthrough });
 

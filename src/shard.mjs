@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { appDir, ledgerDir } from './config.mjs';
+import { appDir, ledgerDir, runEnv } from './config.mjs';
 import { readRuns } from './ledger.mjs';
 import { fullUnits } from './measure.mjs';
 import { codeIdOf } from './select.mjs';
@@ -11,6 +11,7 @@ import { newId } from './util/id.mjs';
 import { listTests, playwrightCli } from './util/playwright.mjs';
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const MODES = ['dev', 'preview'];
 // Weight of each test when nothing has been timed yet: any constant splits by test count.
 const UNTIMED_MS = 1000;
 
@@ -37,13 +38,16 @@ function durationSource(config, app, fromRun) {
 // each list's sha256; lists of an earlier plan are removed. Run list i as `--shard i/<count>`: the run reads the plan's
 // identity from the manifest and refuses any other index or count, or an edited list (R52), and a set of planned shards
 // verifies only the code its plan was made for (R49). `includeSpecs` (app-relative) must be among the listed tests, so a
-// plan can be checked to cover a spec; a spec Playwright does not list cannot be run from a test list.
-export function planShards({ config, app, count, fromRun = null, includeSpecs = [] }) {
+// plan can be checked to cover a spec; a spec Playwright does not list cannot be run from a test list. The tests are
+// listed in the environment of `mode` (I6), the mode the shards will run in: a config that picks projects by env lists
+// other tests in preview than in dev.
+export function planShards({ config, app, count, fromRun = null, includeSpecs = [], mode = 'dev' }) {
   if (!Number.isInteger(count) || count < 1) throw new Error(`e2e-rail: shard count must be a whole number of 1 or more, got ${JSON.stringify(count)}`);
+  if (!MODES.includes(mode)) throw new Error(`e2e-rail: unknown mode "${mode}" (expected ${MODES.join(' or ')})`);
   // The code id is taken before the tests are listed: if the code moves in between, the plan names older code than it
   // lists and never completes a set, rather than vouching for the newer code with an older list.
   const codeId = codeIdOf(config);
-  const { rootDir, tests } = listTests(appDir(config, app), app.playwrightConfig);
+  const { rootDir, tests } = listTests(appDir(config, app), app.playwrightConfig, runEnv(app, mode));
   const files = Object.keys(tests).sort(cmp);
   const unlisted = includeSpecs.filter((f) => !Object.hasOwn(tests, f));
   if (unlisted.length) {
@@ -88,7 +92,7 @@ export function planShards({ config, app, count, fromRun = null, includeSpecs = 
     return abs;
   });
   const manifest = {
-    planId: newId('plan'), codeId, app: app.name, count, rootDir, generatedAt: new Date().toISOString(),
+    planId: newId('plan'), codeId, app: app.name, mode, count, rootDir, generatedAt: new Date().toISOString(),
     durationsFrom: source.ids, shards,
   };
   writeFileSync(path.join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);

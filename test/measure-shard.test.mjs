@@ -222,6 +222,21 @@ test('planShards: durations from --from-run or a newer complete shard set; bad c
   });
 });
 
+test('planShards lists the tests in the env of the mode the shards will run in (I6)', async () => {
+  await withRepo(async ({ config, app }) => {
+    // the stub adds STUB_PW_LIST_PROJECT to every listed test: a config whose projects depend on the preview env
+    app.run.modeEnv.preview = { ...app.run.modeEnv.preview, STUB_PW_LIST_PROJECT: 'preview-only' };
+    const dev = planShards({ config, app, count: 1 });
+    assert.equal(dev.manifest.mode, 'dev');
+    assert.ok(!readFileSync(dev.files[0], 'utf8').includes('preview-only'));
+    const preview = planShards({ config, app, count: 1, mode: 'preview' });
+    assert.equal(preview.manifest.mode, 'preview');
+    assert.deepEqual(preview.manifest.shards[0].specs.find((s) => s.file === ORDERS).projects, ['chromium', 'preview-only']);
+    assert.match(readFileSync(preview.files[0], 'utf8'), /^\[preview-only\] › orders\.spec\.ts$/m);
+    assert.throws(() => planShards({ config, app, count: 1, mode: 'staging' }), /unknown mode "staging"/);
+  });
+});
+
 // ---- shard merge ----
 
 test('planned shards run from the lists, merge-reports builds the HTML, and the set is complete only for the code it was planned for', async () => {

@@ -134,7 +134,7 @@ fingerprint, that passed and were not filtered count. `--require full` wants a f
 | `verify` | `--app <name>` · `--mode dev\|preview` · `--require full\|selected` · `--max-age <min>` · `--json` | `verified: …` 0 · `stale: …` 20 · `insufficient: …` 21 |
 | `shadow` | `record --run <run-id> [--app <name>]` · `status` · `promote` · `demote` | `shadow: <run-id> hit\|miss\|trivial\|unpaired · streak <s>/<n>` · `trust <t> · streak <s>/<n> · promotable <yes\|no>` · 0 |
 | `measure` | `--app <name>` · `slowest [-n N]` · `retries [--last N]` · `workers <1,2,4> --test-list <file> [--mode dev\|preview]` | tables · 0 |
-| `shard` | `--app <name>` · `plan --count N [--from-run <run-id>] [--include <spec>]` · `merge --dir <blob dir> [--mode dev\|preview]` | `manifest:` and `shard <i>/<n>` lines · `merge: rc <rc> · html … · complete: yes\|no` · merge-reports' exit code |
+| `shard` | `--app <name>` · `plan --count N [--from-run <run-id>] [--include <spec>] [--mode dev\|preview]` · `merge --dir <blob dir> [--mode dev\|preview]` | `manifest:` and `shard <i>/<n>` lines · `merge: rc <rc> · html … · complete: yes\|no` · merge-reports' exit code |
 | `lock` | `status` · `reap` · `run <heavy\|light> -- <command…>` | holders · reaped locks · the command's exit code (127 if it cannot start) |
 
 Global: `--version`, `--help`, `<command> --help`. Every error is one `e2e-rail: <message>` line on stderr: exit 2 for
@@ -259,6 +259,11 @@ through before anyone trusts a selection.
   impact-analyst checks services and their mocks.
 - **Gitignored build inputs** (e.g. `.env.local`) and **already-committed deletions** do not mark `dist` stale.
   Rebuild after changing them (or delete `dist`), so preview mode builds again.
+- **Projects chosen by environment**: the spec index lists tests in the dev environment (`run.env` + `run.modeEnv.dev`).
+  A Playwright config whose projects or `testDir` depend on the env (for example on `run.modeEnv.preview`) can list
+  other projects in preview, so a selection run with `--mode preview` may miss a preview-only project (a line for a
+  project preview does not have fails the run instead). `shard plan --mode preview` lists in the preview env. Keep the
+  project set independent of the mode, or gate preview with `run --full`.
 
 ## Plugin layer
 

@@ -131,7 +131,7 @@ Playwright 버전, preview 모드면 빌드된 `dist` 해시. `id` 는 그 전�
 | `verify` | `--app <name>` · `--mode dev\|preview` · `--require full\|selected` · `--max-age <min>` · `--json` | `verified: …` 0 · `stale: …` 20 · `insufficient: …` 21 |
 | `shadow` | `record --run <run-id> [--app <name>]` · `status` · `promote` · `demote` | `shadow: <run-id> hit\|miss\|trivial\|unpaired · streak <s>/<n>` · `trust <t> · streak <s>/<n> · promotable <yes\|no>` · 0 |
 | `measure` | `--app <name>` · `slowest [-n N]` · `retries [--last N]` · `workers <1,2,4> --test-list <file> [--mode dev\|preview]` | 표 · 0 |
-| `shard` | `--app <name>` · `plan --count N [--from-run <run-id>] [--include <spec>]` · `merge --dir <blob dir> [--mode dev\|preview]` | `manifest:` 와 `shard <i>/<n>` 줄 · `merge: rc <rc> · html … · complete: yes\|no` · merge-reports 종료 코드 |
+| `shard` | `--app <name>` · `plan --count N [--from-run <run-id>] [--include <spec>] [--mode dev\|preview]` · `merge --dir <blob dir> [--mode dev\|preview]` | `manifest:` 와 `shard <i>/<n>` 줄 · `merge: rc <rc> · html … · complete: yes\|no` · merge-reports 종료 코드 |
 | `lock` | `status` · `reap` · `run <heavy\|light> -- <command…>` | 보유자 · 지운 락 · 명령의 종료 코드(시작 못 하면 127) |
 
 공통: `--version`, `--help`, `<command> --help`. 모든 오류는 stderr 의 `e2e-rail: <message>` 한 줄이고, 사용법 오류는
@@ -253,6 +253,11 @@ export default {
   경로 접두를 쓴다(`**/api/orders/**`). impact-analyst 가 서비스와 그 목을 점검한다.
 - **gitignore 된 빌드 입력**(예: `.env.local`)과 **이미 커밋된 삭제**는 `dist` 를 낡게 만들지 않는다. 그것을 바꾼
   뒤에는 다시 빌드하거나 `dist` 를 지워 preview 모드가 다시 빌드하게 한다.
+- **env 로 고르는 프로젝트**: spec 인덱스는 dev 환경(`run.env` + `run.modeEnv.dev`)에서 테스트를 나열한다. 프로젝트나
+  `testDir` 가 env(예: `run.modeEnv.preview`)에 따라 달라지는 Playwright 설정은 preview 에서 다른 프로젝트를 나열할 수
+  있어서, `--mode preview` 로 돌리는 선택이 preview 전용 프로젝트를 놓칠 수 있다(preview 에 없는 프로젝트의 줄은 대신
+  실행을 실패시킨다). `shard plan --mode preview` 는 preview 환경에서 나열한다. 프로젝트 구성을 모드와 무관하게 두거나,
+  preview 게이트는 `run --full` 로 돌린다.
 
 ## 플러그인 층
 

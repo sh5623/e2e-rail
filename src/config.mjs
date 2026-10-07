@@ -96,6 +96,9 @@ export function withDefaults(raw, root, { checkFiles = true } = {}) {
 }
 
 export const appDir = (config, app) => path.resolve(config.root, app.root);
+// The environment Playwright gets for `mode`: run.env, then the mode's own (spec §9: the repo declares both). Listing
+// tests uses it too, since a config may pick projects or testDir by env.
+export const runEnv = (app, mode = 'dev') => ({ ...app.run.env, ...(app.run.modeEnv[mode] ?? {}) });
 export const ledgerDir = (config) => path.join(config.root, config.ledger.dir);
 export function findApp(config, name) {
   if (name) { const a = config.apps.find((x) => x.name === name); if (!a) throw new ConfigError(`unknown app ${name}`); return a; }
