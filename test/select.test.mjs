@@ -404,13 +404,13 @@ test('config below the git toplevel: outside changes are unknown-root (full), in
     assert.equal(classifyFile(config, '../shared/x.ts').kind, 'unknown-root');
     assert.equal(classifyFile(config, '../NOTES.md').kind, 'unknown-root', "the config's own ignore globs do not reach outside it");
     writeFileSync(path.join(root, 'src/components/Table.ts'), 'export const Table = (rows: unknown[]) => rows.length + 1;\n');
-    const inside = await select({ config, base: 'HEAD' });
+    const inside = await select({ config, base: 'HEAD', includeUncommitted: true });
     assert.deepEqual(inside.changedFiles, ['src/components/Table.ts']);
     assert.equal(inside.apps.web.mode, 'partial');
     assert.deepEqual(files(inside), ['e2e/cart.spec.ts', 'e2e/orders.spec.ts', 'e2e/smoke.spec.ts']);
     write(top, 'shared/x.ts', 'export const x = 2;\n'); // tracked, outside
     write(top, 'NOTES.md', 'x\n'); // untracked, outside
-    const outside = await select({ config, base: 'HEAD' });
+    const outside = await select({ config, base: 'HEAD', includeUncommitted: true });
     assert.equal(outside.apps.web.mode, 'full');
     assert.deepEqual(outside.apps.web.reasons, ['unknown-root:../NOTES.md', 'unknown-root:../shared/x.ts']);
     assert.equal(selectionExitCode(outside), 10);
