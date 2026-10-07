@@ -143,7 +143,8 @@ last-green 이동도 하지 않는다. 그 앱의 test-list 줄을 하나도 쓰
 `<app>: nothing selected (partial, 0 specs)`(선택된 spec 에 Playwright 프로젝트가 없으면 `…, <n> spec(s), 0 test-list lines`)를
 찍고 아무것도 돌리거나 기록하지 않는다. test list(선택, 샤드 계획, `--test-list <file>`)로 돈 실행에서 목록이 어떤
 테스트와도 맞지 않으면 Playwright 는 0 으로 끝나지만 실패로 기록된다(rc 1, `failed: test list matched no tests`). 맞는
-테스트가 없는 줄이 하나라도 있어도 그렇다(`failed: test list line matched no tests: <line>`).
+테스트가 없는 줄이 하나라도 있어도 그렇다(`failed: test list line matched no tests: <line>`). 단 `--project` 나 `--grep` 으로
+일부러 좁힌 실행은 줄 검사를 하지 않는다.
 
 ## 섀도 모드
 

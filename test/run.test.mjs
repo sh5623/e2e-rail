@@ -128,6 +128,8 @@ test('testListShortfall (R56): no test at all, or a line no reported test matche
     '[firefox] › orders.spec.ts', '[chromium] › e2e/orders.spec.ts', '[chromium] › gone.spec.ts', '[chromium] › orders.spec.ts › nope',
   ];
   assert.deepEqual(testListShortfall(`# c\n${lines.join('\n')}\n`, report, app).map((f) => f.error), lines.slice(4).map((l) => `test list line matched no tests: ${l}`));
+  assert.deepEqual(testListShortfall(lines.join('\n'), report, app, { perLine: false }), [], 'a narrowed run checks only that something ran');
+  assert.deepEqual(testListShortfall(lines.join('\n'), { suites: [] }, app, { perLine: false }), [none]);
 });
 
 test('R56: a test list that matches nothing, an empty list, or lines that match nothing fail the run (rc 1) and never verify', async () => {
@@ -170,6 +172,14 @@ test('R56: a test list that matches nothing, an empty list, or lines that match 
       assert.equal(verify({ config, app }).status, 'stale');
       // a list whose every line matched passes
       assert.equal((await runTests({ config, app, testList: list('ok.txt', '[chromium] › orders.spec.ts\n'), workers: 1, lock: false })).rc, 0);
+      // a run narrowed on purpose (--project, --grep) may leave lines unmatched; it is `filtered` and never verifies
+      const narrowed = await runTests({ config, app, testList: list('p.txt', '[chromium] › orders.spec.ts\n[mobile-chrome] › gone.spec.ts\n'), project: 'chromium', workers: 1, lock: false });
+      assert.equal(narrowed.rc, 0); assert.equal(narrowed.entry.filtered, true); assert.deepEqual(narrowed.entry.failures, []);
+      // but one that ran nothing at all still fails
+      process.env.STUB_PW_REPORT = empty;
+      const nothing = await runTests({ config, app, testList: list('p.txt', '[chromium] › orders.spec.ts\n'), project: 'chromium', workers: 1, lock: false });
+      assert.equal(nothing.rc, 1); assert.deepEqual(nothing.entry.failures, [none]);
+      delete process.env.STUB_PW_REPORT;
     });
   } finally { error.mock.restore(); }
 });

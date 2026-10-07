@@ -130,10 +130,13 @@ const LIST_FAILURE = { file: null, title: null, project: null };
 // R56: with `--test-list`, Playwright says nothing and exits 0 when the list matches no test (a path written against
 // the wrong base, a renamed or deleted spec, an empty file). Returns the failures that make such a run fail: one when
 // the report holds no test at all, else one per list line that no reported test matches (a partial loss is no pass
-// either). `listText` null = the list could not be read back, so nothing can show that it ran.
-export function testListShortfall(listText, report, appDirAbs) {
+// either). `listText` null = the list could not be read back, so nothing can show that it ran. `perLine: false` skips
+// the line check for a run that narrows on purpose (`--project`, `--grep`, `--last-failed`): there a line may match
+// nothing by design, and such a run never verifies anyway.
+export function testListShortfall(listText, report, appDirAbs, { perLine = true } = {}) {
   const tests = flattenSuites(report ?? { suites: [] }, appDirAbs);
   if (!tests.length) return [{ ...LIST_FAILURE, error: 'test list matched no tests' }];
+  if (!perLine) return [];
   if (listText === null) return [{ ...LIST_FAILURE, error: 'test list could not be read back to check what it matched' }];
   const rootDir = report.config?.rootDir ?? appDirAbs;
   return parseTestList(listText)
@@ -283,7 +286,9 @@ export async function runTests({
     const parsed = parsePlaywrightReport(report ?? { suites: [] }, dirAbs);
     // R56: a test list that matched nothing (or lost some of its lines) fails the run, whatever Playwright exited with.
     // A non-zero Playwright exit code is kept as it is (an interrupt stays 130); a 0 becomes 1.
-    const shortfall = testList ? testListShortfall(readListText(path.resolve(dirAbs, testList)), report, dirAbs) : [];
+    const shortfall = testList
+      ? testListShortfall(readListText(path.resolve(dirAbs, testList)), report, dirAbs, { perLine: !filtered && !lastFailed })
+      : [];
     for (const f of shortfall) {
       console.error(f.error === 'test list matched no tests'
         ? 'e2e-rail: test list matched no tests — check paths are relative to Playwright rootDir'

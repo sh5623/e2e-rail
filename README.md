@@ -148,7 +148,7 @@ test-list line for the app prints `<app>: nothing selected (partial, 0 specs)` (
 when no selected spec has a Playwright project), runs nothing and records nothing. A run from a test list (a
 selection, a shard plan or `--test-list <file>`) whose list matches no test is recorded as a failure (rc 1,
 `failed: test list matched no tests`) although Playwright exits 0 there; so is one with a line that matches nothing
-(`failed: test list line matched no tests: <line>`).
+(`failed: test list line matched no tests: <line>`), unless `--project` or `--grep` narrowed the run on purpose.
 
 ## Shadow mode
 
