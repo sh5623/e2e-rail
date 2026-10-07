@@ -36,6 +36,14 @@ export function gitUntracked(root, excludePrefixes = []) {
     .sort();
 }
 
+// Every file in the index of the whole repository (toplevel-relative). `[]` outside a work tree. A file deleted from
+// the work tree but not yet from the index is still listed.
+export function gitTracked(root) {
+  const loc = gitLocation(root);
+  if (!loc) return [];
+  return splitZ(git(loc.top, ['ls-files', '-z']).stdout).sort();
+}
+
 export function gitUntrackedHash(root, excludePrefixes = []) {
   const loc = gitLocation(root);
   return hashFiles(loc ? loc.top : root, gitUntracked(root, excludePrefixes));

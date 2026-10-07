@@ -1,12 +1,12 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { appDir, CONFIG_FILE } from './config.mjs';
 import { codeIdOf, ledgerRel } from './select.mjs';
 import { sha256, hashFiles } from './util/hash.mjs';
 import { DEFAULT_SKIP, walk } from './util/glob.mjs';
 import { execCapture } from './util/exec.mjs';
-import { gitHead, gitDiffHash, gitLocation, gitUntrackedHash } from './util/git.mjs';
-import { playwrightVersion } from './util/playwright.mjs';
+import { gitHead, gitDiffHash, gitLocation, gitTracked, gitUncommittedFiles, gitUntracked, gitUntrackedHash } from './util/git.mjs';
+import { playwrightVersion, toAppRel } from './util/playwright.mjs';
 
 // The fingerprint (spec §7) names exactly what a run tested: commit + uncommitted diff + untracked files + config +
 // Playwright + (preview) the built dist. `id` is that whole identity; `codeId` is the code alone, so a selection
@@ -20,8 +20,8 @@ const mtimeOf = (abs) => {
 
 // Newest mtime below `abs` (recursive, same skipped directories as `walk`); a file is its own mtime; 0 when absent.
 // Directory mtimes are ignored unless `dirs` — a directory is touched when it is created, which would make a fresh
-// dist look newer than the build. For a source tree they matter: deleting or renaming a file leaves no newer file
-// behind, only a newer directory (an emptied one included, so every directory is visited, not just those with files).
+// dist look newer than the build (so `distStale` measures dist with files only). With `dirs`, deleting or renaming a
+// file shows up as a newer directory (an emptied one included, so every directory is visited, not just those with files).
 export function maxMtime(abs, { dirs = false } = {}) {
   const st = statSync(abs, { throwIfNoEntry: false });
   if (!st) return 0;
@@ -40,26 +40,49 @@ export function maxMtime(abs, { dirs = false } = {}) {
   return m;
 }
 
+const distDir = (config, app) => path.resolve(appDir(config, app), app.run.preview.dist);
+
 export function distHash({ config, app }) {
   if (!app.run.preview) return null;
-  const distAbs = path.join(appDir(config, app), app.run.preview.dist);
+  const distAbs = distDir(config, app);
   if (!existsSync(distAbs)) return null;
   return hashFiles(distAbs, walk(distAbs));
 }
 
-// Is the built dist older than the sources it was built from? A missing dist is stale. An app that declares no
+// Newest mtime among everything that can end up in the build (R41): every tracked file plus every untracked,
+// non-ignored one, of the whole repository, not only srcDir — packages/*, public/, vite.config.*, .env*, lockfiles and
+// the like all feed a build. Left out: the dist dir (the build's own output) and the ledger dir (e2e-rail's own).
+// A tracked file that is gone contributes the mtime of its nearest existing parent directory, which is when it
+// disappeared; files removed with `git rm` are no longer tracked, so the diff against HEAD supplies them too.
+function newestInput(config, app) {
+  const { top } = gitLocation(config.root);
+  const outputs = [distDir(config, app), path.resolve(config.root, config.ledger.dir)]
+    .map((abs) => toAppRel(top, abs))
+    .filter((rel) => rel !== '' && !rel.startsWith('..'));
+  const isOutput = (rel) => outputs.some((out) => rel === out || rel.startsWith(`${out}/`));
+  const rels = new Set([...gitTracked(config.root), ...(gitUncommittedFiles(config.root) ?? gitUntracked(config.root))]);
+  let newest = 0;
+  for (const rel of rels) {
+    if (isOutput(rel)) continue;
+    const abs = path.join(top, rel);
+    if (lstatSync(abs, { throwIfNoEntry: false })) { newest = Math.max(newest, mtimeOf(abs)); continue; }
+    for (let dir = path.dirname(abs); ; dir = path.dirname(dir)) {
+      const st = statSync(dir, { throwIfNoEntry: false });
+      if (st) { newest = Math.max(newest, st.mtimeMs); break; }
+      if (dir === path.dirname(dir)) break;
+    }
+  }
+  return newest;
+}
+
+// Is the built dist older than what it was built from? A missing or empty dist is stale. An app that declares no
 // preview build has nothing to rebuild.
 export function distStale({ config, app }) {
   if (!app.run.preview) return false;
-  const dirAbs = appDir(config, app);
-  const distAbs = path.join(dirAbs, app.run.preview.dist);
+  assertRepo(config.root);
+  const distAbs = distDir(config, app);
   if (!existsSync(distAbs)) return true;
-  const srcM = Math.max(
-    maxMtime(path.join(dirAbs, app.srcDir), { dirs: true }),
-    maxMtime(path.join(dirAbs, 'index.html')),
-    maxMtime(path.join(dirAbs, 'package.json')),
-  );
-  return srcM > maxMtime(distAbs);
+  return newestInput(config, app) > maxMtime(distAbs);
 }
 
 // Without a commit to name, a fingerprint would be made of empty values and unrelated states would look identical.

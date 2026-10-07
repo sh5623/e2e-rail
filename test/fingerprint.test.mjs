@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { computeFingerprint, distHash, distStale, maxMtime } from '../src/fingerprint.mjs';
@@ -11,13 +11,15 @@ import { fixtureDir, makeTempRepo } from './helpers.mjs';
 
 const load = async (root) => { const config = await loadConfig(root); return { config, app: findApp(config) }; };
 const touch = (file, when) => utimesSync(file, when, when);
-// Sets every file and directory below `dir` (and `dir` itself) to `when`.
-const touchTree = (dir, when) => {
-  for (const ent of readdirSync(dir, { withFileTypes: true })) {
-    const abs = path.join(dir, ent.name);
-    if (ent.isDirectory()) touchTree(abs, when); else touch(abs, when);
-  }
-  touch(dir, when);
+const git = (root, ...args) => {
+  const r = execCapture('git', args, { cwd: root });
+  assert.equal(r.status, 0, r.stderr);
+  return r.stdout;
+};
+// Every tracked file back to ten minutes ago (a test edit stamped "now" is undone).
+const ageTracked = (root) => {
+  const past = new Date(Date.now() - 600_000);
+  for (const rel of git(root, 'ls-files', '-z').split('\0').filter(Boolean)) touch(path.join(root, rel), past);
 };
 
 test('id changes with uncommitted edit, untracked file and dist; codeId ignores dist', async () => {
@@ -138,34 +140,94 @@ test('distStale: missing dist, older dist, fresh dist', async () => {
   } finally { cleanup(); }
 });
 
-test('distStale: an edited, added or deleted source file makes a fresh dist stale; package.json and index.html count too', async () => {
+// R41: a repo with inputs outside srcDir and the app (vite config, a workspace package, public/, a lockfile), every
+// tracked file aged ten minutes and a dist built five minutes ago, so the baseline is "fresh".
+async function builtRepo() {
   const { root, cleanup } = makeTempRepo('sample-app');
+  const extra = { 'vite.config.ts': 'export default {}\n', 'packages/x.ts': 'export const x = 1\n', 'public/robots.txt': 'x\n', 'pnpm-lock.yaml': 'lock\n' };
+  for (const [rel, body] of Object.entries(extra)) {
+    mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    writeFileSync(path.join(root, rel), body);
+  }
+  git(root, 'add', '--', ...Object.keys(extra));
+  git(root, 'commit', '-qm', 'inputs');
+  ageTracked(root);
+  mkdirSync(path.join(root, 'dist')); writeFileSync(path.join(root, 'dist/index.html'), '1');
+  touch(path.join(root, 'dist/index.html'), new Date(Date.now() - 300_000));
+  const { config, app } = await load(root);
+  assert.equal(distStale({ config, app }), false, 'baseline: dist built after every input');
+  return { root, config, app, cleanup };
+}
+
+test('distStale (R41): a tracked or untracked file anywhere in the repo, newer than dist, makes it stale', async () => {
+  const { root, config, app, cleanup } = await builtRepo();
   try {
-    const { config, app } = await load(root);
-    const past = new Date(Date.now() - 600_000);
-    touchTree(path.join(root, 'src'), past); touch(path.join(root, 'package.json'), past);
-    mkdirSync(path.join(root, 'dist')); writeFileSync(path.join(root, 'dist/index.html'), '1');
-    const built = new Date(Date.now() - 300_000); touch(path.join(root, 'dist/index.html'), built);
-    assert.equal(distStale({ config, app }), false, 'dist built after every source file');
-
-    // edit: the file's mtime is now
-    writeFileSync(path.join(root, 'src/lib/dead.ts'), '// edit\n', { flag: 'a' });
-    assert.equal(distStale({ config, app }), true, 'edited file');
-    touchTree(path.join(root, 'src'), past);
-    assert.equal(distStale({ config, app }), false);
-
-    // delete: no file is newer, the directory entry list is
-    rmSync(path.join(root, 'src/lib/dead.ts'));
-    assert.equal(distStale({ config, app }), true, 'deleted file');
-    touchTree(path.join(root, 'src'), past);
-    assert.equal(distStale({ config, app }), false);
-
-    writeFileSync(path.join(root, 'index.html'), '<html></html>');
-    assert.equal(distStale({ config, app }), true, 'index.html newer than dist');
-    rmSync(path.join(root, 'index.html'));
-    touch(path.join(root, 'package.json'), new Date());
-    assert.equal(distStale({ config, app }), true, 'package.json newer than dist');
+    const cases = [
+      ['edited source file', 'src/lib/dead.ts', 'edit'],
+      ['vite.config.ts outside srcDir', 'vite.config.ts', 'edit'],
+      ['a workspace package outside the app', 'packages/x.ts', 'edit'],
+      ['public/ asset', 'public/robots.txt', 'edit'],
+      ['lockfile', 'pnpm-lock.yaml', 'edit'],
+      ['package.json', 'package.json', 'edit'],
+      ['untracked source file', 'src/new.ts', 'new'],
+      ['untracked .env file', '.env.local', 'new'],
+      ['untracked index.html', 'index.html', 'new'],
+    ];
+    for (const [name, rel, kind] of cases) {
+      writeFileSync(path.join(root, rel), kind === 'edit' ? '// edit\n' : 'x\n', { flag: 'a' });
+      assert.equal(distStale({ config, app }), true, name);
+      if (kind === 'new') rmSync(path.join(root, rel));
+      ageTracked(root);
+      assert.equal(distStale({ config, app }), false, `${name}: back to fresh`);
+    }
+    // files git ignores (run artifacts) are not inputs
+    mkdirSync(path.join(root, 'test-results')); writeFileSync(path.join(root, 'test-results/out.json'), '{}');
+    assert.equal(distStale({ config, app }), false, 'gitignored output');
+    // an empty dist is no build
+    rmSync(path.join(root, 'dist/index.html'));
+    assert.equal(distStale({ config, app }), true, 'empty dist');
   } finally { cleanup(); }
+});
+
+test('distStale (R41): e2e-rail\'s ledger dir and the dist dir itself are not inputs', async () => {
+  const { root, config, app, cleanup } = await builtRepo();
+  try {
+    // git does not ignore these directories, so only distStale's own exclusion keeps them out
+    for (const dir of ['rail-ledger', 'rail-ledger/', './rail-ledger']) {
+      mkdirSync(path.join(root, 'rail-ledger/selections'), { recursive: true });
+      writeFileSync(path.join(root, 'rail-ledger/ledger.jsonl'), '{}\n', { flag: 'a' });
+      writeFileSync(path.join(root, 'rail-ledger/selections/sel-1.json'), '{}\n');
+      assert.equal(distStale({ config: { ...config, ledger: { dir } }, app }), false, `ledger.dir=${dir}`);
+      assert.equal(distStale({ config, app }), true, 'control: the same files are inputs when the ledger lives elsewhere');
+      rmSync(path.join(root, 'rail-ledger'), { recursive: true });
+    }
+
+    // a dist dir git does not ignore; the nested node_modules is invisible to dist's own newest-file scan
+    const out = { ...app, run: { ...app.run, preview: { ...app.run.preview, dist: 'build-out' } } };
+    mkdirSync(path.join(root, 'build-out/node_modules'), { recursive: true });
+    writeFileSync(path.join(root, 'build-out/index.html'), '1');
+    touch(path.join(root, 'build-out/index.html'), new Date(Date.now() - 300_000));
+    writeFileSync(path.join(root, 'build-out/node_modules/x.js'), '1');
+    assert.equal(distStale({ config, app: out }), false, 'a file written inside dist is dist, not input');
+    mkdirSync(path.join(root, 'other/node_modules'), { recursive: true });
+    writeFileSync(path.join(root, 'other/node_modules/x.js'), '1');
+    assert.equal(distStale({ config, app: out }), true, 'control: the same file outside dist is an input');
+  } finally { cleanup(); }
+});
+
+test('distStale (R41): deleting a tracked file makes dist stale, plain or with git rm, one file or a directory', async () => {
+  for (const [name, remove] of [
+    ['rm of the only file in a directory', (root) => rmSync(path.join(root, 'src/lib/dead.ts'))],
+    ['rm of a workspace file', (root) => rmSync(path.join(root, 'packages/x.ts'))],
+    ['rm of a whole feature directory', (root) => rmSync(path.join(root, 'src/features/cart'), { recursive: true })],
+    ['git rm (no longer in the index)', (root) => git(root, 'rm', '-q', '--', 'src/lib/dead.ts')],
+  ]) {
+    const { root, config, app, cleanup } = await builtRepo();
+    try {
+      remove(root);
+      assert.equal(distStale({ config, app }), true, name);
+    } finally { cleanup(); }
+  }
 });
 
 test('maxMtime: 0 when absent, the file\'s own mtime, the newest file of a directory (recursive); directories only on request', () => {
@@ -197,11 +259,13 @@ test('a root that is not in a git work tree, or has no commit yet, is refused wi
     let { config, app } = await load(bare);
     assert.throws(() => computeFingerprint({ config, app, mode: 'dev' }), /not inside a git work tree/);
     assert.throws(() => computeFingerprint({ config, app, mode: 'dev' }), (e) => e.message.includes(bare));
+    assert.throws(() => distStale({ config, app }), /not inside a git work tree/);
 
     const unborn = make();
     assert.equal(execCapture('git', ['init', '-q'], { cwd: unborn }).status, 0);
     ({ config, app } = await load(unborn));
     assert.throws(() => computeFingerprint({ config, app, mode: 'dev' }), /no commits yet/);
     assert.throws(() => computeFingerprint({ config, app, mode: 'preview' }), (e) => e.message.includes(unborn));
+    assert.throws(() => distStale({ config, app }), /no commits yet/);
   } finally { for (const d of dirs) rmSync(d, { recursive: true, force: true }); }
 });
