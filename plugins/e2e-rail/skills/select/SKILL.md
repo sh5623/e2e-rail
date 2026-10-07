@@ -13,7 +13,8 @@ instead of `pnpm exec e2e-rail`. Without `--app`, `select` covers every app of t
 The base is the last code that passed a full verification. In this order:
 1. `pnpm exec e2e-rail verify --app <app> --mode <mode>` — `verified:` means this exact code already passed in full:
    nothing to select, report it through `e2e-rail:gate`. A `stale:` line ends with `last verified head <sha>`: use it.
-2. `cat .e2e-rail/last-green.<app>` — written by every unfiltered passing `run --full`.
+2. `cat .e2e-rail/last-green.<app>` — written by every unfiltered passing `run --full`, and by a `shard merge` that
+   printed `complete: yes`.
 3. The merge-base with the target branch: `git merge-base HEAD origin/main`.
 
 No base → leave `--base` out and accept a full selection. Never pick a base to get a smaller selection.

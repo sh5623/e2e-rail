@@ -114,6 +114,7 @@ Playwright 버전, preview 모드면 빌드된 `dist` 해시. `id` 는 그 전�
 실행을 짝짓는다. `.e2e-rail/ledger.jsonl` 에는 실행 1회가 append-only 한 줄로 남는다: `kind`(`full` · `selected` ·
 `rerun` · `shard`), `mode`, 지문, shard, workers, `filtered`, `shadowed`, 락 시각, rc, spec 별 결과, 실패, flaky.
 필터 없이 통과한 전수 실행은 자기 head 를 `.e2e-rail/last-green.<app>` 에 쓰고, 이것이 다음 선택의 base 가 된다.
+`complete: yes` 를 찍은 `shard merge` 도 그렇게 쓴다.
 
 `verify` 는 원장으로 «정확히 이 코드가 통과했는가» 에 답한다. 이 앱 · 이 모드 · 이 지문 · 통과 · 필터 없음인 실행만
 센다. `--require full` 은 전수 실행이나 완성된 샤드 세트를, `--require selected` 는 `run --selection` 으로 만든 선택

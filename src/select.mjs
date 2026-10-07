@@ -6,6 +6,7 @@ import { gitChangedFiles, gitDiffHash, gitHead, gitLocation, gitUncommittedFiles
 import { sha256 } from './util/hash.mjs';
 import { newId } from './util/id.mjs';
 import { loadTypeScript } from './util/ts.mjs';
+import { inCI } from './util/ci.mjs';
 import { loadOrBuildSpecIndex, routeMatches, slugOf } from './spec-index.mjs';
 import { affectedEntries, apiLiterals, findMain, loadOrBuildGraph } from './graph.mjs';
 import { getAdapter } from './adapters/index.mjs';
@@ -216,8 +217,6 @@ function appContext({ config, ts }) {
     },
   };
 }
-
-const inCI = () => Boolean(process.env.CI) && !/^(0|false)$/i.test(process.env.CI);
 
 // No base, no work tree, or a diff git cannot compute → changedFiles null → full (spec §6: "unknown" is not
 // "no change"). Git reports the whole repository relative to its toplevel; the table speaks config-root-relative, so a

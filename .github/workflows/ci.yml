@@ -3,17 +3,23 @@ on: [push, pull_request]
 jobs:
   unit:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22 }
+        with: { node-version: "${{ matrix.node }}" }
       - run: npm ci
       - run: npm test
   contract:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22 }
+        with: { node-version: "${{ matrix.node }}" }
       - run: npm ci
       - run: npm run test:contract

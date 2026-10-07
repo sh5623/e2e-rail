@@ -346,6 +346,8 @@ test('workers default to run.workers (ci when CI is set, else local); none at al
       process.env.CI = '1';
       assert.equal((await runTests({ config, app, testList: list, lock: false })).entry.workers, 1);
       assert.equal(workersArg(), '1');
+      process.env.CI = 'false'; // M8: the same reading of CI as select's
+      assert.equal((await runTests({ config, app, testList: list, lock: false })).entry.workers, 2);
       delete process.env.CI;
       app.run.workers.local = undefined;
       const r = await runTests({ config, app, testList: list });

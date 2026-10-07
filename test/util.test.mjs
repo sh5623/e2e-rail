@@ -7,6 +7,7 @@ import { sha256, hashFiles } from '../src/util/hash.mjs';
 import { newId } from '../src/util/id.mjs';
 import { globToRegExp, matchGlob, matchAny, walk, expandGlob } from '../src/util/glob.mjs';
 import { execCapture, execInherit } from '../src/util/exec.mjs';
+import { inCI } from '../src/util/ci.mjs';
 import {
   gitHead,
   gitDiffHash,
@@ -187,6 +188,18 @@ test('gitUntrackedHash survives an untracked nested repo and symlinks (R23)', ()
     assert.deepEqual(gitUntracked(root), ['broken-link', 'nested/']);
     assert.match(gitUntrackedHash(root), /^[0-9a-f]{64}$/);
   } finally { cleanup(); }
+});
+
+test('inCI (M8): CI set to anything but 0/false', () => {
+  const saved = process.env.CI;
+  try {
+    for (const [v, want] of [[undefined, false], ['', false], ['0', false], ['false', false], ['FALSE', false], ['1', true], ['true', true], ['github', true]]) {
+      if (v === undefined) delete process.env.CI; else process.env.CI = v;
+      assert.equal(inCI(), want, String(v));
+    }
+  } finally {
+    if (saved === undefined) delete process.env.CI; else process.env.CI = saved;
+  }
 });
 
 test('newId: prefix, UTC stamp and 4 hex chars', () => {

@@ -6,6 +6,7 @@ import { computeFingerprint, distStale } from './fingerprint.mjs';
 import { appendRun, writeLastGreen } from './ledger.mjs';
 import { acquire, describeHolders, lockDir } from './lock.mjs';
 import { readState } from './shadow.mjs';
+import { inCI } from './util/ci.mjs';
 import { execInherit } from './util/exec.mjs';
 import { sha256 } from './util/hash.mjs';
 import { newId } from './util/id.mjs';
@@ -218,7 +219,7 @@ export async function runTests({
   const shardEntry = shardRecord({ app, dirAbs, shard, testList }); // before the lock too: a refused plan list runs nothing
   const cli = playwrightCli(dirAbs);
   const kind = kindOf({ lastFailed, shard, testList });
-  workers ??= process.env.CI ? app.run.workers.ci : app.run.workers.local;
+  workers ??= inCI() ? app.run.workers.ci : app.run.workers.local;
   const preview = mode === 'preview' ? app.run.preview : null;
   if (preview && !build && distStale({ config, app })) return refuse(staleDist(preview));
 

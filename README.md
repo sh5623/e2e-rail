@@ -116,7 +116,8 @@ ledger dir), a hash of both configs, the Playwright version and, in preview mode
 covers all of it; `codeId` covers head, diff and untracked files and pairs selections with runs.
 `.e2e-rail/ledger.jsonl` gets one append-only line per run: `kind` (`full` · `selected` · `rerun` · `shard`), `mode`,
 fingerprint, shard, workers, `filtered`, `shadowed`, lock times, rc, per-spec results, failures and flaky tests. An
-unfiltered passing full run writes its head to `.e2e-rail/last-green.<app>`, the next selection's base.
+unfiltered passing full run writes its head to `.e2e-rail/last-green.<app>`, the next selection's base; so does
+`shard merge` when it prints `complete: yes`.
 
 `verify` answers "has exactly this code passed?" from the ledger: only runs of this app, in this mode, with this
 fingerprint, that passed and were not filtered count. `--require full` wants a full run or a complete shard set;

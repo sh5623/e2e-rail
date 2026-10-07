@@ -6,7 +6,7 @@ import path from 'node:path';
 import { measureWorkers, retryRates, slowest } from '../src/measure.mjs';
 import { mergeReports, planShards } from '../src/shard.mjs';
 import { runTests } from '../src/run.mjs';
-import { appendRun, readRuns } from '../src/ledger.mjs';
+import { appendRun, readLastGreen, readRuns } from '../src/ledger.mjs';
 import { verify } from '../src/verify.mjs';
 import { codeIdOf } from '../src/select.mjs';
 import { findApp, loadConfig } from '../src/config.mjs';
@@ -250,11 +250,14 @@ test('planned shards run from the lists, merge-reports builds the HTML, and the 
     assert.deepEqual(one.entry.shard, { index: 1, count: 2, plan: plan.manifest.planId, planCodeId: plan.manifest.codeId });
     const half = mergeReports({ config, app, dir: blobDir });
     assert.equal(half.rc, 0); assert.equal(half.complete, false);
+    assert.equal(readLastGreen(config, 'web'), null, 'an incomplete set moves nothing');
     await shardRun(2, plan);
     const m = mergeReports({ config, app, dir: path.relative(process.cwd(), blobDir) });
     assert.equal(m.rc, 0);
     assert.equal(m.html, path.join(blobDir, 'index.html')); assert.ok(existsSync(m.html));
     assert.equal(m.complete, true);
+    // M9: a complete, unfiltered set is a full pass, so it moves last-green like a passing full run
+    assert.equal(readLastGreen(config, 'web'), one.entry.fingerprint.head);
     assert.equal(verify({ config, app }).status, 'verified');
     assert.equal(mergeReports({ config, app, dir: blobDir, mode: 'preview' }).complete, false, 'the shards ran in dev mode');
     assert.throws(() => mergeReports({ config, app, dir: path.join(root, 'nope') }), /blob report dir/);
