@@ -1,0 +1,493 @@
+import { test, mock } from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { verify } from '../src/verify.mjs';
+import { demote, promote, readState, recordShadow, shadowStatus, statePath, writeState } from '../src/shadow.mjs';
+import { runTests } from '../src/run.mjs';
+import { appendRun, readRuns } from '../src/ledger.mjs';
+import { computeFingerprint } from '../src/fingerprint.mjs';
+import { amendSelection, codeIdOf, computeSelection, writeSelection } from '../src/select.mjs';
+import { findApp, ledgerDir, loadConfig } from '../src/config.mjs';
+import { execCapture } from '../src/util/exec.mjs';
+import { newId } from '../src/util/id.mjs';
+import { loadTypeScript } from '../src/util/ts.mjs';
+import { loadOrBuildSpecIndex } from '../src/spec-index.mjs';
+import { findMain, loadOrBuildGraph } from '../src/graph.mjs';
+import { getAdapter } from '../src/adapters/index.mjs';
+import { makeTempRepo } from './helpers.mjs';
+
+// Temp repo + loaded config; the stub's env knobs are cleared after.
+async function withRepo(fn) {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  try {
+    const config = await loadConfig(root);
+    await fn({ root, config, app: findApp(config), ts: await loadTypeScript(root) });
+  } finally {
+    delete process.env.STUB_PW_RC;
+    delete process.env.STUB_PW_REPORT;
+    cleanup();
+  }
+}
+const run = (config, app, opts = {}) => runTests({ config, app, workers: 1, lock: false, ...opts });
+const failing = (root) => { process.env.STUB_PW_RC = '1'; process.env.STUB_PW_REPORT = path.join(root, 'stub/report-fail.json'); };
+const passing = () => { delete process.env.STUB_PW_RC; delete process.env.STUB_PW_REPORT; };
+const git = (root, ...args) => execCapture('git', args, { cwd: root });
+const touch = (root, rel, text = '// e\n') => writeFileSync(path.join(root, rel), text, { flag: 'a' });
+
+// A ledger line for a run of the current code, without spawning anything.
+const synth = (config, app, over = {}) => appendRun(config, {
+  app: app.name, mode: 'dev', kind: 'full', filtered: false, selectionId: null, shard: null, workers: 1, command: 'playwright test',
+  rc: 0, rootDir: 'e2e', specs: [], failures: [], flaky: [],
+  fingerprint: computeFingerprint({ config, app, mode: over.mode ?? 'dev' }), ...over,
+});
+const fail = (file) => ({ file, title: 't', project: 'chromium', error: 'boom' });
+
+const spec = (file) => ({ file, projects: ['chromium'], reasons: ['test'] });
+// A hand-built partial selection of the current code (writeSelection makes it the current one too).
+function select(config, app, { specs = [], added = [], removed = [], mode = 'partial', id = newId('sel'), codeId = codeIdOf(config), createdAt } = {}) {
+  const sel = {
+    id, createdAt: createdAt ?? new Date().toISOString(), codeId, changedFiles: [],
+    apps: { [app.name]: { mode, specs: specs.map(spec), added, removed, rootDir: 'e2e', reasons: [] } },
+  };
+  writeSelection(config, sel);
+  return sel;
+}
+const SMOKE = 'e2e/smoke.spec.ts';
+const ORDERS = 'e2e/orders.spec.ts';
+const CART = 'e2e/cart.spec.ts';
+
+function realCtx(config, ts) {
+  return {
+    forApp: async (app) => {
+      const { entries, unresolved } = getAdapter(app.adapter.name).routeEntries({ config, app, ts });
+      return { index: await loadOrBuildSpecIndex({ config, app, ts }), graph: await loadOrBuildGraph({ config, app, ts }), entries, unresolvedEntries: unresolved, main: findMain(config, app) };
+    },
+  };
+}
+
+// ---- verify ----
+
+test('verify: verified after a full run; stale after an edit (names the differing field); rerun/selected are insufficient for full', async () => {
+  await withRepo(async ({ root, config, app }) => {
+    const none = verify({ config, app });
+    assert.equal(none.status, 'stale'); assert.equal(none.exitCode, 20); assert.equal(none.lastVerifiedHead, null);
+    const { entry } = await run(config, app);
+    const v = verify({ config, app });
+    assert.equal(v.status, 'verified'); assert.equal(v.exitCode, 0); assert.equal(v.run.id, entry.id);
+    assert.equal(v.fingerprint.id, entry.fingerprint.id);
+    touch(root, 'src/main.ts');
+    const s = verify({ config, app });
+    assert.equal(s.status, 'stale'); assert.equal(s.exitCode, 20); assert.deepEqual(s.differing, ['diff']);
+    assert.equal(s.lastVerifiedHead.length, 40); assert.equal(s.lastVerifiedHead, entry.fingerprint.head);
+    await run(config, app, { testList: path.join(root, 'stub/list.json') });
+    const i = verify({ config, app });
+    assert.equal(i.status, 'insufficient'); assert.equal(i.exitCode, 21); assert.deepEqual(i.have, ['selected']);
+    assert.equal(verify({ config, app, require: 'selected' }).status, 'verified');
+    await run(config, app, { lastFailed: true });
+    assert.equal(verify({ config, app }).status, 'insufficient');
+  });
+});
+
+test('verify: a failing full run is not a verification, and is not the baseline `differing` is measured against', async () => {
+  await withRepo(async ({ root, config, app }) => {
+    failing(root);
+    await run(config, app);
+    const bad = verify({ config, app });
+    assert.equal(bad.status, 'stale'); assert.equal(bad.lastVerifiedHead, null);
+    passing();
+    const { entry } = await run(config, app);
+    assert.equal(verify({ config, app }).run.id, entry.id);
+    // a later failing run of changed code does not replace the passing baseline
+    touch(root, 'src/main.ts');
+    failing(root);
+    await run(config, app);
+    const s = verify({ config, app });
+    assert.equal(s.status, 'stale'); assert.deepEqual(s.differing, ['diff']); assert.equal(s.lastVerifiedHead, entry.fingerprint.head);
+  });
+});
+
+test('verify: differing is exactly the fingerprint fields that moved since the last passing full run', async () => {
+  await withRepo(async ({ root, config, app }) => {
+    const { entry } = await run(config, app);
+    git(root, 'commit', '--allow-empty', '-qm', 'next');
+    const moved = verify({ config, app });
+    assert.deepEqual(moved.differing, ['head']); assert.equal(moved.lastVerifiedHead, entry.fingerprint.head);
+    const second = await run(config, app);                       // a new baseline at the new head
+    assert.equal(verify({ config, app }).status, 'verified');
+    touch(root, 'notes.txt');
+    assert.deepEqual(verify({ config, app }).differing, ['untracked']);
+    assert.equal(verify({ config, app }).lastVerifiedHead, second.entry.fingerprint.head);
+    touch(root, 'src/main.ts');
+    assert.deepEqual(verify({ config, app }).differing, ['diff', 'untracked']);
+    touch(root, 'playwright.config.ts');
+    assert.deepEqual(verify({ config, app }).differing, ['diff', 'untracked', 'config']);
+    // back to the verified state → verified again
+    rmSync(path.join(root, 'notes.txt'));
+    git(root, 'checkout', '--', 'src/main.ts', 'playwright.config.ts');
+    assert.equal(verify({ config, app }).status, 'verified');
+  });
+});
+
+test('verify: filtered "full" runs never count, as verification or as baseline (R44)', async () => {
+  await withRepo(async ({ root, config, app }) => {
+    const grep = await run(config, app, { passthrough: ['--grep', 'orders'] });
+    assert.equal(grep.entry.kind, 'full'); assert.equal(grep.entry.filtered, true);
+    const proj = await run(config, app, { project: 'chromium' });
+    assert.equal(proj.entry.filtered, true);
+    const v = verify({ config, app });
+    assert.equal(v.status, 'stale'); assert.equal(v.lastVerifiedHead, null);       // not even `insufficient`
+    const { entry } = await run(config, app);
+    assert.equal(verify({ config, app }).run.id, entry.id);
+    // a filtered selected run does not satisfy --require selected either
+    touch(root, 'src/main.ts');
+    await run(config, app, { testList: path.join(root, 'stub/list.json'), project: 'chromium' });
+    assert.equal(verify({ config, app, require: 'selected' }).status, 'stale');
+  });
+});
+
+test('verify: a complete shard set verifies, an incomplete one is insufficient, and a set is the baseline', async () => {
+  await withRepo(async ({ root, config, app }) => {
+    const a = await run(config, app, { shard: { index: 1, count: 2 } });
+    const half = verify({ config, app });
+    assert.equal(half.status, 'insufficient'); assert.equal(half.exitCode, 21); assert.deepEqual(half.have, ['shard']);
+    assert.equal(verify({ config, app, require: 'selected' }).status, 'insufficient');
+    const b = await run(config, app, { shard: { index: 2, count: 2 }, testList: path.join(root, 'stub/list.json') });
+    const v = verify({ config, app });
+    assert.equal(v.status, 'verified'); assert.equal(v.exitCode, 0);
+    assert.equal(v.run.id, b.entry.id); assert.deepEqual(v.shards.map((r) => r.id), [a.entry.id, b.entry.id]);
+    touch(root, 'src/main.ts');
+    const s = verify({ config, app });
+    assert.equal(s.status, 'stale'); assert.deepEqual(s.differing, ['diff']); assert.equal(s.lastVerifiedHead, a.entry.fingerprint.head);
+  });
+});
+
+test('verify: mode is part of the match, and a preview fingerprint with no dist is never verified', async () => {
+  await withRepo(async ({ config, app }) => {
+    assert.equal(existsSync(path.join(config.root, 'dist')), false);
+    const dev = await run(config, app);                                   // dev and a dist-less preview share a fingerprint id
+    assert.equal(computeFingerprint({ config, app, mode: 'preview' }).id, dev.entry.fingerprint.id);
+    const noBuild = verify({ config, app, mode: 'preview' });
+    assert.equal(noBuild.status, 'stale'); assert.equal(noBuild.exitCode, 20); assert.deepEqual(noBuild.differing, ['dist']);
+    const built = await run(config, app, { mode: 'preview' });
+    assert.ok(built.entry.fingerprint.dist);
+    const p = verify({ config, app, mode: 'preview' });
+    assert.equal(p.status, 'verified'); assert.equal(p.run.id, built.entry.id); assert.equal(p.run.mode, 'preview');
+    const d = verify({ config, app });
+    assert.equal(d.status, 'verified'); assert.equal(d.run.id, dev.entry.id); assert.equal(d.run.mode, 'dev');
+    // the build output disappears: the code is the same but no dist can be named
+    rmSync(path.join(config.root, 'dist'), { recursive: true, force: true });
+    const gone = verify({ config, app, mode: 'preview' });
+    assert.equal(gone.status, 'stale'); assert.deepEqual(gone.differing, ['dist']); assert.equal(gone.lastVerifiedHead, built.entry.fingerprint.head);
+    // a dist-less preview run in the ledger (as a run recorded before the build existed) is no verification either
+    synth(config, app, { mode: 'preview', fingerprint: computeFingerprint({ config, app, mode: 'preview' }) });
+    assert.equal(verify({ config, app, mode: 'preview' }).status, 'stale');
+    assert.equal(verify({ config, app }).status, 'verified');
+  });
+});
+
+test('verify: a dist-less preview run shares the dev fingerprint id but is not a dev verification (and vice versa)', async () => {
+  await withRepo(async ({ config, app }) => {
+    const preview = synth(config, app, { mode: 'preview', fingerprint: computeFingerprint({ config, app, mode: 'preview' }) });
+    assert.equal(preview.fingerprint.id, computeFingerprint({ config, app, mode: 'dev' }).id);
+    assert.equal(verify({ config, app }).status, 'stale');
+    assert.equal(verify({ config, app }).lastVerifiedHead, null);
+    synth(config, app);
+    assert.equal(verify({ config, app }).status, 'verified');
+    assert.equal(verify({ config, app, mode: 'preview' }).status, 'stale');
+  });
+});
+
+test('verify: selected and rerun runs are not the baseline `differing` is measured against', async () => {
+  await withRepo(async ({ root, config, app }) => {
+    const { entry } = await run(config, app);
+    git(root, 'commit', '--allow-empty', '-qm', 'next');
+    await run(config, app, { testList: path.join(root, 'stub/list.json') });
+    await run(config, app, { lastFailed: true });
+    touch(root, 'src/main.ts');
+    const s = verify({ config, app });
+    assert.equal(s.status, 'stale'); assert.deepEqual(s.differing, ['head', 'diff']); assert.equal(s.lastVerifiedHead, entry.fingerprint.head);
+  });
+});
+
+test('verify: preview with no dist lists dist plus whatever else moved', async () => {
+  await withRepo(async ({ root, config, app }) => {
+    const built = await run(config, app, { mode: 'preview' });
+    rmSync(path.join(root, 'dist'), { recursive: true, force: true });
+    touch(root, 'src/main.ts');
+    const s = verify({ config, app, mode: 'preview' });
+    assert.equal(s.status, 'stale'); assert.deepEqual(s.differing, ['diff', 'dist']); assert.equal(s.lastVerifiedHead, built.entry.fingerprint.head);
+  });
+});
+
+test('verify: --max-age counts only recent runs; an expired match is stale with nothing differing, and says so', async () => {
+  await withRepo(async ({ config, app }) => {
+    const ago = (min) => new Date(Date.now() - min * 60_000).toISOString();
+    const old = synth(config, app, { ts: ago(10) });
+    assert.equal(verify({ config, app }).status, 'verified');
+    assert.equal(verify({ config, app, maxAgeMin: 30 }).run.id, old.id);
+    const s = verify({ config, app, maxAgeMin: 5 });
+    assert.equal(s.status, 'stale'); assert.equal(s.exitCode, 20); assert.deepEqual(s.differing, []);
+    assert.equal(s.expired.runId, old.id); assert.ok(s.expired.ageMin >= 10 && s.expired.ageMin < 12);
+    assert.equal(s.lastVerifiedHead, old.fingerprint.head);
+    const fresh = synth(config, app, { ts: ago(1) });
+    assert.equal(verify({ config, app, maxAgeMin: 5 }).run.id, fresh.id);
+    // every shard of a set has to be recent
+    synth(config, app, { kind: 'shard', shard: { index: 1, count: 2 }, ts: ago(1) });
+    synth(config, app, { kind: 'shard', shard: { index: 2, count: 2 }, ts: ago(1) });
+    assert.equal(verify({ config, app, maxAgeMin: 5 }).run.id, fresh.id);   // the full run still wins
+  });
+});
+
+test('verify: an expired shard member leaves the set incomplete', async () => {
+  await withRepo(async ({ config, app }) => {
+    const ago = (min) => new Date(Date.now() - min * 60_000).toISOString();
+    synth(config, app, { kind: 'shard', shard: { index: 1, count: 2 }, ts: ago(60) });
+    synth(config, app, { kind: 'shard', shard: { index: 2, count: 2 }, ts: ago(1) });
+    assert.equal(verify({ config, app }).status, 'verified');
+    const s = verify({ config, app, maxAgeMin: 5 });
+    assert.equal(s.status, 'insufficient'); assert.deepEqual(s.have, ['shard']);
+  });
+});
+
+test('verify: rejects arguments it cannot honour', async () => {
+  await withRepo(async ({ config, app }) => {
+    assert.throws(() => verify({ config, app, require: 'any' }), /require/);
+    assert.throws(() => verify({ config, app, maxAgeMin: -1 }), /max-age/);
+    assert.throws(() => verify({ config, app, maxAgeMin: Number.NaN }), /max-age/);
+    assert.throws(() => verify({ config, app, maxAgeMin: '5' }), /max-age/);
+    assert.throws(() => verify({ config, app, mode: 'staging' }), /unknown mode/);
+  });
+});
+
+// ---- shadow ----
+
+test('shadow: hit advances the streak, a miss resets it, trivial/unpaired do not count, promote/demote', async () => {
+  await withRepo(async ({ root, config, app, ts }) => {
+    assert.equal(readState(config).trust, 'shadow');
+    const c = realCtx(config, ts);
+    // a full run with no selection to pair with
+    const r0 = await run(config, app);
+    const u = recordShadow({ config, app, runId: r0.entry.id });
+    assert.equal(u.unpaired, true); assert.equal(u.hit, null); assert.equal(shadowStatus(config).streak, 0);
+    // partial selection + passing full run → hit
+    writeSelection(config, await computeSelection({ config, changedFiles: ['src/components/Table.ts'], ctx: c }));
+    const r1 = await run(config, app);
+    const h1 = recordShadow({ config, app, runId: r1.entry.id });
+    assert.equal(h1.hit, true); assert.equal(h1.fp, r1.entry.fingerprint.id); assert.equal(h1.streak, 1);
+    assert.equal(shadowStatus(config).streak, 1);
+    // same selection, orders fails in the full run; orders is inside the selection (it consumes Table) → hit
+    failing(root);
+    const r2 = await run(config, app);
+    assert.equal(recordShadow({ config, app, runId: r2.entry.id }).hit, true);
+    assert.equal(shadowStatus(config).promotable, true);                 // promoteAfter = 2
+    // a selection without orders → miss
+    writeSelection(config, await computeSelection({ config, changedFiles: ['src/features/cart/services/cart.ts'], ctx: c }));
+    const r3 = await run(config, app);
+    const m = recordShadow({ config, app, runId: r3.entry.id });
+    assert.equal(m.hit, false); assert.deepEqual(m.missed, [ORDERS]); assert.equal(shadowStatus(config).streak, 0);
+    assert.equal(shadowStatus(config).promotable, false);
+    // a full selection proves nothing: trivial
+    writeSelection(config, await computeSelection({ config, changedFiles: ['src/shell/Header.ts'], ctx: c }));
+    const r4 = await run(config, app);
+    const t = recordShadow({ config, app, runId: r4.entry.id });
+    assert.equal(t.trivial, true); assert.equal(t.hit, null); assert.equal(t.streak, 0);
+    promote(config); assert.equal(readState(config).trust, 'selected');
+    demote(config); assert.equal(readState(config).trust, 'shadow');
+    // every record also went to shadow.jsonl, one line each
+    const lines = readFileSync(path.join(ledgerDir(config), 'shadow.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.deepEqual(lines.map((l) => l.runId), [r0, r1, r2, r3, r4].map((r) => r.entry.id));
+  });
+});
+
+test('shadow: recording a run twice does not count it twice', async () => {
+  await withRepo(async ({ config, app }) => {
+    select(config, app, { specs: [SMOKE] });
+    const r1 = synth(config, app);
+    const a = recordShadow({ config, app, runId: r1.id });
+    assert.equal(a.hit, true); assert.equal(a.streak, 1);
+    const b = recordShadow({ config, app, runId: r1.id });
+    assert.deepEqual(b, a);
+    assert.equal(shadowStatus(config).streak, 1);
+    assert.equal(readState(config).window.length, 1);
+    assert.equal(readFileSync(path.join(ledgerDir(config), 'shadow.jsonl'), 'utf8').trim().split('\n').length, 1);
+    assert.equal(recordShadow({ config, app, runId: synth(config, app).id }).streak, 2);
+    assert.equal(recordShadow({ config, app, runId: r1.id }).streak, 1);       // the stored record, not the live streak
+    assert.equal(shadowStatus(config).streak, 2);
+  });
+});
+
+test('shadow: only an unfiltered full run can be recorded, and nothing is written when one is refused', async () => {
+  await withRepo(async ({ config, app }) => {
+    select(config, app, { specs: [SMOKE] });
+    const selected = synth(config, app, { kind: 'selected' });
+    const rerun = synth(config, app, { kind: 'rerun' });
+    const shard = synth(config, app, { kind: 'shard', shard: { index: 1, count: 2 } });
+    const filtered = synth(config, app, { filtered: true });
+    for (const r of [selected, rerun, shard]) assert.throws(() => recordShadow({ config, app, runId: r.id }), /unfiltered full run/);
+    assert.throws(() => recordShadow({ config, app, runId: filtered.id }), /unfiltered full run/);
+    assert.throws(() => recordShadow({ config, app, runId: 'run-nope' }), /run not found/);
+    // a real filtered run, as `run` records it
+    const grep = await run(config, app, { passthrough: ['--grep', 'orders'] });
+    assert.throws(() => recordShadow({ config, app, runId: grep.entry.id }), /unfiltered full run/);
+    // a failed run that reports no failure (crash, global setup) cannot show that the failures were inside the selection
+    const crashed = synth(config, app, { rc: 1, failures: [] });
+    assert.throws(() => recordShadow({ config, app, runId: crashed.id }), /no failure/);
+    assert.equal(existsSync(statePath(config)), false);
+    assert.equal(existsSync(path.join(ledgerDir(config), 'shadow.jsonl')), false);
+  });
+});
+
+test('shadow: failures are compared as spec files with the selection; added specs count as inside, removed ones as removedMissed', async () => {
+  await withRepo(async ({ config, app }) => {
+    const rec = (over) => recordShadow({ config, app, runId: synth(config, app, over).id });
+
+    select(config, app, { specs: [SMOKE, ORDERS] });
+    const inside = rec({ rc: 1, failures: [fail(ORDERS), fail(ORDERS)] });         // two tests of one spec
+    assert.equal(inside.hit, true); assert.deepEqual(inside.missed, []); assert.equal(inside.streak, 1);
+
+    select(config, app, { specs: [SMOKE] });
+    const miss = rec({ rc: 1, failures: [fail(ORDERS), fail(CART), fail(ORDERS)] });
+    assert.equal(miss.hit, false); assert.deepEqual(miss.missed, [ORDERS, CART]); assert.deepEqual(miss.removedMissed, []);
+    assert.equal(miss.streak, 0);
+
+    // `amend --add` puts the spec into the selection (and logs it under `added`)
+    const warn = mock.method(console, 'warn', () => {});
+    amendSelection(config, { app: app.name, add: [{ spec: ORDERS, reason: 'agent knows better' }] });
+    warn.mock.restore();
+    const amended = rec({ rc: 1, failures: [fail(ORDERS)] });
+    assert.equal(amended.hit, true); assert.equal(amended.streak, 1);
+
+    // an `added` entry alone is enough, too
+    select(config, app, { specs: [SMOKE], added: [{ spec: CART, reason: 'x' }] });
+    assert.equal(rec({ rc: 1, failures: [fail(CART)] }).hit, true);
+
+    // removed specs: a failure there is its own kind of miss
+    select(config, app, { specs: [SMOKE], removed: [{ spec: ORDERS, reason: 'unrelated' }] });
+    const gone = rec({ rc: 1, failures: [fail(ORDERS)] });
+    assert.equal(gone.hit, false); assert.deepEqual(gone.missed, []); assert.deepEqual(gone.removedMissed, [ORDERS]);
+    assert.equal(gone.streak, 0);
+    // added and later removed again: removed wins
+    select(config, app, { specs: [SMOKE], added: [{ spec: ORDERS, reason: 'x' }], removed: [{ spec: ORDERS, reason: 'y' }] });
+    assert.deepEqual(rec({ rc: 1, failures: [fail(ORDERS)] }).removedMissed, [ORDERS]);
+    // removed and put back: it is in the selection
+    select(config, app, { specs: [SMOKE, ORDERS], removed: [{ spec: ORDERS, reason: 'y' }] });
+    assert.equal(rec({ rc: 1, failures: [fail(ORDERS)] }).hit, true);
+
+    // a passing full run against a partial selection is a hit
+    select(config, app, { specs: [SMOKE] });
+    assert.equal(rec({}).hit, true);
+  });
+});
+
+test('shadow: a selection that does not cover the app, or runs it in full, is trivial', async () => {
+  await withRepo(async ({ config, app }) => {
+    const sel = select(config, app, { specs: [SMOKE] });
+    writeSelection(config, { ...sel, id: 'sel-other', apps: {} });
+    const none = recordShadow({ config, app, runId: synth(config, app, { rc: 1, failures: [fail(ORDERS)] }).id });
+    assert.equal(none.trivial, true); assert.equal(none.unpaired, false); assert.equal(none.selectionId, 'sel-other'); assert.equal(none.streak, 0);
+    select(config, app, { mode: 'full' });
+    const full = recordShadow({ config, app, runId: synth(config, app).id });
+    assert.equal(full.trivial, true); assert.equal(full.hit, null);
+    assert.equal(shadowStatus(config).streak, 0);
+  });
+});
+
+test('shadow: pairs with selection.json when its codeId matches, else the newest matching selection by mtime, else unpaired', async () => {
+  await withRepo(async ({ root, config, app }) => {
+    const dir = path.join(ledgerDir(config), 'selections');
+    const stamp = (id, ms) => { const t = new Date(ms); utimesSync(path.join(dir, `${id}.json`), t, t); };
+    const rec = (over = {}) => recordShadow({ config, app, runId: synth(config, app, { rc: 1, failures: [fail(ORDERS)], ...over }).id });
+    const t0 = Date.now();
+
+    // current selection.json matches → it wins even though another matching selection is newer
+    select(config, app, { id: 'sel-b', specs: [SMOKE, ORDERS], createdAt: '2026-01-02T00:00:00.000Z' });
+    select(config, app, { id: 'sel-a', specs: [SMOKE], createdAt: '2026-01-01T00:00:00.000Z' });
+    stamp('sel-a', t0 - 20_000); stamp('sel-b', t0 + 20_000);
+    const first = rec();
+    assert.equal(first.selectionId, 'sel-a'); assert.equal(first.hit, false);
+
+    // the current selection.json is for other code → newest matching file in selections/ (a non-matching one is ignored)
+    select(config, app, { id: 'sel-x', specs: [SMOKE, ORDERS, CART], codeId: 'f'.repeat(64) });
+    stamp('sel-x', t0 + 30_000);
+    const second = rec();
+    assert.equal(second.selectionId, 'sel-b'); assert.equal(second.hit, true);
+
+    stamp('sel-a', t0 + 40_000);
+    assert.equal(rec().selectionId, 'sel-a');
+
+    // no selection.json at all: the selections/ directory still pairs
+    rmSync(path.join(ledgerDir(config), 'selection.json'));
+    assert.equal(rec().selectionId, 'sel-a');
+
+    // the code moved on after `select`: nothing matches → unpaired
+    touch(root, 'src/main.ts');
+    const late = rec();
+    assert.equal(late.unpaired, true); assert.equal(late.selectionId, null); assert.equal(late.hit, null);
+  });
+});
+
+test('shadow: a corrupt selection file is skipped, not fatal', async () => {
+  await withRepo(async ({ config, app }) => {
+    select(config, app, { id: 'sel-ok', specs: [SMOKE] });
+    writeFileSync(path.join(ledgerDir(config), 'selection.json'), '{ not json');
+    writeFileSync(path.join(ledgerDir(config), 'selections', 'sel-bad.json'), '[1]');
+    const r = recordShadow({ config, app, runId: synth(config, app).id });
+    assert.equal(r.selectionId, 'sel-ok'); assert.equal(r.hit, true);
+  });
+});
+
+test('shadow: state keeps the last 20 records; an old run that left the window is still recorded only once', async () => {
+  await withRepo(async ({ config, app }) => {
+    select(config, app, { specs: [SMOKE] });
+    const first = synth(config, app);
+    recordShadow({ config, app, runId: first.id });
+    for (let i = 0; i < 21; i++) recordShadow({ config, app, runId: synth(config, app).id });
+    const st = readState(config);
+    assert.equal(st.window.length, 20); assert.equal(st.streak, 22);
+    assert.equal(st.window.some((r) => r.runId === first.id), false);
+    assert.equal(recordShadow({ config, app, runId: first.id }).runId, first.id);
+    assert.equal(readState(config).streak, 22);
+  });
+});
+
+test('shadow: status reports trust, streak, promotability, recent records and recent misses; promote needs a human, demote resets', async () => {
+  await withRepo(async ({ config, app }) => {
+    assert.deepEqual(shadowStatus(config), { trust: 'shadow', streak: 0, promoteAfter: 2, promotable: false, recent: [], recentMisses: [] });
+    select(config, app, { specs: [SMOKE] });
+    const rec = (over) => recordShadow({ config, app, runId: synth(config, app, over).id });
+    rec({ rc: 1, failures: [fail(ORDERS)] });
+    for (let i = 0; i < 6; i++) rec({});
+    let s = shadowStatus(config);
+    assert.equal(s.streak, 6); assert.equal(s.promotable, true); assert.equal(s.recent.length, 5);
+    assert.deepEqual(s.recentMisses.map((m) => m.missed), [[ORDERS]]);
+    promote(config);
+    s = shadowStatus(config);
+    assert.equal(s.trust, 'selected'); assert.equal(s.promotable, false); assert.equal(s.streak, 6);
+    demote(config);
+    s = shadowStatus(config);
+    assert.equal(s.trust, 'shadow'); assert.equal(s.streak, 0); assert.equal(s.promotable, false);
+    // promote is the human's call: it works even before the streak is long enough
+    promote(config);
+    assert.equal(readState(config).trust, 'selected');
+  });
+});
+
+test('shadow: state.json defaults to shadow, round-trips, and a damaged file falls back to shadow with a warning', async () => {
+  await withRepo(async ({ config }) => {
+    const warn = mock.method(console, 'warn', () => {});
+    try {
+      assert.deepEqual(readState(config), { trust: 'shadow', streak: 0, window: [] });
+      assert.equal(existsSync(statePath(config)), false);
+      writeState(config, { trust: 'selected', streak: 4, window: [{ runId: 'x' }] });
+      assert.deepEqual(readState(config), { trust: 'selected', streak: 4, window: [{ runId: 'x' }] });
+      assert.equal(warn.mock.callCount(), 0);
+      writeFileSync(statePath(config), '{ nope');
+      assert.deepEqual(readState(config), { trust: 'shadow', streak: 0, window: [] });
+      assert.equal(warn.mock.callCount(), 1); assert.match(warn.mock.calls[0].arguments[0], /state\.json/);
+      writeFileSync(statePath(config), JSON.stringify({ trust: 'trusted', streak: -3, window: 'x' }));
+      assert.deepEqual(readState(config), { trust: 'shadow', streak: 0, window: [] });
+      assert.equal(warn.mock.callCount(), 2);
+    } finally { warn.mock.restore(); }
+  });
+});
