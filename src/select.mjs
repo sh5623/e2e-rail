@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { appDir, findApp, ledgerDir } from './config.mjs';
 import { matchAny, matchGlob, walk } from './util/glob.mjs';
@@ -234,11 +234,16 @@ export function testListLines(appSel) {
   return appSel.specs.flatMap((s) => s.projects.map((p) => `[${p}] › ${path.posix.relative(appSel.rootDir, s.file)}`));
 }
 
-// `.e2e-rail/test-list.<app>.txt` per partial app (a full app gets none, and loses a stale one), then
-// `selections/<id>.json` and `selection.json` (the current selection) last.
+// `.e2e-rail/test-list.<app>.txt` per partial app (a full app gets none, and loses a stale one; so does an app the
+// selection does not cover, e.g. after `select --app`), then `selections/<id>.json` and `selection.json` (the current
+// selection) last.
 export function writeSelection(config, selection) {
   const dir = ledgerDir(config);
   mkdirSync(path.join(dir, 'selections'), { recursive: true });
+  for (const name of readdirSync(dir)) {
+    const m = /^test-list\.(.+)\.txt$/.exec(name);
+    if (m && !Object.hasOwn(selection.apps, m[1])) rmSync(path.join(dir, name), { force: true });
+  }
   const testLists = {};
   for (const [name, a] of Object.entries(selection.apps)) {
     const abs = path.join(dir, `test-list.${name}.txt`);

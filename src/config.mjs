@@ -2,7 +2,12 @@ import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export class ConfigError extends Error {}
+export class ConfigError extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = 'ConfigError';
+  }
+}
 export const CONFIG_FILE = 'e2e-rail.config.mjs';
 const ADAPTERS = new Set(['react-router-lazy', 'manual']);
 
