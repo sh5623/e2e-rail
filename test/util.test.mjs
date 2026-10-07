@@ -203,3 +203,21 @@ test('execInherit: shell command lines, the child handed out, a signal death as 
   assert.deepEqual(r, process.platform === 'win32' ? r : { status: 143, signal: 'SIGTERM' });
   assert.equal((await execInherit('e2e-rail-no-such-command', [])).status, 1);
 });
+
+test('execInherit: a command that cannot be spawned resolves status 1 with the spawn error; other results carry none', async () => {
+  const missing = await execInherit('e2e-rail-no-such-command', []);
+  assert.equal(missing.status, 1);
+  assert.equal(missing.signal, null);
+  assert.equal(missing.error.code, 'ENOENT');
+  assert.deepEqual(await execInherit(process.execPath, ['-e', 'process.exit(4)']), { status: 4, signal: null });
+  if (process.platform !== 'win32') {
+    const dir = mkdtempSync(path.join(tmpdir(), 'e2e-rail-exec-'));
+    try {
+      const script = path.join(dir, 'not-executable.sh');
+      writeFileSync(script, '#!/bin/sh\nexit 0\n', { mode: 0o644 });
+      const denied = await execInherit(script, []);
+      assert.equal(denied.status, 1);
+      assert.equal(denied.error.code, 'EACCES');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});

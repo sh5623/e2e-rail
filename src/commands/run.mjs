@@ -3,7 +3,6 @@ import path from 'node:path';
 import { findApp, ledgerDir, loadConfig } from '../config.mjs';
 import { runTests } from '../run.mjs';
 import { codeIdOf, readSelection, testListLines } from '../select.mjs';
-import { readState } from '../shadow.mjs';
 import { oneOf, parse, positiveInt, printUsage, UsageError } from './_args.mjs';
 
 const OPTIONS = {
@@ -96,6 +95,6 @@ export default async function run(argv) {
   if (entry.shard?.plan?.startsWith('adhoc:')) {
     console.log('note: this test list has no `shard plan` manifest beside it, so the run is recorded as an adhoc shard and never completes a full set (use the lists `e2e-rail shard plan` writes)');
   }
-  if (entry.kind === 'selected' && readState(config).trust === 'shadow') console.log('shadowed: a selected run does not replace a full run while trust=shadow');
+  if (entry.shadowed) console.log('shadowed: a selected run does not replace a full run while trust=shadow');
   return rc;
 }

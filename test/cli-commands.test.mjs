@@ -213,7 +213,7 @@ test('map --check: one verdict per app — narrowing possible, or why every src 
   assert.match(broken.stdout, /verdict: every src change will run full: 1 internal import/);
 }));
 
-test('select → run --selection → verify round trip with exit codes', () => withRepo(({ run, at }) => {
+test('select → run --selection → verify round trip with exit codes', () => withRepo(({ root, run, at }) => {
   const full = run(['select', '--base', 'nope']);
   assert.equal(full.code, 10, full.out);
   assert.match(full.stdout, /web\s+full/);
@@ -237,6 +237,7 @@ test('select → run --selection → verify round trip with exit codes', () => w
   assert.equal(r.code, 0, r.out);
   assert.match(r.stdout, /^run-id run-\S+ · kind selected · rc 0 · \d+ms · failures 0$/m);
   assert.match(r.stdout, /^shadowed: a selected run does not replace a full run while trust=shadow$/m);
+  assert.equal(ledgerLines(root).at(-1).shadowed, true);
   const v1 = run(['verify']);
   assert.equal(v1.code, 21, v1.out);
   assert.match(v1.stdout, /^insufficient: /);
@@ -439,6 +440,9 @@ test('measure slowest / retries / workers print tables from the ledger', () => w
 
 test('lock run holds the lock around a command and passes its rc through; status and reap need no config', () => withRepo(({ run, lockRoot }) => {
   assert.equal(run(['lock', 'run', 'light', '--', process.execPath, '-e', 'process.exit(3)']).code, 3);
+  const missing = run(['lock', 'run', 'light', '--', 'e2e-rail-no-such-command', 'x']);
+  assert.equal(missing.code, 127, missing.out);
+  assert.equal(missing.stderr, 'e2e-rail: cannot run e2e-rail-no-such-command: command not found (ENOENT)\n');
   const nested = run(['lock', 'run', 'heavy', '--', process.execPath, bin, 'lock', 'status']);
   assert.equal(nested.code, 0, nested.out);
   assert.match(nested.stdout, /^heavy: pid \d+ lock run: .* since \S+/m);

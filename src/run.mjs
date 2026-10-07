@@ -5,6 +5,7 @@ import { appDir, ledgerDir } from './config.mjs';
 import { computeFingerprint, distStale } from './fingerprint.mjs';
 import { appendRun, writeLastGreen } from './ledger.mjs';
 import { acquire, describeHolders, lockDir } from './lock.mjs';
+import { readState } from './shadow.mjs';
 import { execInherit } from './util/exec.mjs';
 import { sha256 } from './util/hash.mjs';
 import { newId } from './util/id.mjs';
@@ -150,6 +151,12 @@ function shardRecord({ app, dirAbs, shard, testList }) {
 }
 
 const refuse = (message) => { console.error(message); return { rc: 1, entry: null }; };
+
+// Spec §8: a selected run made while the selector is still in shadow mode is no stand-in for a full run, and its ledger
+// line says so. A state that cannot be read counts as shadow, the least trusting reading.
+function shadowTrust(config) {
+  try { return readState(config).trust === 'shadow'; } catch { return true; }
+}
 const staleDist = (preview) => `e2e-rail: dist (${preview.dist}) is missing or older than its sources. Run \`${preview.build}\` or drop --no-build.`;
 
 // Runs the host's Playwright once and appends exactly one ledger line; returns Playwright's exit code untouched.
@@ -225,6 +232,7 @@ export async function runTests({
       }
     }
     const fingerprint = computeFingerprint({ config, app, mode });
+    const shadowed = kind === 'selected' && shadowTrust(config);
     mkdirSync(path.dirname(reportAbs), { recursive: true });
     const t0 = Date.now();
     const { status } = await execInherit(process.execPath, [cli, ...args, ...forwarded], { cwd: dirAbs, env, onSpawn: track });
@@ -237,7 +245,7 @@ export async function runTests({
     const report = readReport(reportAbs);
     const entry = appendRun(config, {
       id, app: app.name, mode, kind, fingerprint, selectionId, shard: shardEntry, workers: workers ?? null, project: project ?? null,
-      filtered, command, lock: lockInfo, rc: status, durationMs,
+      filtered, shadowed, command, lock: lockInfo, rc: status, durationMs,
       rootDir: report?.config?.rootDir ? toAppRel(dirAbs, report.config.rootDir) : null,
       ...parsePlaywrightReport(report ?? { suites: [] }, dirAbs),
     });

@@ -4,11 +4,14 @@ import { execInherit } from '../util/exec.mjs';
 import { parse, printUsage, UsageError } from './_args.mjs';
 
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+const SPAWN_REASONS = { ENOENT: 'command not found', EACCES: 'permission denied' };
+const CANNOT_RUN = 127; // the shell's code for a command that could not be run
 
 const holder = (o) => `pid ${o.pid}${o.purpose ? ` ${o.purpose}` : ''} since ${o.start}${o.cwd ? ` in ${o.cwd}` : ''}${o.alive ? '' : ' (gone; `e2e-rail lock reap` removes it)'}`;
 
-// Runs `command` while holding the machine lock of class `cls`; returns its exit code. A signal goes on to the command
-// while it runs; before that (waiting for the lock) it ends this process, whose exit releases what it holds.
+// Runs `command` while holding the machine lock of class `cls`; returns its exit code, or 127 with one stderr line when
+// it cannot be started. A signal goes on to the command while it runs; before that (waiting for the lock) it ends this
+// process, whose exit releases what it holds.
 async function runLocked(cls, command) {
   let child = null;
   const onSignal = (sig) => {
@@ -22,8 +25,11 @@ async function runLocked(cls, command) {
       dir: lockDir(), cls, purpose: `lock run: ${command.join(' ')}`.slice(0, 160),
       onWait: (st) => console.error(`e2e-rail: waiting for the ${cls} lock (${describeHolders(st)})`),
     });
-    const { status } = await execInherit(command[0], command.slice(1), { onSpawn: (c) => { child = c; } });
-    return status;
+    const { status, error } = await execInherit(command[0], command.slice(1), { onSpawn: (c) => { child = c; } });
+    if (!error) return status;
+    const reason = SPAWN_REASONS[error.code] ? `${SPAWN_REASONS[error.code]} (${error.code})` : error.message;
+    console.error(`e2e-rail: cannot run ${command[0]}: ${reason}`);
+    return CANNOT_RUN;
   } finally {
     held?.release();
     for (const s of SIGNALS) process.removeListener(s, onSignal);

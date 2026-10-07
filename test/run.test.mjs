@@ -7,6 +7,7 @@ import path from 'node:path';
 import { runTests, parsePlaywrightReport, kindOf, isFiltered } from '../src/run.mjs';
 import { acquire, lockDir, lockStatus } from '../src/lock.mjs';
 import { readRuns } from '../src/ledger.mjs';
+import { promote, statePath } from '../src/shadow.mjs';
 import { planShards } from '../src/shard.mjs';
 import { loadConfig, findApp } from '../src/config.mjs';
 import { makeTempRepo, readJson, fixtureDir, stubReport } from './helpers.mjs';
@@ -19,7 +20,7 @@ async function until(fn, ms = 15_000) {
     await sleep(20);
   }
 }
-const ENTRY_FIELDS = ['app', 'mode', 'kind', 'fingerprint', 'selectionId', 'shard', 'workers', 'filtered', 'command', 'lock', 'rc', 'durationMs', 'rootDir', 'specs', 'failures', 'flaky'];
+const ENTRY_FIELDS = ['app', 'mode', 'kind', 'fingerprint', 'selectionId', 'shard', 'workers', 'filtered', 'shadowed', 'command', 'lock', 'rc', 'durationMs', 'rootDir', 'specs', 'failures', 'flaky'];
 const stubCli = (root) => path.join(root, 'node_modules/@playwright/test/cli.js');
 
 // Temp repo + loaded config + an argv capture file + a private lock dir (E2E_RAIL_LOCK_DIR, so the suite never touches
@@ -102,6 +103,28 @@ test('runTests spawns playwright with test-list + reporters, writes a ledger lin
     assert.equal(failed.rc, 1); assert.equal(failed.entry.failures.length, 1);
     assert.equal(existsSync(path.join(root, '.e2e-rail/last-green.web')), false);
   } finally { delete process.env.STUB_PW_RC; delete process.env.STUB_PW_REPORT; delete process.env.STUB_PW_ARGV_FILE; cleanup(); }
+});
+
+test('shadowed (spec §8): a selected run while trust=shadow; not after promote; never a full run; a damaged state reads as shadow', async () => {
+  await withRepo(async ({ root, config, app }) => {
+    const list = writeList(root);
+    const selected = await runTests({ config, app, testList: list, workers: 1, lock: false });
+    assert.equal(selected.entry.kind, 'selected');
+    assert.equal(selected.entry.shadowed, true);
+    const full = await runTests({ config, app, lock: false });
+    assert.equal(full.entry.kind, 'full');
+    assert.equal(full.entry.shadowed, false);
+    promote(config);
+    const promoted = await runTests({ config, app, testList: list, workers: 1, lock: false });
+    assert.equal(promoted.entry.shadowed, false);
+    writeFileSync(statePath(config), '{ not json');
+    const warn = mock.method(console, 'warn', () => {});
+    try {
+      const damaged = await runTests({ config, app, testList: list, workers: 1, lock: false });
+      assert.equal(damaged.entry.shadowed, true);
+    } finally { warn.mock.restore(); }
+    assert.deepEqual(readRuns(config).map((e) => e.shadowed), [true, false, false, true]);
+  });
 });
 
 test('preview mode builds when dist is stale and records dist hash; --no-build refuses', async () => {
