@@ -217,8 +217,8 @@ function makeIndexer({ ts, dirAbs, app, options }) {
     const spec = load(specRel);
     const supports = new Set();
     const imports = new Set();
-    // The spec plus every e2e-tree helper it pulls in, transitively: helper `route()` calls cannot be attributed
-    // to a call site without running them, so they all count (over-approximation, spec §4).
+    // The spec plus every e2e-tree helper it pulls in, transitively: helper `route()` / `goto()` calls cannot be
+    // attributed to a call site without running them, so they all count (over-approximation, spec §4).
     const reach = [spec];
     const seen = new Set([specRel]);
     for (let i = 0; i < reach.length; i++) {
@@ -229,12 +229,25 @@ function makeIndexer({ ts, dirAbs, app, options }) {
       }
     }
 
-    const routes = new Set();
-    let unresolved = spec.calls.bareGoto > 0;
+    const toRoute = (v) => settle(normalizeRoute(v, app.adapter.basePath));
+
+    // The spec's own navigation decides `unmapped`: an unresolved goto means the spec goes somewhere unreadable.
+    const own = new Set();
+    let ownUnresolved = spec.calls.bareGoto > 0;
     for (const arg of spec.calls.goto) {
       const v = str({ m: spec, depth: 0 }, arg, new Set());
-      if (v === null) unresolved = true; // skipped, but the spec can no longer be trusted to be fully mapped
-      else routes.add(settle(normalizeRoute(v, app.adapter.basePath)));
+      if (v === null) ownUnresolved = true;
+      else own.add(toRoute(v));
+    }
+    // Helpers the spec imports may navigate too (`loginAs(page)` -> /app/login). Their literal gotos are merged in;
+    // unresolvable ones (`navigateTo(page, p) { page.goto(p) }`) are ignored and never change `unmapped`, otherwise
+    // every spec using a generic helper would be unmapped. Merged routes never rescue an unmapped spec either.
+    const routes = new Set(own);
+    for (const m of reach.slice(1)) {
+      for (const arg of m.calls.goto) {
+        const v = str({ m, depth: 0 }, arg, new Set());
+        if (v !== null) routes.add(toRoute(v));
+      }
     }
 
     // Only literal and template matchers become globs (spec §4). Predicate / regex matchers are skipped on purpose:
@@ -251,7 +264,7 @@ function makeIndexer({ ts, dirAbs, app, options }) {
     const sorted = (set) => [...set].sort();
     return {
       routes: sorted(routes), apis: sorted(apis), imports: sorted(imports), supports: sorted(supports),
-      projects: [...projects], unmapped: routes.size === 0 || unresolved,
+      projects: [...projects], unmapped: own.size === 0 || ownUnresolved,
     };
   };
 }
@@ -282,15 +295,20 @@ export function specIndexKey({ config, app }) {
 }
 
 // `tests` is listTests()'s `{ rootDir, tests }`. Specs = `*.spec.*` files under specDir plus whatever else Playwright
-// lists there (a custom testMatch), minus tiers.ignore.
+// lists there (a custom testMatch), minus tiers.ignore. A test file Playwright lists outside specDir is not read (the
+// cache key does not cover it) but is still indexed, always `unmapped`, so the selector cannot silently skip it.
 export function buildSpecIndex({ config, app, ts, tests }) {
   const dirAbs = appDir(config, app);
   const index = makeIndexer({ ts, dirAbs, app, options: readCompilerOptions(ts, dirAbs, app.tsconfig).options });
+  const inSpecDir = (rel) => rel.startsWith(`${app.specDir}/`);
   const known = new Set(specFiles(config, app));
-  for (const rel of Object.keys(tests.tests)) if (rel.startsWith(`${app.specDir}/`)) known.add(rel);
+  for (const rel of Object.keys(tests.tests)) if (inSpecDir(rel)) known.add(rel);
   const specs = {};
   for (const rel of [...known].sort()) {
     if (!matchAny(app.tiers.ignore, rel) && existsSync(path.join(dirAbs, rel))) specs[rel] = index(rel, tests.tests[rel] ?? []);
+  }
+  for (const rel of Object.keys(tests.tests).sort()) {
+    if (!inSpecDir(rel)) specs[rel] = { routes: [], apis: [], imports: [], supports: [], projects: [...tests.tests[rel]], unmapped: true };
   }
   return { generatedAt: new Date().toISOString(), key: specIndexKey({ config, app }), rootDir: tests.rootDir, specs };
 }

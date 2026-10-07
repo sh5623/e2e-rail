@@ -232,6 +232,80 @@ test('route() arguments: literals and templates become globs; predicate and rege
   } finally { cleanup(); }
 });
 
+test('support-module gotos: literal ones are merged into routes, unresolvable ones are ignored', async () => {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  try {
+    put(root, 'e2e/support/open-cart.ts', "export async function openCart(page: any) { await page.goto('/app/cart'); }\n");
+    put(root, 'e2e/merge.spec.ts', [
+      "import { test } from '@playwright/test';",
+      "import { openCart } from './support/open-cart';",
+      "test('a', async ({ page }) => {",
+      '  await openCart(page);',
+      "  await page.goto('/app/orders');",
+      '});',
+    ].join('\n'));
+    put(root, 'e2e/support/navigate.ts', 'export async function navigateTo(page: any, p: string) { return page.goto(p); }\n');
+    put(root, 'e2e/generic-helper.spec.ts', [
+      "import { test } from '@playwright/test';",
+      "import { navigateTo } from './support/navigate';",
+      "test('a', async ({ page }) => {",
+      '  void navigateTo;',
+      "  await page.goto('/app/orders');",
+      '});',
+    ].join('\n'));
+    const { config, app, ts } = await setup(root);
+    const s = buildSpecIndex({ config, app, ts, tests: { rootDir: 'e2e', tests: {} } }).specs;
+    assert.deepEqual(s['e2e/merge.spec.ts'].routes, ['cart', 'orders']);
+    assert.equal(s['e2e/merge.spec.ts'].unmapped, false);
+    assert.deepEqual(s['e2e/merge.spec.ts'].supports, ['e2e/support/open-cart.ts']);
+    assert.deepEqual(s['e2e/generic-helper.spec.ts'].routes, ['orders']);
+    assert.equal(s['e2e/generic-helper.spec.ts'].unmapped, false, 'a generic navigateTo(page, p) helper must not turn every user into unmapped');
+  } finally { cleanup(); }
+});
+
+test('unmapped is decided by the spec own navigation: support routes never rescue it', async () => {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  try {
+    put(root, 'e2e/support/nav-both.ts', [
+      'export async function navigateTo(page: any, p: string) { return page.goto(p); }',
+      "export async function login(page: any) { await page.goto('/app/login'); }",
+    ].join('\n'));
+    put(root, 'e2e/helper-only.spec.ts', [
+      "import { test } from '@playwright/test';",
+      "import { navigateTo } from './support/nav-both';",
+      "test('a', async ({ page }) => {",
+      "  await navigateTo(page, '/app/orders');",
+      '});',
+    ].join('\n'));
+    const { config, app, ts } = await setup(root);
+    const e = buildSpecIndex({ config, app, ts, tests: { rootDir: 'e2e', tests: {} } }).specs['e2e/helper-only.spec.ts'];
+    assert.deepEqual(e.routes, ['login'], 'the helper literal goto is merged');
+    assert.equal(e.unmapped, true, 'the spec itself has no readable goto, so it stays unmapped');
+  } finally { cleanup(); }
+});
+
+test('test files Playwright lists outside specDir are indexed as unmapped, never read', async () => {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  try {
+    put(root, 'other/outside.spec.ts', "import { test } from '@playwright/test';\ntest('x', async ({ page }) => { await page.goto('/app/cart'); });\n");
+    const listPath = path.join(root, 'stub/list.json');
+    const list = JSON.parse(readFileSync(listPath, 'utf8'));
+    list.suites.push({
+      title: 'outside.spec.ts', file: '../other/outside.spec.ts', suites: [],
+      specs: [{ title: 'x', file: '../other/outside.spec.ts', tests: [{ projectName: 'chromium', status: 'skipped', results: [] }] }],
+    });
+    writeFileSync(listPath, JSON.stringify(list));
+    const { config, app, ts } = await setup(root);
+    const tests = listTests(appDir(config, app), app.playwrightConfig);
+    assert.deepEqual(tests.tests['other/outside.spec.ts'], ['chromium'], 'precondition: the listing reports the outside file');
+    const idx = buildSpecIndex({ config, app, ts, tests });
+    assert.deepEqual(idx.specs['other/outside.spec.ts'], {
+      routes: [], apis: [], imports: [], supports: [], projects: ['chromium'], unmapped: true,
+    });
+    assert.deepEqual(idx.specs['e2e/cart.spec.ts'].routes, ['cart'], 'specs under specDir are unaffected');
+  } finally { cleanup(); }
+});
+
 test('specIndexKey tracks spec content, support content, tsconfig and the config inputs that shape the index', async () => {
   const { root, cleanup } = makeTempRepo('sample-app');
   try {
