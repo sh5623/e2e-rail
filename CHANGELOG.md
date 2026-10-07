@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.1.0 — 2026-10-xx
+## 0.1.0 — 2026-10-07
 
-First release (not tagged yet).
+First release.
 
 ### CLI (`e2e-rail`, zero runtime dependencies, Node ≥ 20)
 
@@ -32,3 +32,12 @@ First release (not tagged yet).
   impact-analyst checklist as `references/impact-analyst.md`, mirrored by `npm run sync:codex`.
 - CI templates: GitHub Actions shard matrix, CodeBuild batch build-graph, shadow-period buildspec snippet.
 - README in English and Korean.
+
+### Tests
+
+- `npm test` runs the whole suite against a stub Playwright (`test/fixtures/sample-app`), with no network and no
+  browser.
+- `npm run test:contract` (opt-in, `E2E_RAIL_CONTRACT=1`) runs the real `@playwright/test` devDependency on a minimal
+  app: `--list --reporter=json` paths and `config.rootDir`, the `--test-list` line format
+  (`[project] › <path relative to rootDir>`), the JSON report fields the ledger parses, and a ledger line that
+  `verify --require selected` accepts. Its specs use no browser fixtures, so no browser download is needed.
