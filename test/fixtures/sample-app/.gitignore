@@ -1,0 +1,6 @@
+.e2e-rail/
+dist/
+test-results/
+playwright-report/
+blob-report/
+argv.json
