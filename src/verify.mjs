@@ -25,7 +25,8 @@ function lastVerified(runs, appName) {
 // this mode, with this fingerprint id that passed and were not narrowed (`filtered`) count. `require: 'full'` wants a
 // full run or a complete shard set; `'selected'` also takes a selected run. Exit codes: 0 verified, 20 stale (a
 // different fingerprint, with the fields that moved since the last full pass), 21 insufficient (this fingerprint only
-// has runs that do not satisfy `require`).
+// has runs that do not satisfy `require`). In preview mode an app with a `run.preview` build is never verified while
+// its dist is missing (stale, `differing` names `dist`).
 export function verify({ config, app, mode = 'dev', require = 'full', maxAgeMin = null }) {
   if (!REQUIRES.includes(require)) throw new Error(`e2e-rail: unknown --require "${require}" (expected ${REQUIRES.join(' or ')})`);
   if (maxAgeMin !== null && !(typeof maxAgeMin === 'number' && Number.isFinite(maxAgeMin) && maxAgeMin >= 0)) {
@@ -47,8 +48,10 @@ export function verify({ config, app, mode = 'dev', require = 'full', maxAgeMin 
     return selected ? { run: selected } : null;
   };
 
-  // A preview run tested the built dist. With no dist the fingerprint cannot say what was built, so no run is credited.
-  const noDist = mode === 'preview' && fingerprint.dist === null;
+  // R47: an app that declares a preview build tests the built dist in preview mode. If that dist is missing the
+  // fingerprint cannot say what was built, so no run is credited. An app that declares no preview build has no dist to
+  // name: its preview runs are matched on app + mode + fingerprint like any other.
+  const noDist = mode === 'preview' && Boolean(app.run.preview) && fingerprint.dist === null;
   const recent = noDist ? [] : matching.filter(isFresh);
   const found = settle(recent);
   if (found) return { status: 'verified', exitCode: 0, run: found.run, ...(found.shards && { shards: found.shards }), fingerprint };

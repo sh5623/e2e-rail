@@ -162,7 +162,7 @@ test('verify: a complete shard set verifies, an incomplete one is insufficient, 
   });
 });
 
-test('verify: mode is part of the match, and a preview fingerprint with no dist is never verified', async () => {
+test('verify: mode is part of the match, and for an app with a preview build a fingerprint with no dist is never verified (R47)', async () => {
   await withRepo(async ({ config, app }) => {
     assert.equal(existsSync(path.join(config.root, 'dist')), false);
     const dev = await run(config, app);                                   // dev and a dist-less preview share a fingerprint id
@@ -184,6 +184,37 @@ test('verify: mode is part of the match, and a preview fingerprint with no dist 
     assert.equal(verify({ config, app, mode: 'preview' }).status, 'stale');
     assert.equal(verify({ config, app }).status, 'verified');
   });
+});
+
+test('verify: an app that declares no preview build verifies in preview mode with no dist, on app + mode + fingerprint (R47)', async () => {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  try {
+    // the fixture with its `run.preview` block removed
+    const file = path.join(root, 'e2e-rail.config.mjs');
+    const text = readFileSync(file, 'utf8');
+    const without = text.replace("preview: { build: 'node build.mjs', dist: 'dist' }, ", '');
+    assert.notEqual(without, text);
+    writeFileSync(file, without);
+    const config = await loadConfig(root);
+    const app = findApp(config);
+    assert.equal(app.run.preview, null);
+    assert.equal(verify({ config, app, mode: 'preview' }).status, 'stale');          // nothing has run yet
+    const dev = await run(config, app);
+    const wrongMode = verify({ config, app, mode: 'preview' });
+    assert.equal(wrongMode.status, 'stale'); assert.equal(wrongMode.lastVerifiedHead, null);   // a dev run is not a preview run
+    const p = await run(config, app, { mode: 'preview' });                           // nothing to build, so no dist
+    assert.equal(p.entry.mode, 'preview'); assert.equal(p.entry.fingerprint.dist, null);
+    const v = verify({ config, app, mode: 'preview' });
+    assert.equal(v.status, 'verified'); assert.equal(v.exitCode, 0); assert.equal(v.run.id, p.entry.id);
+    assert.equal(verify({ config, app }).run.id, dev.entry.id);
+    // filtered and failed preview runs still do not count
+    touch(root, 'src/main.ts');
+    await run(config, app, { mode: 'preview', project: 'chromium' });
+    const s = verify({ config, app, mode: 'preview' });
+    assert.equal(s.status, 'stale'); assert.deepEqual(s.differing, ['diff']); assert.equal(s.lastVerifiedHead, p.entry.fingerprint.head);
+    await run(config, app, { mode: 'preview' });
+    assert.equal(verify({ config, app, mode: 'preview' }).status, 'verified');
+  } finally { cleanup(); }
 });
 
 test('verify: a dist-less preview run shares the dev fingerprint id but is not a dev verification (and vice versa)', async () => {
