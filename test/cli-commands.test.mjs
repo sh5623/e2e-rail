@@ -276,6 +276,22 @@ test('select → run --selection → verify round trip with exit codes', () => w
   assert.match(v3.stdout, /select --base [0-9a-f]{40}/);
 }));
 
+test('a filtered full run says so: --project and --grep print kind full (filtered) and a filtered: line; a plain full run neither', () => withRepo(({ root, run }) => {
+  const plain = run(['run', '--full', '--no-lock']);
+  assert.equal(plain.code, 0, plain.out);
+  assert.match(plain.stdout, /^run-id run-\S+ · kind full · rc 0 · \d+ms · failures 0$/m);
+  assert.doesNotMatch(plain.stdout, /\(filtered\)/);
+  assert.doesNotMatch(plain.stdout, /^filtered:/m);
+  assert.equal(ledgerLines(root).at(-1).filtered, false);
+  for (const args of [['--project', 'chromium'], ['--', '--grep', 'cart']]) {
+    const r = run(['run', '--full', '--no-lock', ...args]);
+    assert.equal(r.code, 0, `${args.join(' ')} → ${r.out}`);
+    assert.match(r.stdout, /^run-id run-\S+ · kind full \(filtered\) · rc 0 · \d+ms · failures 0$/m, args.join(' '));
+    assert.match(r.stdout, /^filtered: --project\/--grep run is not a full verification$/m, args.join(' '));
+    assert.equal(ledgerLines(root).at(-1).filtered, true);
+  }
+}));
+
 test('run --selection: test list rebuilt from the selection it reads ([id]); full selection runs full; 0 specs skips', () => withRepo(({ root, run, at }) => {
   const argvFile = at('argv.json');
   assert.equal(run(['select', '--base', 'HEAD']).code, 0); // nothing changed: partial with no spec

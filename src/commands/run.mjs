@@ -89,12 +89,15 @@ export default async function run(argv) {
     blob: Boolean(values.blob), lock: !values['no-lock'], build: !values['no-build'], selectionId, passthrough,
   });
   if (!entry) return rc; // refused or the preview build failed: runTests said why, no ledger line
-  console.log(`run-id ${entry.id} · kind ${entry.kind} · rc ${entry.rc} · ${entry.durationMs}ms · failures ${entry.failures.length}`);
+  // A narrowed run (--project, --grep, a file filter) is never a full pass, whatever its kind: both lines say so.
+  const kind = `${entry.kind}${entry.filtered ? ' (filtered)' : ''}`;
+  console.log(`run-id ${entry.id} · kind ${kind} · rc ${entry.rc} · ${entry.durationMs}ms · failures ${entry.failures.length}`);
   for (const f of entry.failures.slice(0, SHOWN_FAILURES)) console.log(`  failed: ${f.file} › ${f.title} [${f.project}]${f.error ? ` — ${f.error}` : ''}`);
   if (entry.failures.length > SHOWN_FAILURES) console.log(`  … and ${entry.failures.length - SHOWN_FAILURES} more (ledger ${entry.id})`);
   if (entry.shard?.plan?.startsWith('adhoc:')) {
     console.log('note: this test list has no `shard plan` manifest beside it, so the run is recorded as an adhoc shard and never completes a full set (use the lists `e2e-rail shard plan` writes)');
   }
+  if (entry.filtered) console.log('filtered: --project/--grep run is not a full verification');
   if (entry.shadowed) console.log('shadowed: a selected run does not replace a full run while trust=shadow');
   return rc;
 }
