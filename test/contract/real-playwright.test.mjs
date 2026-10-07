@@ -1,0 +1,109 @@
+// Contract test: the stub Playwright in test/fixtures/sample-app stands in for the real one everywhere else. This file
+// runs the REAL @playwright/test (the repo's devDependency) against test/fixtures/contract-app and pins the assumptions
+// the stub encodes: --list JSON paths and config.rootDir, the --test-list line format, the JSON report fields that
+// flattenSuites / parsePlaywrightReport read, and a ledger line that `verify` accepts. Opt in with E2E_RAIL_CONTRACT=1
+// (npm run test:contract). The fixture's specs use no browser fixtures, so no browser download is needed.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { makeTempRepo } from '../helpers.mjs';
+import { loadConfig, findApp } from '../../src/config.mjs';
+import { readRuns } from '../../src/ledger.mjs';
+import { verify } from '../../src/verify.mjs';
+import { execCapture } from '../../src/util/exec.mjs';
+import { flattenSuites, listTests } from '../../src/util/playwright.mjs';
+
+const skip = process.env.E2E_RAIL_CONTRACT ? false : 'set E2E_RAIL_CONTRACT=1 (npm run test:contract) to run the real-Playwright contract test';
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.join(here, '../..');
+const driver = path.join(here, 'run-driver.mjs');
+
+// A temp repo from the contract fixture whose node_modules is a link to this repo's, so the real @playwright/test
+// resolves from the app dir exactly as it would in an adopter's repo (the fixture gitignores the link). The machine
+// lock is moved to a private temp dir (the driver process inherits it); the env is restored after.
+async function withContractApp(fn) {
+  const { root, cleanup } = makeTempRepo('contract-app');
+  const lockRoot = mkdtempSync(path.join(tmpdir(), 'e2e-rail-lockdir-'));
+  const previousLockDir = process.env.E2E_RAIL_LOCK_DIR;
+  process.env.E2E_RAIL_LOCK_DIR = lockRoot;
+  try {
+    symlinkSync(path.join(repoRoot, 'node_modules'), path.join(root, 'node_modules'), 'dir');
+    const config = await loadConfig(root);
+    await fn({ root, config, app: findApp(config) });
+  } finally {
+    if (previousLockDir === undefined) delete process.env.E2E_RAIL_LOCK_DIR;
+    else process.env.E2E_RAIL_LOCK_DIR = previousLockDir;
+    rmSync(lockRoot, { recursive: true, force: true });
+    cleanup();
+  }
+}
+
+// Writes `.e2e-rail/list.txt` and runs `runTests({ testList, workers: 1 })` against the real Playwright in a child
+// process. Returns { rc, entry }; the child's own output is only shown when it fails.
+function runList(root, lines) {
+  mkdirSync(path.join(root, '.e2e-rail'), { recursive: true });
+  const list = path.join(root, '.e2e-rail/list.txt');
+  writeFileSync(list, `${lines.join('\n')}\n`);
+  const resultFile = path.join(root, '.e2e-rail/driver-result.json');
+  const r = execCapture(process.execPath, [driver, root, resultFile, list], { cwd: root });
+  assert.equal(r.status, 0, `run-driver failed (rc ${r.status}):\n${r.stderr}\n${r.stdout}`);
+  return JSON.parse(readFileSync(resultFile, 'utf8'));
+}
+const reportOf = (root, entry) => JSON.parse(readFileSync(path.join(root, '.e2e-rail/reports', `${entry.id}.json`), 'utf8'));
+const rows = (entry) => entry.specs.map((s) => [s.file, s.project, s.status]);
+
+test('real playwright: --list paths and rootDir, --test-list line format, JSON report fields, ledger line and verify', { skip }, async () => {
+  await withContractApp(async ({ root, config, app }) => {
+    // ① --list: rootDir is resolve(configDir, testDir), spec paths come back app-relative, projects per spec.
+    const listed = listTests(root, app.playwrightConfig);
+    assert.equal(listed.rootDir, 'e2e');
+    assert.deepEqual(listed.tests, { 'e2e/a.spec.ts': ['chromium'], 'e2e/b.spec.ts': ['chromium', 'narrow'] });
+
+    // ② --test-list: `[project] › <path relative to rootDir>` runs a.spec.ts and nothing else.
+    const { rc, entry } = runList(root, ['[chromium] › a.spec.ts']);
+    assert.equal(rc, 0);
+    assert.equal(entry.kind, 'selected');
+    assert.equal(entry.rootDir, 'e2e');
+    assert.deepEqual(rows(entry), [['e2e/a.spec.ts', 'chromium', 'passed']]);
+    assert.deepEqual(entry.failures, []);
+
+    // The JSON report the ledger line was parsed from: config.rootDir and suites[].file are what flattenSuites expects.
+    const report = reportOf(root, entry);
+    assert.equal(report.config.rootDir, path.join(root, 'e2e'));
+    assert.deepEqual(report.suites.map((s) => s.file), ['a.spec.ts']);
+    assert.deepEqual(
+      flattenSuites(report, root).map((t) => [t.file, t.title, t.project, t.status]),
+      [['e2e/a.spec.ts', 'a runs', 'chromium', 'expected']],
+    );
+
+    // ③ one ledger line, held under the (isolated) light lock, and `verify --require selected` accepts it.
+    const runs = readRuns(config, { app: app.name });
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0].id, entry.id);
+    assert.equal(runs[0].lock.class, 'light');
+    const v = verify({ config, app, require: 'selected' });
+    assert.equal(v.status, 'verified');
+    assert.equal(v.run.id, entry.id);
+    assert.equal(verify({ config, app, require: 'full' }).status, 'insufficient');
+  });
+});
+
+test('real playwright: a project prefix and a describe title path select one test; app-relative lines select none', { skip }, async () => {
+  await withContractApp(async ({ root }) => {
+    const { rc, entry } = runList(root, ['[narrow] › b.spec.ts › group › b runs']);
+    assert.equal(rc, 0);
+    assert.deepEqual(rows(entry), [['e2e/b.spec.ts', 'narrow', 'passed']]);
+    // b.spec.ts keeps its test in a nested suite; flattenSuites still reaches it through the file-level suite.
+    const report = reportOf(root, entry);
+    assert.deepEqual(report.suites.map((s) => s.file), ['b.spec.ts']);
+    assert.deepEqual(flattenSuites(report, root).map((t) => [t.file, t.title, t.project]), [['e2e/b.spec.ts', 'b runs', 'narrow']]);
+
+    // The base is rootDir, not the app dir: the same file spelled from the app dir matches nothing (Playwright says
+    // nothing about it and exits 0, so a list written against the wrong base would otherwise pass unnoticed).
+    const wrongBase = runList(root, ['[chromium] › e2e/a.spec.ts']);
+    assert.deepEqual(wrongBase.entry.specs, []);
+  });
+});
