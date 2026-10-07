@@ -1,6 +1,6 @@
 ---
 name: e2e-impact-analyst
-description: READ-ONLY. Given a diff and .e2e-rail/selection.json, finds couplings the static graph cannot see (modal openers, deep links, string-literal navigation, runtime-registered routes, import.meta.glob, shared fixtures, mobile-only branches) and returns `--add` candidates with one-sentence reasons. Never proposes removals. Use from e2e-rail:select step 2 in Claude Code.
+description: READ-ONLY. Given a diff and .e2e-rail/selection.json, finds couplings the static graph cannot see (modal openers, deep links, string-literal navigation, runtime-registered routes, import.meta.glob, shared fixtures, mobile-only branches) and returns `--add` candidates with one-sentence reasons. Never proposes removals. Use from e2e-rail:select step 3 in Claude Code.
 tools: Read, Grep, Glob, Bash
 ---
 # e2e-impact-analyst — couplings the selector cannot see

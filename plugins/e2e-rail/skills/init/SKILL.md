@@ -11,8 +11,8 @@ From the repository root. npm or yarn repos: `npx e2e-rail` instead of `pnpm exe
 ```sh
 pnpm exec e2e-rail --version
 ```
-A version (`0.1.0`) → installed. Otherwise add the devDependency — a `package.json` and lockfile change, so name it
-in your report:
+A version (`0.1.0`) → installed. Otherwise ask the human first: adding the devDependency edits `package.json` and the
+lockfile, and nothing edits `package.json` without a yes. On a yes:
 ```sh
 pnpm add -D github:sh5623/e2e-rail#v0.1.0
 ```
@@ -51,12 +51,15 @@ Per app, read:
   `adapter.routeFiles` until `adapter unresolved 0`.
 - `graph: <files> files · missing <x> · opaque <y> · main <entry>` — `missing` above 0 means imports that do not
   resolve (fix `tsconfig`/`paths`); while it is, every src change runs the app in full. `main none` → set `main`.
+- `warning: <n> tests outside specDir — set specDir to Playwright rootDir …` and its `outside:` lines — those test
+  files are indexed `unmapped` (they run on every src change) and never read: point `specDir` at that rootDir.
 - `verdict: narrowing possible (…)` or `verdict: every src change will run full: <why>` — fix what it names.
 - `unmapped: <u>/<n> (<p>%) — these run on every src change`, then the list.
 
 Why one spec maps as it does: `pnpm exec e2e-rail map --app <app> --explain e2e/<spec>.spec.ts` prints its routes,
 apis, imports, supports, projects and `unmapped`. A spec is unmapped when its own `goto` calls cannot be read as a
-literal route (a computed URL, a bare `goto(…)` helper) or it has none.
+literal route (a computed URL, a bare `goto(…)` helper) or it has none, or when it or a helper it imports has an import
+inside the app that does not resolve.
 
 ## 5. Report
 ```
@@ -66,7 +69,8 @@ map:      <n> specs · <m> route entries · adapter unresolved <k> · graph miss
 verdict:  <the verdict line, verbatim>
 unmapped: <u>/<n> (<p>%) — top 5: <spec — why it cannot be mapped>
 proposal: <per top unmapped spec: the literal route constant to goto, e.g. ROUTES.orders = '/app/orders'>
-scripts:  <the three package.json scripts init suggested> — add them?
+scripts:  <the three package.json scripts init suggested (run and verify with `--mode preview` when the app declares
+          run.preview)> — add them?
 next:     gate the full suite with `run --full`; trust starts as shadow (e2e-rail:shadow)
 ```
 Ask before adding the suggested `package.json` scripts; never edit `package.json` without a yes. Do not commit the

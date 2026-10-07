@@ -78,14 +78,13 @@ codex plugin add e2e-rail@e2e-rail-codex
 | 1 | `ignore` 나 앱의 `tiers.ignore` 에 맞거나(`specDir` 아래 테스트 파일은 예외) 원장 디렉터리 안 | 무시 |
 | 2 | `shared` 에 맞음 | 전 앱 전수(`shared:<file>`) |
 | 3 | 어느 앱 root 에도 속하지 않거나 설정 root 밖 | 전 앱 전수(`unknown-root:<file>`) |
-| 4 | 앱의 `tiers.full` 에 맞음(`supportDirs/**`, Playwright 설정, `package.json` 은 항상 포함) | 그 앱 전수(`tier-full:<glob>`) |
+| 4 | 앱의 `tiers.full` 에 맞음(`supportDirs/**` 는 뺄 수 없고, Playwright 설정, `package.json` 과 함께 항상 포함) | 그 앱 전수(`tier-full:<glob>`) |
 | 5 | `specDir` 의 테스트 파일(`*.spec.*` 또는 `*.test.*`) | 그 spec(`spec-self:<file>`). Playwright 가 나열하지 않아 인덱스가 모르는 파일이면 앱 전수(`spec-unindexed:<file>`) |
-| 6 | `supportDirs` 아래(`tiers.full` 에서 뺐을 때) | 그 앱 전수(`support:<file>`) |
-| 7 | `srcDir` 아래 | 닿는 spec(아래). 사각지대가 있으면 앱 전수 |
-| 8 | 그 밖의 앱 파일 | 그 앱 전수(`app-other:<file>`) |
+| 6 | `srcDir` 아래 | 닿는 spec(아래). 사각지대가 있으면 앱 전수 |
+| 7 | 그 밖의 앱 파일 | 그 앱 전수(`app-other:<file>`) |
 | – | base 없음, 또는 git 이 diff 를 못 냄 | 전 앱 전수(`no-base`) |
 
-7행에서는 import 그래프가 변경 파일에서 위로 올라가 닿는 라우트 엔트리를 찾는다. spec 은 그 라우트가 닿은 라우트와
+6행에서는 import 그래프가 변경 파일에서 위로 올라가 닿는 라우트 엔트리를 찾는다. spec 은 그 라우트가 닿은 라우트와
 맞거나(`route:<route> ← <file>`), `page.route()` 목이 변경 파일의 API 리터럴과 맞거나(`api:<glob> ← <literal>`),
 변경에 의존하는 코드를 import 하면(`import:<file>`) 선택된다. 모든 `unmapped` spec 과 `alwaysRun` spec 이 함께 탄다.
 어댑터가 라우트 표를 못 읽거나(`adapter-unresolved:…`), 변경 파일이 그래프에 없거나 내부 import 가 하나라도 풀리지
@@ -129,7 +128,7 @@ Playwright 버전, preview 모드면 빌드된 `dist` 해시. `id` 는 그 전�
 | `init` | `--force` | `e2e-rail.config.mjs` 작성 · `.gitignore` 줄 · 제안 스크립트 · 0 |
 | `map` | `--app <name>` · `--check` · `--explain <spec>` | `app <name>: <n> specs indexed · …` · `--check` 면 `graph:`, `verdict:`, `unmapped: <u>/<n> (<p>%)` · 0 |
 | `select` | `--app <name>` · `--base <ref>` · `--head <ref>` · `--no-uncommitted` · `--json` · `--add <spec>` · `--remove <spec>` · `--reason <text>` | 표 `app  mode  specs  unmapped  reasons` · `selection.json` · `test-list.<app>.txt` · 0 partial · 10 full |
-| `run` | `--app <name>` · `--full` · `--selection [id]` · `--test-list <file>` · `--last-failed` · `--mode dev\|preview` · `--workers N` · `--project <name>` · `--shard i/n` · `--blob` · `--no-lock` · `--no-build` · `-- <playwright args>` | `run-id <id> · kind <kind> · rc <rc> · <ms>ms · failures <n>` · `failed:` 줄 · `filtered: …` · `shadowed: …` · Playwright 종료 코드 |
+| `run` | `--app <name>` · `--full` · `--selection [id]` · `--test-list <file>` · `--last-failed` · `--mode dev\|preview` · `--workers N` · `--project <name>` · `--shard i/n` · `--blob` · `--no-lock` · `--no-build` · `-- <playwright args>` | `run-id <id> · kind <kind> · rc <rc> · <ms>ms · failures <n>` · `failed:` 줄 · `filtered: …` · `shadowed: …` · Playwright 종료 코드(test list 가 아무것도 맞히지 못하면 1) |
 | `verify` | `--app <name>` · `--mode dev\|preview` · `--require full\|selected` · `--max-age <min>` · `--json` | `verified: …` 0 · `stale: …` 20 · `insufficient: …` 21 |
 | `shadow` | `record --run <run-id> [--app <name>]` · `status` · `promote` · `demote` | `shadow: <run-id> hit\|miss\|trivial\|unpaired · streak <s>/<n>` · `trust <t> · streak <s>/<n> · promotable <yes\|no>` · 0 |
 | `measure` | `--app <name>` · `slowest [-n N]` · `retries [--last N]` · `workers <1,2,4> --test-list <file> [--mode dev\|preview]` | 표 · 0 |
@@ -142,7 +141,9 @@ Playwright 버전, preview 모드면 빌드된 `dist` 해시. `id` 는 그 전�
 실행 전에 거부된다. `--project`, `-- --grep`, 파일 필터로 좁힌 실행은 `kind full (filtered)` 로 찍히고 검증도
 last-green 이동도 하지 않는다. 그 앱의 test-list 줄을 하나도 쓰지 않는 선택으로 `run --selection` 을 하면
 `<app>: nothing selected (partial, 0 specs)`(선택된 spec 에 Playwright 프로젝트가 없으면 `…, <n> spec(s), 0 test-list lines`)를
-찍고 아무것도 돌리거나 기록하지 않는다.
+찍고 아무것도 돌리거나 기록하지 않는다. test list(선택, 샤드 계획, `--test-list <file>`)로 돈 실행에서 목록이 어떤
+테스트와도 맞지 않으면 Playwright 는 0 으로 끝나지만 실패로 기록된다(rc 1, `failed: test list matched no tests`). 맞는
+테스트가 없는 줄이 하나라도 있어도 그렇다(`failed: test list line matched no tests: <line>`).
 
 ## 섀도 모드
 
@@ -261,6 +262,27 @@ export default {
   실행을 실패시킨다). `shard plan --mode preview` 는 preview 환경에서 나열한다. 프로젝트 구성을 모드와 무관하게 두거나,
   preview 게이트는 `run --full` 로 돌린다.
 
+아래 모양은 잘못 좁히지는 않지만 늘 앱 전수로 돈다(샘플 앱에서 실측).
+
+- **`export default [...]` 로 쓰고 다른 라우트 파일에서 펼친 라우트 표**
+  (`import cartRoutes from './routes'` … `children: [...cartRoutes]`): 어댑터는 `const` 배열만 따라간다.
+  `map --check` 는 `! src/router.ts:6: spread of 'cartRoutes' is not a const array literal declared in this file or
+  in a file routeFiles covers (imported from '@/features/cart/routes')` 와
+  `verdict: every src change will run full: the react-router-lazy adapter could not read 1 route definition(s) …` 를
+  찍고, `select` 는 `adapter-unresolved:…` 를 찍는다. `export const cartRoutes = [...]` 로 내보낸다.
+- **페이지가 로컬 `lazy()` 상수나 화살표 함수인 리프**: `const Page = lazy(() => import('./Page'))` 를
+  `Component: Page` 나 `element: <Page />` 로 쓰거나 `Component: () => <Page …/>` 를 쓴 경우. 그 라우트는 엔트리가
+  없다. `map --check` 는 `!` 줄을 찍지 않고(`route entries` 수가 라우트보다 하나 적고, verdict 는 여전히
+  `narrowing possible` 일 수 있다), 그 페이지를 고치면 라우트 표를 거쳐 앱 엔트리에 닿아 `select` 가
+  `graph-shell:<page file>` 을 찍는다. 라우트의 `lazy` 필드나 import 한 페이지를 쓴 `Component:` 를 쓴다.
+- **`srcDir` 아래의 코드 아닌 파일**(`.css`, `.svg`, `.json` 등): import 그래프에 없다. `map --check` 는 아무 말도
+  하지 않고, 고치면 `select` 가 `graph-unresolved:<file>` 을 찍는다.
+
+지문의 `config` 필드는 `e2e-rail.config.mjs` 와 앱의 Playwright 설정만 해시하고, `playwright.config.ts` 가 import 하는
+로컬 모듈은 넣지 않는다. 그런 모듈을 고치면 `head`, `diff`, `untracked` 중 하나는 여전히 움직인다(`verify` 는 stale 이고
+`differing` 은 `config` 가 아니라 그것을 가리킨다). 설정이 읽는 gitignore 된 파일(예: env 파일)은 전혀 덮지 않는다.
+`verify` 가 볼 수 없으니 그 파일을 바꾼 뒤에는 스위트를 다시 돌린다.
+
 ## 플러그인 층
 
 | 스킬 | 언제 | 무엇을 강제하나 |
@@ -275,7 +297,7 @@ export default {
 
 ```text
 change:   order search filter (src/features/orders/OrderSearchFilter.tsx +2 more)
-selected: orders · order-detail (reasons: route:orders ← OrdersPage.tsx · api:**/api/orders/** ← services/orders.ts)
+selected: orders · order-detail (reasons: route:orders ← OrdersPage.tsx · api:**/api/orders/** ← /api/orders/list)
 added:    none      removed: none
 mobile:   orders
 unmapped: 1 (map --check lists them)

@@ -78,14 +78,13 @@ About 30 minutes per repository.
 | 1 | matches `ignore` or the app's `tiers.ignore` (never a test file under `specDir`), or lies in the ledger dir | ignored |
 | 2 | matches `shared` | every app full (`shared:<file>`) |
 | 3 | outside every app root, or outside the config root | every app full (`unknown-root:<file>`) |
-| 4 | matches the app's `tiers.full` (always includes `supportDirs/**`, the Playwright config, `package.json`) | that app full (`tier-full:<glob>`) |
+| 4 | matches the app's `tiers.full` (always includes `supportDirs/**`, which cannot be removed, the Playwright config and `package.json`) | that app full (`tier-full:<glob>`) |
 | 5 | a test file (`*.spec.*` or `*.test.*`) in `specDir` | that spec (`spec-self:<file>`); one Playwright does not list (so the index does not know it): app full (`spec-unindexed:<file>`) |
-| 6 | under `supportDirs` (if you took them out of `tiers.full`) | that app full (`support:<file>`) |
-| 7 | under `srcDir` | the specs it reaches (below); a blind spot runs the app full |
-| 8 | any other file of the app | that app full (`app-other:<file>`) |
+| 6 | under `srcDir` | the specs it reaches (below); a blind spot runs the app full |
+| 7 | any other file of the app | that app full (`app-other:<file>`) |
 | – | no base, or git cannot diff | every app full (`no-base`) |
 
-For row 7 the import graph climbs from the changed files to the route entries they reach. A spec is selected when its
+For row 6 the import graph climbs from the changed files to the route entries they reach. A spec is selected when its
 routes match a reached route (`route:<route> ← <file>`), its `page.route()` mocks match an API literal in the changed
 files (`api:<glob> ← <literal>`), or it imports code that depends on the change (`import:<file>`). Every `unmapped`
 spec and every `alwaysRun` spec ride along. The app runs in full instead when the adapter cannot read a route table
@@ -133,7 +132,7 @@ run does not count. A rerun never counts. Preview mode rebuilds a missing or sta
 | `init` | `--force` | writes `e2e-rail.config.mjs` · `.gitignore` lines · suggested scripts · 0 |
 | `map` | `--app <name>` · `--check` · `--explain <spec>` | `app <name>: <n> specs indexed · …` · with `--check`: `graph:`, `verdict:`, `unmapped: <u>/<n> (<p>%)` · 0 |
 | `select` | `--app <name>` · `--base <ref>` · `--head <ref>` · `--no-uncommitted` · `--json` · `--add <spec>` · `--remove <spec>` · `--reason <text>` | the table `app  mode  specs  unmapped  reasons` · `selection.json` · `test-list.<app>.txt` · 0 partial · 10 full |
-| `run` | `--app <name>` · `--full` · `--selection [id]` · `--test-list <file>` · `--last-failed` · `--mode dev\|preview` · `--workers N` · `--project <name>` · `--shard i/n` · `--blob` · `--no-lock` · `--no-build` · `-- <playwright args>` | `run-id <id> · kind <kind> · rc <rc> · <ms>ms · failures <n>` · `failed:` lines · `filtered: …` · `shadowed: …` · Playwright's exit code |
+| `run` | `--app <name>` · `--full` · `--selection [id]` · `--test-list <file>` · `--last-failed` · `--mode dev\|preview` · `--workers N` · `--project <name>` · `--shard i/n` · `--blob` · `--no-lock` · `--no-build` · `-- <playwright args>` | `run-id <id> · kind <kind> · rc <rc> · <ms>ms · failures <n>` · `failed:` lines · `filtered: …` · `shadowed: …` · Playwright's exit code (1 when a test list matched nothing) |
 | `verify` | `--app <name>` · `--mode dev\|preview` · `--require full\|selected` · `--max-age <min>` · `--json` | `verified: …` 0 · `stale: …` 20 · `insufficient: …` 21 |
 | `shadow` | `record --run <run-id> [--app <name>]` · `status` · `promote` · `demote` | `shadow: <run-id> hit\|miss\|trivial\|unpaired · streak <s>/<n>` · `trust <t> · streak <s>/<n> · promotable <yes\|no>` · 0 |
 | `measure` | `--app <name>` · `slowest [-n N]` · `retries [--last N]` · `workers <1,2,4> --test-list <file> [--mode dev\|preview]` | tables · 0 |
@@ -146,7 +145,10 @@ bad usage, 1 for anything else. Run-shaping options are first-class flags; after
 `--config` before anything runs. A run narrowed by `--project`, a `-- --grep` or a file filter prints
 `kind full (filtered)` and never verifies or moves last-green. `run --selection` on a selection that writes no
 test-list line for the app prints `<app>: nothing selected (partial, 0 specs)` (or `…, <n> spec(s), 0 test-list lines`
-when no selected spec has a Playwright project), runs nothing and records nothing.
+when no selected spec has a Playwright project), runs nothing and records nothing. A run from a test list (a
+selection, a shard plan or `--test-list <file>`) whose list matches no test is recorded as a failure (rc 1,
+`failed: test list matched no tests`) although Playwright exits 0 there; so is one with a line that matches nothing
+(`failed: test list line matched no tests: <line>`).
 
 ## Shadow mode
 
@@ -268,6 +270,27 @@ through before anyone trusts a selection.
   project preview does not have fails the run instead). `shard plan --mode preview` lists in the preview env. Keep the
   project set independent of the mode, or gate preview with `run --full`.
 
+These shapes never narrow wrongly, but they always run the app in full (measured on the sample app):
+
+- **A route table written as `export default [...]` and spread from another route file**
+  (`import cartRoutes from './routes'` … `children: [...cartRoutes]`): the adapter follows only `const` arrays.
+  `map --check` prints `! src/router.ts:6: spread of 'cartRoutes' is not a const array literal declared in this file or
+  in a file routeFiles covers (imported from '@/features/cart/routes')` and
+  `verdict: every src change will run full: the react-router-lazy adapter could not read 1 route definition(s) …`;
+  `select` prints `adapter-unresolved:…`. Export it as `export const cartRoutes = [...]`.
+- **A leaf whose page is a local `lazy()` const or an arrow**: `const Page = lazy(() => import('./Page'))` used as
+  `Component: Page` or `element: <Page />`, and `Component: () => <Page …/>`. The route gets no entry. `map --check`
+  prints no `!` line (the `route entries` count is one short of the routes, and the verdict can still say
+  `narrowing possible`); an edit to that page climbs through the route table to the app entry, so `select` prints
+  `graph-shell:<page file>`. Use the route's `lazy` field or `Component:` with an imported page.
+- **Non-code files under `srcDir`** (`.css`, `.svg`, `.json`, …): they are not in the import graph. `map --check` says
+  nothing about them; an edit makes `select` print `graph-unresolved:<file>`.
+
+The fingerprint's `config` field hashes `e2e-rail.config.mjs` and the app's Playwright config only, not the local
+modules `playwright.config.ts` imports. An edit to such a module still moves `head`, `diff` or `untracked` (so
+`verify` is stale, and `differing` names those, not `config`). A gitignored file it reads (an env file, for example) is not covered at all:
+run the suite again after changing one, since `verify` cannot see it.
+
 ## Plugin layer
 
 | Skill | When | What it enforces |
@@ -282,7 +305,7 @@ The selection block every selected run carries:
 
 ```text
 change:   order search filter (src/features/orders/OrderSearchFilter.tsx +2 more)
-selected: orders · order-detail (reasons: route:orders ← OrdersPage.tsx · api:**/api/orders/** ← services/orders.ts)
+selected: orders · order-detail (reasons: route:orders ← OrdersPage.tsx · api:**/api/orders/** ← /api/orders/list)
 added:    none      removed: none
 mobile:   orders
 unmapped: 1 (map --check lists them)

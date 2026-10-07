@@ -33,15 +33,20 @@ The exit code is Playwright's. The summary line is the record:
 `failed: <file> › <title> [<project>] — <error>` lines. Lines that limit what you may claim:
 - `kind full (filtered)` with `filtered: …` — `--project` or a `-- --grep`/file filter narrowed the run.
 - `shadowed: a selected run does not replace a full run while trust=shadow`.
-- `<app>: nothing selected (partial, 0 specs)` — nothing ran, nothing was recorded, nothing is verified.
+- `<app>: nothing selected (partial, 0 specs)` (or `…, <n> spec(s), 0 test-list lines`) — nothing ran, nothing was
+  recorded, nothing is verified.
+- `failed: test list matched no tests` or `failed: test list line matched no tests: <line>` (stderr:
+  `e2e-rail: test list matched no tests — check paths are relative to Playwright rootDir`) — the list ran nothing, or
+  some of it did not run (a renamed or deleted spec): rc 1, `FAILED`. Select again before you run again.
 - `<app>: selection <id> runs this app in full (…); running the full suite` — the run is `kind full`.
 - `e2e-rail: warning: selection <id> was computed for other code …` — select again before you rely on it.
 - `e2e-rail: <build command> failed (rc <n>); Playwright was not started.` — nothing ran or was recorded.
 
-Run-shaping options never go after `--` (`--shard`, `--test-list`, `--last-failed`, `--reporter`, `--config`,
-`--list`, `--only-changed`): the CLI refuses them before running; use its own flags. Full and shard runs, and runs
-without a worker count, take the machine-wide exclusive lock; `waiting for the heavy lock (…)` on stderr means another
-run holds it. Wait; do not kill and retry.
+Run-shaping options never go after `--`. Only `--shard`, `--test-list`, `--last-failed` and `--project` have e2e-rail
+flags (use those); `--reporter`, `--config`, `--list`, `--only-changed`, `--output` and `--test-list-invert` are not
+supported at all. The CLI refuses each of them after `--` before anything runs, except `--project`, which there makes
+the run `filtered`. Full and shard runs, and runs without a worker count, take the machine-wide exclusive lock;
+`waiting for the heavy lock (…)` on stderr means another run holds it. Wait; do not kill and retry.
 
 ## 2. Verify (always, in the run's mode)
 ```sh
@@ -70,7 +75,13 @@ Statuses, exactly one:
 - `selected run — shadowed, not a full verification` — a selected run while `shadow status` prints `trust shadow`.
 - `selected run (trust selected)` — a selected run after a human promoted.
 - `FAILED` — rc other than 0.
+- `not verified` — `verify` (`--require full` for a full or shard run, `--require selected` for a selected run) did
+  not print `verified:` for the run you report.
 - `filtered run, not a full verification` · `diagnostic rerun only` · `nothing selected`.
+
+When several apply, the first of these wins: `FAILED`; then not verified (`not verified`, `nothing selected`,
+`diagnostic rerun only`); then `filtered run, not a full verification` or `selected run — shadowed, not a full
+verification`; then the verified ones, `full pass` and `selected run (trust selected)`.
 
 A selected run also carries the selection block from `e2e-rail:select` and says where the pending full run happens.
 

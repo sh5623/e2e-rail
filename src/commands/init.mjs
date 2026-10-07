@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CONFIG_FILE } from '../config.mjs';
+import { CONFIG_FILE, loadConfig } from '../config.mjs';
 import { execCapture } from '../util/exec.mjs';
 import { matchGlob, walk } from '../util/glob.mjs';
 import { loadTypeScript } from '../util/ts.mjs';
@@ -107,6 +107,15 @@ function ensureIgnored(root, apps) {
   console.log(`added to .gitignore: ${missing.join(', ')}`);
 }
 
+// Does the config's entry for app `name` (else its first app) declare a preview build? Then the suggested scripts run
+// and verify in preview mode: verify only matches runs of its own mode. A config that cannot be loaded yet suggests dev.
+async function declaresPreview(root, name) {
+  try {
+    const config = await loadConfig(root);
+    return Boolean((config.apps.find((a) => a.name === name) ?? config.apps[0]).run.preview);
+  } catch { return false; } // `map --check` reports what is wrong with the config
+}
+
 export default async function init(argv) {
   const { values, help } = parse(argv, { force: { type: 'boolean' } });
   if (help) return printUsage('init');
@@ -117,12 +126,13 @@ export default async function init(argv) {
   else await writeConfig(root, files, apps);
   ensureIgnored(root, apps);
   const app = apps[0]?.name ?? '<app>';
+  const mode = (await declaresPreview(root, app)) ? ' --mode preview' : '';
   console.log([
     '',
-    'suggested package.json scripts:',
+    `suggested package.json scripts${mode ? ' (the app declares run.preview: run and verify in the same mode)' : ''}:`,
     `  "e2e:select": "e2e-rail select --base $(cat .e2e-rail/last-green.${app} 2>/dev/null)"`,
-    '  "e2e:run":    "e2e-rail run --selection"',
-    '  "e2e:verify": "e2e-rail verify --require full"',
+    `  "e2e:run":    "e2e-rail run --selection${mode}"`,
+    `  "e2e:verify": "e2e-rail verify --require full${mode}"`,
     '',
     'next: e2e-rail map --check',
   ].join('\n'));

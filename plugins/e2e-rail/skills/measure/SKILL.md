@@ -48,7 +48,7 @@ pnpm exec e2e-rail run --app <app> --full --shard 1/4 --blob --mode <mode>
 ```
 Planned split — balanced by measured durations (`--from-run <run-id>` picks the run to weigh by):
 ```sh
-pnpm exec e2e-rail shard plan --app <app> --count 4
+pnpm exec e2e-rail shard plan --app <app> --count 4 --mode <mode>
 pnpm exec e2e-rail run --app <app> --test-list .e2e-rail/shards/<app>/1.txt --shard 1/4 --blob --mode <mode>
 ```
 The plan writes `.e2e-rail/shards/<app>/<i>.txt` and `manifest.json` and prints `shard <i>/<n> · ~<estimate> · …`.

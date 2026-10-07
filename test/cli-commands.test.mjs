@@ -122,6 +122,7 @@ test('init detects the playwright config, writes config and gitignore; map --che
   assert.match(cfg, /playwrightConfig: 'playwright\.config\.ts'/);
   assert.match(readFileSync(at('.gitignore'), 'utf8'), /\.e2e-rail\//);
   assert.match(r.stdout, /e2e:select/);
+  assert.match(r.stdout, /^ {2}"e2e:verify": "e2e-rail verify --require full"$/m, 'the template declares no preview build');
   assert.match(r.stdout, /next: e2e-rail map --check/);
   // The template's .tsx route-table globs match nothing here; left in, each would be an adapter `unresolved` (full).
   assert.match(cfg, /routeFiles: \['src\/\*\*\/routes\.ts', 'src\/router\.ts'\]/);
@@ -155,6 +156,10 @@ test('init never overwrites a config without --force; ignores the ledger and Pla
   assert.equal(r.code, 0, r.out);
   assert.match(r.stdout, /e2e-rail\.config\.mjs exists; left unchanged \(use --force to overwrite\)/);
   assert.equal(readFileSync(at('e2e-rail.config.mjs'), 'utf8'), before);
+  // I3: the fixture's app declares run.preview, so the suggested run and verify both use preview mode
+  assert.match(r.stdout, /^suggested package\.json scripts \(the app declares run\.preview: run and verify in the same mode\):$/m);
+  assert.match(r.stdout, /^ {2}"e2e:run": {4}"e2e-rail run --selection --mode preview"$/m);
+  assert.match(r.stdout, /^ {2}"e2e:verify": "e2e-rail verify --require full --mode preview"$/m);
   const gi = readFileSync(at('.gitignore'), 'utf8');
   assert.match(gi, /^\*\*\/test-results\n/m); // the missing final newline was added before the new block
   for (const p of ['playwright-report/', 'blob-report/']) assert.equal(gi.split('\n').filter((l) => l === p).length, 1, p);
