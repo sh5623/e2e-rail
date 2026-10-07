@@ -1,0 +1,10 @@
+{ "config": { "rootDir": "<ABS_APP_DIR>/e2e" },
+  "suites": [
+    { "title": "orders.spec.ts", "file": "orders.spec.ts", "specs": [ { "title": "lists orders", "file": "orders.spec.ts", "tests": [ { "projectName": "chromium", "status": "expected", "results": [ { "status": "passed", "duration": 1200, "retry": 0 } ] } ] } ], "suites": [] },
+    { "title": "order-detail.spec.ts", "file": "order-detail.spec.ts", "specs": [ { "title": "shows one order", "file": "order-detail.spec.ts", "tests": [ { "projectName": "chromium", "status": "expected", "results": [ { "status": "passed", "duration": 1200, "retry": 0 } ] } ] } ], "suites": [] },
+    { "title": "cart.spec.ts", "file": "cart.spec.ts", "specs": [ { "title": "adds to cart", "file": "cart.spec.ts", "tests": [
+      { "projectName": "chromium", "status": "expected", "results": [ { "status": "passed", "duration": 900, "retry": 0 } ] },
+      { "projectName": "mobile-chrome", "status": "expected", "results": [ { "status": "passed", "duration": 1500, "retry": 0 } ] }
+    ] } ], "suites": [] },
+    { "title": "smoke.spec.ts", "file": "smoke.spec.ts", "specs": [ { "title": "boots", "file": "smoke.spec.ts", "tests": [ { "projectName": "chromium", "status": "expected", "results": [ { "status": "passed", "duration": 1200, "retry": 0 } ] } ] } ], "suites": [] }
+  ] }
