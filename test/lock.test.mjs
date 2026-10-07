@@ -1,13 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import fs, { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import fs, { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir, uptime } from 'node:os';
 import path from 'node:path';
 import { acquire, reap, lockStatus, isHeavyShape, lockDir } from '../src/lock.mjs';
-import { execCapture } from '../src/util/exec.mjs';
-import { makeTempRepo } from './helpers.mjs';
 
 const LOCK_URL = new URL('../src/lock.mjs', import.meta.url).href;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -306,20 +304,81 @@ test('a holder killed with SIGKILL leaves an orphan the next acquire reaps', { s
   } finally { holder.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('lockDir is one per repository: every worktree and subdirectory shares it', () => {
-  const { root, cleanup } = makeTempRepo('sample-app');
-  const other = makeTempRepo('sample-app');
-  const wtParent = realpathSync(mkdtempSync(path.join(tmpdir(), 'e2e-rail-wt-')));
+test('lockDir is machine-wide: E2E_RAIL_LOCK_DIR when set, else one per-user default for every repo (R43)', () => {
+  const saved = process.env.E2E_RAIL_LOCK_DIR;
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
   try {
-    const wt = path.join(wtParent, 'wt');
-    assert.equal(execCapture('git', ['worktree', 'add', '-q', '--detach', wt], { cwd: root }).status, 0);
-    const dir = lockDir({ root });
-    assert.equal(path.dirname(dir), path.join(tmpdir(), 'e2e-rail-lock'));
-    assert.match(path.basename(dir), /^[0-9a-f]{12}$/);
-    assert.equal(lockDir({ root: wt }), dir);
-    assert.equal(lockDir({ root: path.join(root, 'src') }), dir);
-    assert.notEqual(lockDir({ root: other.root }), dir);
-    const plain = realpathSync(mkdtempSync(path.join(tmpdir(), 'e2e-rail-nogit-')));
-    try { assert.notEqual(lockDir({ root: plain }), dir); } finally { rmSync(plain, { recursive: true, force: true }); }
-  } finally { cleanup(); other.cleanup(); rmSync(wtParent, { recursive: true, force: true }); }
+    delete process.env.E2E_RAIL_LOCK_DIR;
+    const uid = process.getuid?.();
+    const machine = lockDir({ root: '/repo/a' });
+    assert.equal(lockDir({ root: '/repo/b' }), machine, 'other repositories and worktrees share it');
+    assert.equal(lockDir(), machine);
+    if (process.platform === 'darwin') assert.equal(machine, path.join(tmpdir(), 'e2e-rail-lock', 'machine'), 'os.tmpdir() is per user');
+    if (uid !== undefined) {
+      // A shared /tmp (Linux): the uid keeps users apart.
+      Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+      assert.equal(lockDir(), path.join(tmpdir(), `e2e-rail-lock-${uid}`, 'machine'));
+    }
+    process.env.E2E_RAIL_LOCK_DIR = path.join(tmpdir(), 'custom-lock');
+    assert.equal(lockDir({ root: '/repo/a' }), path.join(tmpdir(), 'custom-lock'));
+  } finally {
+    Object.defineProperty(process, 'platform', platform);
+    if (saved === undefined) delete process.env.E2E_RAIL_LOCK_DIR; else process.env.E2E_RAIL_LOCK_DIR = saved;
+  }
+});
+
+const posixOnly = { skip: process.platform === 'win32' };
+
+test('the lock dir and the parents acquire creates are private (0700)', posixOnly, async () => {
+  const parent = tempDir();
+  try {
+    const dir = path.join(parent, 'a', 'b');
+    const h = await acquire({ dir, cls: 'heavy', pollMs: 10 });
+    h.release();
+    assert.equal(statSync(path.join(parent, 'a')).mode & 0o777, 0o700);
+    assert.equal(statSync(dir).mode & 0o777, 0o700);
+  } finally { rmSync(parent, { recursive: true, force: true }); }
+});
+
+test('a lock dir that is a symlink, or writable by group or others, is refused', posixOnly, async () => {
+  const parent = tempDir();
+  try {
+    const real = path.join(parent, 'real');
+    mkdirSync(real, { mode: 0o700 });
+    const link = path.join(parent, 'link');
+    symlinkSync(real, link);
+    await assert.rejects(acquire({ dir: link, cls: 'heavy', pollMs: 10 }), /lock dir .*link is a symbolic link.*E2E_RAIL_LOCK_DIR/);
+    assert.throws(() => reap(link), /is a symbolic link/);
+    const open = path.join(parent, 'open');
+    mkdirSync(open);
+    chmodSync(open, 0o777);
+    await assert.rejects(acquire({ dir: open, cls: 'light', pollMs: 10 }), /lock dir .*open is writable by group or others \(mode 777\)/);
+    assert.throws(() => reap(open), /writable by group or others/);
+    assert.deepEqual([existsSync(path.join(real, 'heavy.lock')), existsSync(path.join(open, 'light-0.lock'))], [false, false]);
+  } finally { rmSync(parent, { recursive: true, force: true }); }
+});
+
+test('symlinks planted inside the lock dir are removed or ignored, never followed', posixOnly, async () => {
+  const dir = tempDir();
+  const outside = tempDir();
+  try {
+    // heavy.lock is a symlink to someone's directory holding an owner.json of a dead pid and a file of theirs.
+    writeOwner(outside, 'victim', { pid: deadPid(), token: 'x', cls: 'heavy', start: new Date().toISOString() });
+    writeFileSync(path.join(outside, 'victim', 'keep.txt'), 'keep');
+    symlinkSync(path.join(outside, 'victim'), path.join(dir, 'heavy.lock'));
+    // light-0.lock is a real dir whose owner.json is a symlink to someone's file.
+    mkdirSync(path.join(dir, 'light-0.lock'));
+    writeFileSync(path.join(outside, 'owner-target.json'), JSON.stringify({ pid: deadPid(), token: 'y', cls: 'light', start: 'x' }));
+    symlinkSync(path.join(outside, 'owner-target.json'), path.join(dir, 'light-0.lock', 'owner.json'));
+    assert.deepEqual(lockStatus(dir), { heavy: null, light: [] }, 'neither link is read as an owner');
+    assert.deepEqual(reap(dir), ['heavy.lock'], 'the link itself goes; light-0 has no readable owner yet (grace)');
+    assert.equal(lstatSync(path.join(dir, 'heavy.lock'), { throwIfNoEntry: false }), undefined);
+    utimesSync(path.join(dir, 'light-0.lock'), longAgo(), longAgo());
+    assert.deepEqual(reap(dir), ['light-0.lock']);
+    assert.equal(readFileSync(path.join(outside, 'victim', 'keep.txt'), 'utf8'), 'keep');
+    assert.ok(existsSync(path.join(outside, 'victim', 'owner.json')));
+    assert.ok(existsSync(path.join(outside, 'owner-target.json')));
+    const h = await acquire({ dir, cls: 'heavy', pollMs: 10, timeoutMs: 2000 });
+    h.release();
+  } finally { rmSync(dir, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); }
 });

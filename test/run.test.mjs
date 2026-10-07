@@ -1,9 +1,10 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { runTests, parsePlaywrightReport, kindOf } from '../src/run.mjs';
+import { runTests, parsePlaywrightReport, kindOf, isFiltered } from '../src/run.mjs';
 import { acquire, lockDir, lockStatus } from '../src/lock.mjs';
 import { readRuns } from '../src/ledger.mjs';
 import { loadConfig, findApp } from '../src/config.mjs';
@@ -17,21 +18,23 @@ async function until(fn, ms = 15_000) {
     await sleep(20);
   }
 }
-const ENTRY_FIELDS = ['app', 'mode', 'kind', 'fingerprint', 'selectionId', 'shard', 'workers', 'command', 'lock', 'rc', 'durationMs', 'rootDir', 'specs', 'failures', 'flaky'];
+const ENTRY_FIELDS = ['app', 'mode', 'kind', 'fingerprint', 'selectionId', 'shard', 'workers', 'filtered', 'command', 'lock', 'rc', 'durationMs', 'rootDir', 'specs', 'failures', 'flaky'];
 const stubCli = (root) => path.join(root, 'node_modules/@playwright/test/cli.js');
 
-// Temp repo + loaded config + an argv capture file; restores the stub env after.
+// Temp repo + loaded config + an argv capture file + a private lock dir (E2E_RAIL_LOCK_DIR, so the suite never touches
+// the machine lock; child processes inherit it); restores the env after.
 async function withRepo(fn) {
   const { root, cleanup } = makeTempRepo('sample-app');
   const argvFile = path.join(root, 'argv.json');
+  const lockRoot = mkdtempSync(path.join(tmpdir(), 'e2e-rail-lockdir-'));
   process.env.STUB_PW_ARGV_FILE = argvFile;
-  let config = null;
+  process.env.E2E_RAIL_LOCK_DIR = lockRoot;
   try {
-    config = await loadConfig(root);
+    const config = await loadConfig(root);
     await fn({ root, config, app: findApp(config), argvFile });
   } finally {
-    for (const k of ['STUB_PW_ARGV_FILE', 'STUB_PW_RC', 'STUB_PW_REPORT']) delete process.env[k];
-    if (config) rmSync(lockDir(config), { recursive: true, force: true });
+    for (const k of ['STUB_PW_ARGV_FILE', 'STUB_PW_RC', 'STUB_PW_REPORT', 'E2E_RAIL_LOCK_DIR']) delete process.env[k];
+    rmSync(lockRoot, { recursive: true, force: true });
     cleanup();
   }
 }
@@ -159,11 +162,42 @@ fs.writeFileSync(e.PLAYWRIGHT_JSON_OUTPUT_FILE, fs.readFileSync('stub/report-pas
     assert.ok(entry.command.startsWith('playwright test --config playwright.config.ts'));
     assert.ok(entry.command.endsWith('--grep orders --e2e-rail-purpose=measure'));
     assert.equal(entry.specs.length, 5);
+    assert.equal(entry.filtered, true);
     assert.equal(existsSync(path.join(root, '.e2e-rail/last-green.web')), false, 'a filtered full run is not a full verification');
     const p = await runTests({ config, app, project: 'chromium', workers: 1, lock: false });
     assert.ok(readJson(dump).argv.join(' ').includes('--project chromium'));
     assert.equal(p.entry.project, 'chromium');
+    assert.equal(p.entry.filtered, true);
     assert.equal(existsSync(path.join(root, '.e2e-rail/last-green.web')), false, 'one project is not the full suite');
+  });
+});
+
+test('isFiltered (R44): project, test-filter options and positional filters; option values and e2e-rail tags are not', () => {
+  const f = (passthrough, project) => isFiltered({ project, passthrough });
+  for (const pt of [['--grep', 'x'], ['--grep=x'], ['-g', 'x'], ['-gx'], ['--grep-invert', 'x'], ['--project', 'chromium'], ['--project=chromium'],
+    ['--only-changed'], ['--only-changed', 'main'], ['--last-failed'], ['e2e/cart.spec.ts'], ['e2e/cart.spec.ts:12'], ['--', 'cart'], ['--trace', 'on', 'cart']]) {
+    assert.equal(f(pt), true, pt.join(' '));
+  }
+  for (const pt of [[], ['--trace', 'on'], ['--retries', '2', '--timeout=1000'], ['-j', '2'], ['--headed', '-x'], ['-u', 'all'], ['-u'],
+    ['--', '--e2e-rail-purpose=measure'], ['--e2e-rail-purpose=measure'], ['--']]) {
+    assert.equal(f(pt), false, pt.join(' ') || '(none)');
+  }
+  assert.equal(f([], 'chromium'), true);
+  assert.equal(isFiltered({}), false);
+});
+
+test('a --grep full run is recorded filtered and leaves last-green alone; a plain full run is not filtered and sets it', async () => {
+  await withRepo(async ({ root, config, app, argvFile }) => {
+    const lastGreen = path.join(root, '.e2e-rail/last-green.web');
+    const g = await runTests({ config, app, workers: 1, lock: false, passthrough: ['--grep', 'orders'] });
+    assert.equal(g.rc, 0);
+    assert.equal(g.entry.kind, 'full', 'kind derivation is unchanged');
+    assert.equal(g.entry.filtered, true);
+    assert.ok(readJson(argvFile).includes('--grep'));
+    assert.equal(existsSync(lastGreen), false);
+    const plain = await runTests({ config, app, workers: 1, lock: false, passthrough: ['--trace', 'on', '--', '--e2e-rail-purpose=measure'] });
+    assert.equal(plain.entry.filtered, false);
+    assert.equal(readFileSync(lastGreen, 'utf8').trim(), plain.entry.fingerprint.head);
   });
 });
 

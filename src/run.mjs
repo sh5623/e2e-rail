@@ -13,6 +13,32 @@ const MODES = ['dev', 'preview'];
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 const ANSI = /\u001b\[[0-9;]*m/g;
 
+// Playwright options whose next argument is their value (not a positional file filter), and the ones that narrow
+// which tests run.
+const VALUE_OPTIONS = new Set([
+  '-c', '--config', '-g', '--grep', '--grep-invert', '--project', '--reporter', '--retries', '--repeat-each', '--shard',
+  '--timeout', '--trace', '-j', '--workers', '--output', '--max-failures', '--global-timeout', '--browser', '--test-list',
+  '--test-list-invert', '--tsconfig', '--ui-host', '--ui-port', '--update-source-method',
+]);
+const FILTER_OPTION = /^(--grep|--grep-invert|--project|--only-changed|--last-failed)(=|$)|^-g/;
+const SNAPSHOT_MODE = /^(all|changed|missing|none)$/;
+
+// R44: did this run narrow the suite beyond what its kind says? `project`, a test filter option in `passthrough`, or a
+// positional argument (a file or file:line filter). e2e-rail's own `--e2e-rail-*` tags never count. An unknown option
+// followed by a bare word reads as filtered: the safe side, since a filtered run never moves last-green.
+export function isFiltered({ project = null, passthrough = [] } = {}) {
+  if (project) return true;
+  const args = passthrough.filter((a) => !a.startsWith('--e2e-rail-'));
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--') return args.length > i + 1;
+    if (FILTER_OPTION.test(a) || !a.startsWith('-')) return true;
+    if (VALUE_OPTIONS.has(a)) i += 1;
+    else if ((a === '-u' || a === '--update-snapshots') && SNAPSHOT_MODE.test(args[i + 1] ?? '')) i += 1;
+  }
+  return false;
+}
+
 export function kindOf({ lastFailed, shard, testList }) {
   if (lastFailed) return 'rerun';
   if (shard) return 'shard';
@@ -93,6 +119,7 @@ export async function runTests({
     PLAYWRIGHT_JSON_OUTPUT_FILE: reportAbs, PLAYWRIGHT_JSON_OUTPUT_NAME: reportAbs,
   };
   const cls = kind === 'full' || kind === 'shard' || workers == null ? 'heavy' : 'light';
+  const filtered = isFiltered({ project, passthrough });
 
   // A signal while a child runs goes on to that child (Playwright shuts down and reports); the run then ends normally
   // and releases the lock. Between children (waiting for the lock), it exits, and the exit listener releases the lock.
@@ -136,12 +163,12 @@ export async function runTests({
     const report = readReport(reportAbs);
     const entry = appendRun(config, {
       id, app: app.name, mode, kind, fingerprint, selectionId, shard, workers: workers ?? null, project: project ?? null,
-      command, lock: lockInfo, rc: status, durationMs,
+      filtered, command, lock: lockInfo, rc: status, durationMs,
       rootDir: report?.config?.rootDir ? toAppRel(dirAbs, report.config.rootDir) : null,
       ...parsePlaywrightReport(report ?? { suites: [] }, dirAbs),
     });
     // last-green is the base the next selection diffs from: only an unfiltered full pass may move it.
-    if (status === 0 && kind === 'full' && !project && forwarded.length === 0) writeLastGreen(config, app.name, fingerprint.head);
+    if (status === 0 && kind === 'full' && !filtered) writeLastGreen(config, app.name, fingerprint.head);
     return { rc: status, entry };
   } finally {
     held?.release();

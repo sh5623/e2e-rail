@@ -1,12 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import {
-  existsSync, linkSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync,
-  unlinkSync, writeFileSync,
+  closeSync, constants as fsc, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmdirSync,
+  rmSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { loadavg, tmpdir, uptime } from 'node:os';
 import path from 'node:path';
 import { execCapture } from './util/exec.mjs';
-import { sha256 } from './util/hash.mjs';
 
 // Machine-wide gate for E2E runs (spec §9): `heavy` is one exclusive holder (full and shard runs), `light` up to
 // `slots` shared holders. Overlapping heavy runs were measured to slow down and fail (15.4 min + 1 failure, against
@@ -15,7 +14,8 @@ import { sha256 } from './util/hash.mjs';
 // Layout: <dir>/heavy.lock/owner.json and <dir>/light-<i>.lock/owner.json. Taking a lock is a mkdir (atomic,
 // exclusive); the owner record is written beside the dir and hard-linked into it, so a reader finds either no owner or
 // a complete one. A lock dir without a readable owner is being made or released and is reaped only after
-// OWNERLESS_GRACE_MS. Both classes publish first and look second: a light takes its slot, then checks for a heavy; a
+// OWNERLESS_GRACE_MS. The lock dir must be private to the user (a shared /tmp lets another user block runs or plant
+// symlinks), and nothing here follows a symlink: a symlinked entry is removed itself, never its target. Both classes publish first and look second: a light takes its slot, then checks for a heavy; a
 // heavy takes its lock, then waits for the lights. Whichever looks second sees the other, so they never overlap, and a
 // waiting heavy keeps every new light out.
 
@@ -29,25 +29,50 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const token = () => randomBytes(6).toString('hex');
 const quiet = (fn) => { try { fn(); return true; } catch { return false; } };
 const entries = (dir) => { try { return readdirSync(dir); } catch { return []; } };
+const lstat = (abs) => lstatSync(abs, { throwIfNoEntry: false });
 
-// One lock per repository, shared by all its worktrees (parallel worktrees on one machine are what the lock is for):
-// keyed by git's common dir, not by the checkout. Outside git, by the config root.
-export function lockDir(config) {
-  const r = execCapture('git', ['rev-parse', '--git-common-dir'], { cwd: config.root });
-  const common = r.status === 0 ? r.stdout.trim() : '';
-  let key = config.root;
-  if (common) {
-    key = path.resolve(config.root, common);
-    try { key = realpathSync(key); } catch { /* keep the resolved path */ }
-  }
-  return path.join(tmpdir(), 'e2e-rail-lock', sha256(key).slice(0, 12));
+// One lock per machine (R43, spec §0): CPU and the fixed E2E ports are shared by every repository and worktree on it.
+// `E2E_RAIL_LOCK_DIR` overrides the place (tests point it at a temp dir). `config` is not used; the signature stays.
+// macOS gives each user its own os.tmpdir(); where the temp dir is shared (Linux /tmp) the uid keeps users apart.
+export function lockDir(_config) {
+  const override = process.env.E2E_RAIL_LOCK_DIR;
+  if (override) return path.resolve(override);
+  const uid = process.getuid?.();
+  const base = uid !== undefined && process.platform !== 'darwin' ? `e2e-rail-lock-${uid}` : 'e2e-rail-lock';
+  return path.join(tmpdir(), base, 'machine');
 }
 
+// The lock dir, and each level of it below the shared temp dir, must be a real directory (not a symlink) owned by this
+// user and not writable by group or others. Otherwise another local user could block every run or steer what reap
+// deletes.
+function assertPrivateDir(dir) {
+  const abs = path.resolve(dir);
+  const tmp = path.resolve(tmpdir());
+  const levels = [abs];
+  for (let d = path.dirname(abs); d.startsWith(tmp + path.sep); d = path.dirname(d)) levels.push(d);
+  const uid = process.getuid?.();
+  for (const level of levels) {
+    const st = lstat(level);
+    let why = null;
+    if (!st) why = 'does not exist';
+    else if (st.isSymbolicLink()) why = 'is a symbolic link';
+    else if (!st.isDirectory()) why = 'is not a directory';
+    else if (uid !== undefined && st.uid !== uid) why = `is owned by uid ${st.uid}, not by this user (uid ${uid})`;
+    else if (process.platform !== 'win32' && (st.mode & 0o022)) why = `is writable by group or others (mode ${(st.mode & 0o777).toString(8)})`;
+    if (why) {
+      throw new Error(`e2e-rail: lock dir ${level} ${why}; another user could block or tamper with E2E runs. Remove it, or set E2E_RAIL_LOCK_DIR to a private directory.`);
+    }
+  }
+}
+
+// O_NOFOLLOW: an owner.json that is a symlink reads as no owner, it is never followed.
 function readOwnerFile(file) {
+  let fd;
   try {
-    const o = JSON.parse(readFileSync(file, 'utf8'));
+    fd = openSync(file, fsc.O_RDONLY | (fsc.O_NOFOLLOW ?? 0));
+    const o = JSON.parse(readFileSync(fd, 'utf8'));
     return o && typeof o === 'object' && Number.isInteger(o.pid) && o.pid > 0 ? o : null;
-  } catch { return null; }
+  } catch { return null; } finally { if (fd !== undefined) closeSync(fd); }
 }
 const readOwner = (abs) => readOwnerFile(path.join(abs, OWNER));
 const sameOwner = (a, b) => !!a && !!b && a.pid === b.pid && a.token === b.token && a.start === b.start;
@@ -85,7 +110,7 @@ function take(dir, name, owner) {
   try { mkdirSync(abs); } catch (e) { if (e.code === 'EEXIST') return false; throw e; }
   const tmp = path.join(dir, `.owner-${owner.token}-${name}`);
   try {
-    writeFileSync(tmp, JSON.stringify(owner));
+    writeFileSync(tmp, JSON.stringify(owner), { flag: 'wx', mode: 0o600 });
     try { linkSync(tmp, path.join(abs, OWNER)); } catch (e) {
       if (e.code === 'EEXIST' || e.code === 'ENOENT') return false; // reaped and re-taken while this process stalled
       renameSync(tmp, path.join(abs, OWNER)); // a file system without hard links
@@ -101,6 +126,9 @@ function take(dir, name, owner) {
 // atomic) and compared: a lock that changed hands after the caller looked gets its record linked straight back (its
 // dir is fresh, so nobody reaps it in between).
 function removeIfOwner(dir, abs, expected) {
+  const st = lstat(abs);
+  if (st?.isSymbolicLink()) quiet(() => unlinkSync(abs)); // not a lock this code made: drop the link, not its target
+  if (!st?.isDirectory()) return false;
   const moved = path.join(dir, `.gone-${token()}`);
   try { renameSync(path.join(abs, OWNER), moved); } catch { return false; }
   if (!sameOwner(readOwnerFile(moved), expected)) {
@@ -115,10 +143,12 @@ function removeIfOwner(dir, abs, expected) {
 
 function reapOne(dir, name, graceMs) {
   const abs = path.join(dir, name);
+  const st = lstat(abs);
+  if (!st) return false;
+  if (!st.isDirectory()) return quiet(() => unlinkSync(abs)); // a symlink or a file: never one of ours, never followed
   const owner = readOwner(abs);
   if (owner) return !ownerAlive(owner) && removeIfOwner(dir, abs, owner);
-  const st = statSync(abs, { throwIfNoEntry: false });
-  if (!st || Date.now() - st.mtimeMs < graceMs) return false; // gone, or still being made or released
+  if (Date.now() - st.mtimeMs < graceMs) return false; // still being made or released
   if (quiet(() => rmdirSync(abs))) return true; // empty: its maker died before writing the owner
   const trash = path.join(dir, `.gone-${token()}`); // not empty (an owner that does not parse, foreign files)
   if (!quiet(() => renameSync(abs, trash))) return false;
@@ -126,8 +156,11 @@ function reapOne(dir, name, graceMs) {
   return true;
 }
 
-// Removes orphan locks: owner process gone, or no readable owner for longer than the grace period. Returns their names.
+// Removes orphan locks: owner process gone, or no readable owner for longer than the grace period, and any lock name
+// that is a symlink or a file. Returns their names. Throws when the lock dir is not private (see assertPrivateDir).
 export function reap(dir, { graceMs = OWNERLESS_GRACE_MS } = {}) {
+  if (!lstat(dir)) return [];
+  assertPrivateDir(dir);
   return entries(dir).filter((name) => (name === HEAVY || LIGHT.test(name)) && reapOne(dir, name, graceMs));
 }
 
@@ -137,6 +170,7 @@ export function lockStatus(dir) {
   for (const name of entries(dir).sort()) {
     const heavy = name === HEAVY;
     if (!heavy && !LIGHT.test(name)) continue;
+    if (!lstat(path.join(dir, name))?.isDirectory()) continue;
     const owner = readOwner(path.join(dir, name));
     if (!owner) continue;
     const row = { ...owner, lock: name, alive: ownerAlive(owner) };
@@ -158,7 +192,8 @@ export function describeHolders({ heavy, light }) {
 export async function acquire({ dir, cls, slots = 2, pollMs = 500, timeoutMs = Infinity, purpose = '', onWait } = {}) {
   if (cls !== 'heavy' && cls !== 'light') throw new TypeError(`e2e-rail: lock class must be heavy or light, not ${cls}`);
   if (!Number.isInteger(slots) || slots < 1) throw new TypeError(`e2e-rail: light slots must be a positive integer, not ${slots}`);
-  mkdirSync(dir, { recursive: true });
+  // An existing dir is judged by reap(), first thing in every poll: it must be private (see assertPrivateDir).
+  try { mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch (e) { if (!lstat(dir)) throw e; }
   const t0 = Date.now();
   const requestedAt = new Date(t0).toISOString();
   const tok = token();
@@ -171,7 +206,7 @@ export async function acquire({ dir, cls, slots = 2, pollMs = 500, timeoutMs = I
     if (held) removeIfOwner(dir, held.abs, held.owner);
     held = null;
   };
-  const heavyIn = () => existsSync(path.join(dir, HEAVY));
+  const heavyIn = () => lstat(path.join(dir, HEAVY)) !== undefined;
   const grant = () => {
     const acquired = Date.now();
     let releasedAt = null;
