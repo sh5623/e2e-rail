@@ -118,6 +118,8 @@ test('measureWorkers runs the list once per worker count and reports a row per r
     const runs = readRuns(config);
     assert.equal(runs.filter((e) => e.command.includes('--e2e-rail-purpose=measure')).length, 2);
     assert.deepEqual(runs.map((e) => [e.kind, e.workers, e.filtered]), [['selected', 1, false], ['selected', 2, false]]);
+    // R50: a worker comparison overlapping other runs would measure contention, so it holds the exclusive lock
+    assert.deepEqual(runs.map((e) => e.lock.class), ['heavy', 'heavy']);
     const argv = readJson(argvFile);
     assert.equal(argv[argv.indexOf('--workers') + 1], '2');
     assert.ok(!argv.some((a) => a.startsWith('--e2e-rail-')), 'the tag is recorded, not passed to Playwright');

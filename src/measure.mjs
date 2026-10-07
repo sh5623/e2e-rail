@@ -81,7 +81,8 @@ export function retryRates({ config, app, last = 10 }) {
 // Runs `testList` once per worker count, one after another, each as an ordinary ledger line tagged as a measurement.
 // A row per run: `{ workers, rc, durationMs, failures, retried, loadAtStart }` (wall clock of the Playwright run,
 // failed tests, (file, project) rows that needed a retry, 1-minute load when the lock was taken). A failing run is a
-// row with its rc; a run that throws ends the measurement with that error (no partial table).
+// row with its rc; a run that throws ends the measurement with that error (no partial table). Each run holds the heavy
+// (exclusive) lock (R50): a comparison overlapping other runs would measure the contention, not the worker count.
 export async function measureWorkers({ config, app, workersList, testList, mode = 'dev' }) {
   if (!Array.isArray(workersList) || !workersList.length || !workersList.every((w) => Number.isInteger(w) && w >= 1)) {
     throw new Error(`e2e-rail: workers to measure must be a list of whole numbers of 1 or more (e.g. 1,2,4), got ${JSON.stringify(workersList)}`);
@@ -91,7 +92,7 @@ export async function measureWorkers({ config, app, workersList, testList, mode 
   }
   const rows = [];
   for (const workers of workersList) {
-    const { rc, entry } = await runTests({ config, app, mode, testList, workers, passthrough: [MEASURE_TAG] });
+    const { rc, entry } = await runTests({ config, app, mode, testList, workers, lockClass: 'heavy', passthrough: [MEASURE_TAG] });
     rows.push({
       workers, rc,
       durationMs: entry?.durationMs ?? null,

@@ -304,6 +304,45 @@ test('shard plans (R49): a test list without a plan is ad hoc; shardPlan needs a
   });
 });
 
+test('R50: lockClass overrides the derived lock class; an explicit heavy waits for a running light to finish', async () => {
+  const error = mock.method(console, 'error', () => {});
+  try {
+    await withRepo(async ({ root, config, app, argvFile }) => {
+      const dir = lockDir(config);
+      const list = writeList(root);
+      const light = await acquire({ dir, cls: 'light', pollMs: 20, purpose: 'unit' });
+      let held = true;
+      try {
+        // derived: a test list with workers is light and shares the slots with the holder
+        const shared = await runTests({ config, app, testList: list, workers: 1 });
+        assert.equal(shared.entry.lock.class, 'light');
+        rmSync(argvFile, { force: true });
+        const pending = runTests({ config, app, testList: list, workers: 1, lockClass: 'heavy' });
+        await until(() => lockStatus(dir).heavy?.pid === process.pid);
+        await sleep(100);
+        assert.equal(existsSync(argvFile), false, 'Playwright waits until the light holder is done');
+        light.release(); held = false;
+        const { entry } = await pending;
+        assert.equal(entry.kind, 'selected');
+        assert.equal(entry.lock.class, 'heavy');
+        assert.ok(entry.lock.waitMs > 0);
+        assert.match(error.mock.calls.map((c) => c.arguments.join(' ')).join('\n'), /waiting for the heavy lock/);
+      } finally { if (held) light.release(); }
+      // an explicit light overrides the heavy a full run would take
+      const full = await runTests({ config, app, workers: 1, lockClass: 'light' });
+      assert.equal(full.entry.kind, 'full');
+      assert.equal(full.entry.lock.class, 'light');
+      // an unknown class is refused before the lock and the ledger
+      const before = readRuns(config).length;
+      for (const lockClass of ['exclusive', null, 'Heavy']) {
+        await assert.rejects(runTests({ config, app, testList: list, workers: 1, lockClass }), /lockClass must be heavy or light/);
+      }
+      assert.equal(readRuns(config).length, before);
+      assert.deepEqual(lockStatus(dir), { heavy: null, light: [] });
+    });
+  } finally { error.mock.restore(); }
+});
+
 test('a failing preview build returns its rc without spawning Playwright; a build that leaves dist stale is refused', async () => {
   const error = mock.method(console, 'error', () => {});
   try {

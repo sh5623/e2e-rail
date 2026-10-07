@@ -130,11 +130,16 @@ const staleDist = (preview) => `e2e-rail: dist (${preview.dist}) is missing or o
 // Order: lock → (preview) build if dist is stale → fingerprint → spawn. The fingerprint is taken under the lock, right
 // before Playwright starts, so code edited while the run waited for the lock is not credited to the old code.
 // `shardPlan` ({ planId, codeId } from a `shard plan` manifest) goes with a shard whose `testList` is that plan's list.
+// `lockClass` ('heavy' | 'light') overrides the class derived from what runs (R50: a worker measurement needs the
+// machine to itself); left undefined, full, shard and worker-less runs are heavy and the rest light.
 export async function runTests({
   config, app, mode = 'dev', testList = null, lastFailed = false, workers, project, shard = null, shardPlan = null,
-  blob = false, lock = true, build = true, selectionId = null, passthrough = [],
+  blob = false, lock = true, lockClass, build = true, selectionId = null, passthrough = [],
 }) {
   if (!MODES.includes(mode)) throw new Error(`e2e-rail: unknown mode "${mode}" (expected ${MODES.join(' or ')})`);
+  if (lockClass !== undefined && lockClass !== 'heavy' && lockClass !== 'light') {
+    throw new Error(`e2e-rail: lockClass must be heavy or light (or left out), got ${JSON.stringify(lockClass)}`);
+  }
   assertPassthrough(passthrough); // before the lock, the build and the ledger
   const shardEntry = shardRecord(shard, testList, shardPlan);
   const dirAbs = appDir(config, app);
@@ -160,7 +165,7 @@ export async function runTests({
     ...app.run.env, ...(app.run.modeEnv[mode] ?? {}),
     PLAYWRIGHT_JSON_OUTPUT_FILE: reportAbs, PLAYWRIGHT_JSON_OUTPUT_NAME: reportAbs,
   };
-  const cls = kind === 'full' || kind === 'shard' || workers == null ? 'heavy' : 'light';
+  const cls = lockClass ?? (kind === 'full' || kind === 'shard' || workers == null ? 'heavy' : 'light');
   const filtered = isFiltered({ project, passthrough });
 
   // A signal while a child runs goes on to that child (Playwright shuts down and reports); the run then ends normally
