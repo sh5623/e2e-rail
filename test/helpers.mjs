@@ -33,7 +33,8 @@ export function listInStub(root, files, projects = ['chromium']) {
 }
 
 // Copies a fixture into a fresh temp dir, `git init`s it and makes one commit.
-// root is realpath-normalized (macOS: /var/... vs /private/var/...).
+// root is realpath-normalized (macOS: /var/... vs /private/var/...). Git's automatic maintenance is off: a recent git
+// detaches it after a commit, and a background writer in .git races the cleanup (ENOTEMPTY); the cleanup retries too.
 export function makeTempRepo(fixtureName) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'e2e-rail-')));
   cpSync(fixtureDir(fixtureName), root, { recursive: true });
@@ -41,7 +42,9 @@ export function makeTempRepo(fixtureName) {
   g(['init', '-q']);
   g(['config', 'user.email', 't@t']);
   g(['config', 'user.name', 't']);
+  g(['config', 'maintenance.auto', 'false']);
+  g(['config', 'gc.auto', '0']);
   g(['add', '-A']);
   g(['commit', '-qm', 'init']);
-  return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, cleanup: () => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }) };
 }

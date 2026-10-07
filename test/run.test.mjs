@@ -640,39 +640,43 @@ const setStubVersion = (root, version) => {
 };
 
 test('D: Playwright 1.56–1.57 match a test-list line only on a whole title path, so the run gets one such line per listed test the list covers', async () => {
-  await withRepo(async ({ root, config, app, argvFile }) => {
-    setStubVersion(root, '1.57.0');
-    const list = path.join(root, 'mine.txt');
-    const text = '# a file, a file in one project, a title path in every project, a file that is gone\n[chromium] › orders.spec.ts\n[mobile-chrome] › cart.spec.ts\ncart.spec.ts › adds to cart\n[chromium] › gone.spec.ts\n';
-    writeFileSync(list, text);
-    const { rc, entry } = await runTests({ config, app, testList: list, workers: 1, lock: false, selectionId: 'sel-d' });
-    const given = handedList(argvFile);
-    assert.notEqual(given, list);
-    assert.equal(given, path.join(root, '.e2e-rail/reports', `${entry.id}.test-list.txt`));
-    assert.equal(readFileSync(given, 'utf8'), [
-      '[chromium] › orders.spec.ts › lists orders', '[mobile-chrome] › cart.spec.ts › adds to cart',
-      '[chromium] › cart.spec.ts › adds to cart', '[chromium] › gone.spec.ts', '',
-    ].join('\n'));
-    assert.equal(readFileSync(list, 'utf8'), text, 'the list itself is left as written');
-    assert.ok(entry.command.includes(`--test-list ${list}`), 'the ledger names the list the run was asked for');
-    // R56 still judges the list as written
-    assert.equal(rc, 1);
-    assert.deepEqual(entry.failures.map((f) => f.error), ['test list line matched no tests: [chromium] › gone.spec.ts']);
-    // a planned shard list is expanded the same way, after its manifest check
-    const { files } = planShards({ config, app, count: 1 });
-    const shard = await runTests({ config, app, shard: { index: 1, count: 1 }, testList: files[0], workers: 1, lock: false });
-    assert.equal(shard.rc, 0);
-    assert.equal(readFileSync(handedList(argvFile), 'utf8'), [
-      '[chromium] › cart.spec.ts › adds to cart', '[mobile-chrome] › cart.spec.ts › adds to cart', '[chromium] › order-detail.spec.ts › shows one order',
-      '[chromium] › orders.spec.ts › lists orders', '[chromium] › smoke.spec.ts › boots', '',
-    ].join('\n'));
-  });
-  await withRepo(async ({ root, config, app, argvFile }) => {
-    setStubVersion(root, '1.58.0'); // from 1.58.0 a line may name a file or a describe: the list goes as written
-    const list = writeList(root);
-    assert.equal((await runTests({ config, app, testList: list, workers: 1, lock: false })).rc, 0);
-    assert.equal(handedList(argvFile), list);
-  });
+  const error = mock.method(console, 'error', () => {});
+  try {
+    await withRepo(async ({ root, config, app, argvFile }) => {
+      setStubVersion(root, '1.57.0');
+      const list = path.join(root, 'mine.txt');
+      const text = '# a file, a file in one project, a title path in every project, a file that is gone\n[chromium] › orders.spec.ts\n[mobile-chrome] › cart.spec.ts\ncart.spec.ts › adds to cart\n[chromium] › gone.spec.ts\n';
+      writeFileSync(list, text);
+      const { rc, entry } = await runTests({ config, app, testList: list, workers: 1, lock: false, selectionId: 'sel-d' });
+      const given = handedList(argvFile);
+      assert.notEqual(given, list);
+      assert.equal(given, path.join(root, '.e2e-rail/reports', `${entry.id}.test-list.txt`));
+      assert.equal(readFileSync(given, 'utf8'), [
+        '[chromium] › orders.spec.ts › lists orders', '[mobile-chrome] › cart.spec.ts › adds to cart',
+        '[chromium] › cart.spec.ts › adds to cart', '[chromium] › gone.spec.ts', '',
+      ].join('\n'));
+      assert.equal(readFileSync(list, 'utf8'), text, 'the list itself is left as written');
+      assert.ok(entry.command.includes(`--test-list ${list}`), 'the ledger names the list the run was asked for');
+      // R56 still judges the list as written
+      assert.equal(rc, 1);
+      assert.deepEqual(entry.failures.map((f) => f.error), ['test list line matched no tests: [chromium] › gone.spec.ts']);
+      assert.equal(error.mock.calls.at(-1).arguments.join(' '), 'e2e-rail: test list line matched no tests: [chromium] › gone.spec.ts');
+      // a planned shard list is expanded the same way, after its manifest check
+      const { files } = planShards({ config, app, count: 1 });
+      const shard = await runTests({ config, app, shard: { index: 1, count: 1 }, testList: files[0], workers: 1, lock: false });
+      assert.equal(shard.rc, 0);
+      assert.equal(readFileSync(handedList(argvFile), 'utf8'), [
+        '[chromium] › cart.spec.ts › adds to cart', '[mobile-chrome] › cart.spec.ts › adds to cart', '[chromium] › order-detail.spec.ts › shows one order',
+        '[chromium] › orders.spec.ts › lists orders', '[chromium] › smoke.spec.ts › boots', '',
+      ].join('\n'));
+    });
+    await withRepo(async ({ root, config, app, argvFile }) => {
+      setStubVersion(root, '1.58.0'); // from 1.58.0 a line may name a file or a describe: the list goes as written
+      const list = writeList(root);
+      assert.equal((await runTests({ config, app, testList: list, workers: 1, lock: false })).rc, 0);
+      assert.equal(handedList(argvFile), list);
+    });
+  } finally { error.mock.restore(); }
 });
 
 test('R50: lockClass overrides the derived lock class; an explicit heavy waits for a running light to finish', async () => {
