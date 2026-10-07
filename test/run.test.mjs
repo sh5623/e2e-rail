@@ -271,16 +271,36 @@ test('shard: Playwright splits a bare --shard run; a planned shard list is not s
     let argv = readJson(argvFile);
     assert.equal(argv[argv.indexOf('--shard') + 1], '1/2');
     assert.equal(a.entry.kind, 'shard');
-    assert.deepEqual(a.entry.shard, { index: 1, count: 2 });
+    assert.deepEqual(a.entry.shard, { index: 1, count: 2, plan: 'native' });
     const list = writeList(root);
-    const b = await runTests({ config, app, shard: { index: 2, count: 2 }, testList: list, workers: 1, blob: true, lock: false });
+    const plan = { planId: 'plan-20261007-000000-abcd', codeId: 'code-1' };
+    const b = await runTests({ config, app, shard: { index: 2, count: 2 }, testList: list, shardPlan: plan, workers: 1, blob: true, lock: false });
     argv = readJson(argvFile);
     assert.ok(argv.includes('--test-list'));
     assert.ok(!argv.includes('--shard'), 'the list already is shard 2/2');
     assert.ok(argv.includes('--reporter=blob,json'));
     assert.equal(b.entry.kind, 'shard');
-    assert.deepEqual(b.entry.shard, { index: 2, count: 2 });
+    assert.deepEqual(b.entry.shard, { index: 2, count: 2, plan: plan.planId, planCodeId: 'code-1' });
     assert.match(b.entry.command, /--test-list \S+ --workers 1 --reporter=blob,json/);
+  });
+});
+
+test('shard plans (R49): a test list without a plan is ad hoc; shardPlan needs a shard of a test list and a plan id and code id', async () => {
+  await withRepo(async ({ root, config, app }) => {
+    const list = writeList(root);
+    const adhoc = await runTests({ config, app, shard: { index: 1, count: 2 }, testList: list, workers: 1, lock: false });
+    assert.deepEqual(adhoc.entry.shard, { index: 1, count: 2, plan: `adhoc:${list}` });
+    // a caller's own `plan` on the shard object is not what gets recorded
+    const forged = await runTests({ config, app, shard: { index: 1, count: 1, plan: 'plan-x', planCodeId: 'c' }, workers: 1, lock: false });
+    assert.deepEqual(forged.entry.shard, { index: 1, count: 1, plan: 'native' });
+    const before = readRuns(config).length;
+    const plan = { planId: 'plan-1', codeId: 'code-1' };
+    await assert.rejects(runTests({ config, app, shard: { index: 1, count: 2 }, shardPlan: plan, workers: 1, lock: false }), /shardPlan/);
+    await assert.rejects(runTests({ config, app, testList: list, shardPlan: plan, workers: 1, lock: false }), /shardPlan/);
+    for (const bad of [{ planId: 'plan-1' }, { codeId: 'c' }, { planId: '', codeId: 'c' }, { planId: 'native', codeId: 'c' }, { planId: 'adhoc:x', codeId: 'c' }, 'plan-1']) {
+      await assert.rejects(runTests({ config, app, shard: { index: 1, count: 2 }, testList: list, shardPlan: bad, workers: 1, lock: false }), /shardPlan/);
+    }
+    assert.equal(readRuns(config).length, before, 'a refused shardPlan writes no ledger line');
   });
 });
 

@@ -21,6 +21,23 @@ function lastVerified(runs, appName) {
   return best?.run ?? null;
 }
 
+// The runs of this app in `mode` that can count: passed, not narrowed (`filtered`, R44), with a fingerprint.
+const countedRuns = (config, app, mode) => readRuns(config, { app: app.name })
+  .filter((r) => r.mode === mode && r.rc === 0 && !r.filtered && r.fingerprint?.id);
+
+// R47: an app that declares a preview build tests the built dist in preview mode; without a dist nothing is credited.
+const distMissing = (app, mode, fingerprint) => mode === 'preview' && Boolean(app.run.preview) && fingerprint.dist === null;
+
+// The complete shard set among `runs` for this fingerprint; a planned set only when its plan was made for this code (R49).
+const shardSetOf = (runs, app, fingerprint) => completeShardSet(runs, app.name, fingerprint.id, { codeId: fingerprint.codeId });
+
+// The shard set that verifies the current code in `mode` by the rules `verify` applies (age aside), or null: what
+// `shard merge` reports as complete.
+export function verifiedShardSet({ config, app, mode = 'dev' }) {
+  const fingerprint = computeFingerprint({ config, app, mode });
+  return distMissing(app, mode, fingerprint) ? null : shardSetOf(countedRuns(config, app, mode), app, fingerprint);
+}
+
 // "Has exactly this code (fingerprint) already passed?" answered from the ledger (spec §8). Only runs of this app, in
 // this mode, with this fingerprint id that passed and were not narrowed (`filtered`) count. `require: 'full'` wants a
 // full run or a complete shard set; `'selected'` also takes a selected run. Exit codes: 0 verified, 20 stale (a
@@ -33,8 +50,7 @@ export function verify({ config, app, mode = 'dev', require = 'full', maxAgeMin 
     throw new Error(`e2e-rail: --max-age must be a number of minutes (0 or more), got ${JSON.stringify(maxAgeMin)}`);
   }
   const fingerprint = computeFingerprint({ config, app, mode });
-  const counted = readRuns(config, { app: app.name })
-    .filter((r) => r.mode === mode && r.rc === 0 && !r.filtered && r.fingerprint?.id);
+  const counted = countedRuns(config, app, mode);
   const matching = counted.filter((r) => r.fingerprint.id === fingerprint.id);
   const isFresh = (r) => maxAgeMin === null || Date.now() - Date.parse(r.ts) <= maxAgeMin * 60_000; // an unreadable ts is not fresh
 
@@ -42,7 +58,7 @@ export function verify({ config, app, mode = 'dev', require = 'full', maxAgeMin 
   const settle = (runs) => {
     const full = latestFull(runs, app.name, fingerprint.id);
     if (full) return { run: full };
-    const shards = completeShardSet(runs, app.name, fingerprint.id);
+    const shards = shardSetOf(runs, app, fingerprint);
     if (shards) return { run: newestOf(shards, runs), shards };
     const selected = require === 'selected' ? [...runs].reverse().find((r) => r.kind === 'selected') : null;
     return selected ? { run: selected } : null;
@@ -51,7 +67,7 @@ export function verify({ config, app, mode = 'dev', require = 'full', maxAgeMin 
   // R47: an app that declares a preview build tests the built dist in preview mode. If that dist is missing the
   // fingerprint cannot say what was built, so no run is credited. An app that declares no preview build has no dist to
   // name: its preview runs are matched on app + mode + fingerprint like any other.
-  const noDist = mode === 'preview' && Boolean(app.run.preview) && fingerprint.dist === null;
+  const noDist = distMissing(app, mode, fingerprint);
   const recent = noDist ? [] : matching.filter(isFresh);
   const found = settle(recent);
   if (found) return { status: 'verified', exitCode: 0, run: found.run, ...(found.shards && { shards: found.shards }), fingerprint };

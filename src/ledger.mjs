@@ -53,21 +53,33 @@ export function latestFull(runs, app, fpId) {
   return [...runs].reverse().find((r) => r.kind === 'full' && passed(r) && sameRun(r, app, fpId)) ?? null;
 }
 
-const validShard = (s) => Number.isInteger(s?.count) && s.count >= 1 && Number.isInteger(s.index) && s.index >= 1 && s.index <= s.count;
+const validShard = (s) => Number.isInteger(s?.count) && s.count >= 1 && Number.isInteger(s.index) && s.index >= 1 && s.index <= s.count
+  && (s.plan === undefined || (typeof s.plan === 'string' && s.plan !== ''));
+
+// Which split a shard run belongs to (R49): 'native' is Playwright's own `--shard i/n` over the whole suite (an entry
+// without `plan` reads as native), a plan id is a `shard plan` test list, and 'adhoc:<list>' is any other test list.
+const planOf = (s) => s.plan ?? 'native';
 
 // The passing shard runs (ordered by index 1..count) that together make up one full run of this fingerprint, or null.
-// Runs are grouped by `shard.count` and never mixed across counts: a 2-way and a 3-way attempt of the same fingerprint
-// are different splits. If several counts have a complete set, the one that finished most recently wins.
-export function completeShardSet(runs, app, fpId) {
-  const byCount = new Map(); // count -> Map(index -> { run, pos }) (later passing run of an index replaces earlier)
+// Runs are grouped by `shard.count` AND `shard.plan` and never mixed across groups: a 2-way and a 3-way attempt, or
+// Playwright's split and a planned one, are different splits whose indexes do not add up. An ad-hoc test list never
+// completes a set (nothing says it covers the suite), and a planned set counts only when its plan was made for
+// `codeId` (default: the code its runs tested), since a plan lists the tests that existed when it was made. If several
+// groups have a complete set, the one that finished most recently wins.
+export function completeShardSet(runs, app, fpId, { codeId } = {}) {
+  const groups = new Map(); // `${count} ${plan}` -> { count, byIndex: Map(index -> { run, pos }) }; a later pass replaces
   runs.forEach((r, pos) => {
     if (r.kind !== 'shard' || !passed(r) || !sameRun(r, app, fpId) || !validShard(r.shard)) return;
-    const { index, count } = r.shard;
-    if (!byCount.has(count)) byCount.set(count, new Map());
-    byCount.get(count).set(index, { run: r, pos });
+    const { index, count, planCodeId } = r.shard;
+    const plan = planOf(r.shard);
+    if (plan.startsWith('adhoc:')) return;
+    if (plan !== 'native' && (typeof planCodeId !== 'string' || planCodeId !== (codeId ?? r.fingerprint.codeId))) return;
+    const key = `${count} ${plan}`;
+    if (!groups.has(key)) groups.set(key, { count, byIndex: new Map() });
+    groups.get(key).byIndex.set(index, { run: r, pos });
   });
   let best = null;
-  for (const [count, byIndex] of byCount) {
+  for (const { count, byIndex } of groups.values()) {
     const members = [];
     for (let i = 1; i <= count; i++) { if (!byIndex.has(i)) break; members.push(byIndex.get(i)); }
     if (members.length !== count) continue;

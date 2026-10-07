@@ -176,6 +176,41 @@ test('completeShardSet never mixes shard runs that disagree on shard.count', () 
   assert.deepEqual(bothRev.map((s) => s.id), ['a1', 'a2']);
 });
 
+test('completeShardSet groups by plan too (R49): native and planned never mix, ad-hoc lists never complete, a plan must match the code', () => {
+  // the run's own fingerprint codeId for fp('A') is 'c-A'
+  const planned = (index, count, plan, over) => shard(index, count, { shard: { index, count, plan, planCodeId: 'c-A' }, ...over });
+  const native = (index, count, over) => shard(index, count, { shard: { index, count, plan: 'native' }, ...over });
+  // Playwright's 1/2 and a planned 2/2 cover different halves: no set
+  assert.equal(completeShardSet([native(1, 2), planned(2, 2, 'plan-1')], 'web', 'A'), null);
+  assert.equal(completeShardSet([planned(1, 2, 'plan-1'), native(2, 2)], 'web', 'A'), null);
+  // an entry recorded without `plan` is native
+  assert.equal(completeShardSet([shard(1, 2), native(2, 2)], 'web', 'A').length, 2);
+  assert.equal(completeShardSet([shard(1, 2), planned(2, 2, 'plan-1')], 'web', 'A'), null);
+  // two plans of the same count do not mix; one plan complete -> that plan's runs
+  assert.equal(completeShardSet([planned(1, 2, 'plan-1'), planned(2, 2, 'plan-2')], 'web', 'A'), null);
+  const p = completeShardSet([planned(1, 2, 'plan-1', { id: 'p1' }), planned(2, 2, 'plan-2'), planned(2, 2, 'plan-1', { id: 'p2' })], 'web', 'A');
+  assert.deepEqual(p.map((s) => s.id), ['p1', 'p2']);
+  // ad-hoc test lists never complete a set, not even a single 1/1 "split"
+  assert.equal(completeShardSet([shard(1, 1, { shard: { index: 1, count: 1, plan: 'adhoc:list.txt' } })], 'web', 'A'), null);
+  assert.equal(completeShardSet([
+    shard(1, 2, { shard: { index: 1, count: 2, plan: 'adhoc:1.txt' } }), shard(2, 2, { shard: { index: 2, count: 2, plan: 'adhoc:1.txt' } }),
+  ], 'web', 'A'), null);
+  // a plan made for other code (or with no code recorded) never completes; an explicit codeId is what it must match
+  assert.equal(completeShardSet([shard(1, 1, { shard: { index: 1, count: 1, plan: 'plan-1', planCodeId: 'c-old' } })], 'web', 'A'), null);
+  assert.equal(completeShardSet([shard(1, 1, { shard: { index: 1, count: 1, plan: 'plan-1' } })], 'web', 'A'), null);
+  assert.equal(completeShardSet([planned(1, 1, 'plan-1')], 'web', 'A').length, 1);
+  assert.equal(completeShardSet([planned(1, 1, 'plan-1')], 'web', 'A', { codeId: 'c-A' }).length, 1);
+  assert.equal(completeShardSet([planned(1, 1, 'plan-1')], 'web', 'A', { codeId: 'c-now' }), null);
+  // native sets need no code check
+  assert.equal(completeShardSet([native(1, 1)], 'web', 'A', { codeId: 'c-now' }).length, 1);
+  // a malformed plan field never completes
+  assert.equal(completeShardSet([shard(1, 1, { shard: { index: 1, count: 1, plan: '' } })], 'web', 'A'), null);
+  assert.equal(completeShardSet([shard(1, 1, { shard: { index: 1, count: 1, plan: 7 } })], 'web', 'A'), null);
+  // the most recently finished group wins across plans as across counts
+  const latest = completeShardSet([native(1, 1, { id: 'n' }), planned(1, 1, 'plan-1', { id: 'q' })], 'web', 'A');
+  assert.deepEqual(latest.map((s) => s.id), ['q']);
+});
+
 test('last-green marker is per app, overwritten in place, and empty/missing reads as null', async () => {
   await withLedger(async (config) => {
     assert.equal(readLastGreen(config, 'web'), null);

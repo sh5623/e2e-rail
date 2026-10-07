@@ -108,6 +108,20 @@ function readReport(abs) {
   } catch { return null; } // Playwright died before writing it, or was cut off mid-write
 }
 
+// The ledger's `shard` field (R49): which split this run is a part of. Without a test list Playwright splits the whole
+// suite itself ('native'); a test list from `shard plan` names its plan and the code that plan was made for; any other
+// test list is 'adhoc:<list>', which never completes a set. A `plan` on the caller's `shard` object is not trusted.
+const RESERVED_PLAN = /^(native$|adhoc:)/;
+function shardRecord(shard, testList, shardPlan) {
+  if (shardPlan == null) return shard && { index: shard.index, count: shard.count, plan: testList ? `adhoc:${testList}` : 'native' };
+  if (!shard || !testList) throw new Error('e2e-rail: shardPlan names the plan a shard test list came from; pass it together with shard and testList.');
+  const { planId, codeId } = typeof shardPlan === 'object' ? shardPlan : {};
+  if (typeof planId !== 'string' || !planId || RESERVED_PLAN.test(planId) || typeof codeId !== 'string' || !codeId) {
+    throw new Error(`e2e-rail: shardPlan must be { planId, codeId } from a shard plan manifest, got ${JSON.stringify(shardPlan)}`);
+  }
+  return { index: shard.index, count: shard.count, plan: planId, planCodeId: codeId };
+}
+
 const refuse = (message) => { console.error(message); return { rc: 1, entry: null }; };
 const staleDist = (preview) => `e2e-rail: dist (${preview.dist}) is missing or older than its sources. Run \`${preview.build}\` or drop --no-build.`;
 
@@ -115,12 +129,14 @@ const staleDist = (preview) => `e2e-rail: dist (${preview.dist}) is missing or o
 // `kind` is derived from what runs (a caller's `kind` is ignored): a run with a test list is never recorded as full.
 // Order: lock → (preview) build if dist is stale → fingerprint → spawn. The fingerprint is taken under the lock, right
 // before Playwright starts, so code edited while the run waited for the lock is not credited to the old code.
+// `shardPlan` ({ planId, codeId } from a `shard plan` manifest) goes with a shard whose `testList` is that plan's list.
 export async function runTests({
-  config, app, mode = 'dev', testList = null, lastFailed = false, workers, project, shard = null, blob = false,
-  lock = true, build = true, selectionId = null, passthrough = [],
+  config, app, mode = 'dev', testList = null, lastFailed = false, workers, project, shard = null, shardPlan = null,
+  blob = false, lock = true, build = true, selectionId = null, passthrough = [],
 }) {
   if (!MODES.includes(mode)) throw new Error(`e2e-rail: unknown mode "${mode}" (expected ${MODES.join(' or ')})`);
   assertPassthrough(passthrough); // before the lock, the build and the ledger
+  const shardEntry = shardRecord(shard, testList, shardPlan);
   const dirAbs = appDir(config, app);
   const cli = playwrightCli(dirAbs);
   const kind = kindOf({ lastFailed, shard, testList });
@@ -188,7 +204,7 @@ export async function runTests({
     };
     const report = readReport(reportAbs);
     const entry = appendRun(config, {
-      id, app: app.name, mode, kind, fingerprint, selectionId, shard, workers: workers ?? null, project: project ?? null,
+      id, app: app.name, mode, kind, fingerprint, selectionId, shard: shardEntry, workers: workers ?? null, project: project ?? null,
       filtered, command, lock: lockInfo, rc: status, durationMs,
       rootDir: report?.config?.rootDir ? toAppRel(dirAbs, report.config.rootDir) : null,
       ...parsePlaywrightReport(report ?? { suites: [] }, dirAbs),
