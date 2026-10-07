@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { loadTypeScript, readCompilerOptions, parseFile } from '../src/util/ts.mjs';
-import { playwrightCli, playwrightVersion, listTests, flattenSuites, toAppRel } from '../src/util/playwright.mjs';
+import { assertPlaywrightSupported, MIN_PLAYWRIGHT, playwrightCli, playwrightVersion, listTests, flattenSuites, toAppRel } from '../src/util/playwright.mjs';
 import { execCapture } from '../src/util/exec.mjs';
 import { fixtureDir, readJson } from './helpers.mjs';
 
@@ -89,6 +89,35 @@ test('playwrightCli explains a missing @playwright/test', () => {
     assert.throws(() => playwrightCli(dir), /@playwright\/test/);
     assert.throws(() => playwrightVersion(dir), /@playwright\/test/);
   } finally { cleanup(); }
+});
+
+// A scratch app whose @playwright/test reports `version` (the stub CLI, so the app can list and run).
+function appWithPlaywright(version) {
+  const s = scratch();
+  const pkg = path.join(s.dir, 'node_modules/@playwright/test');
+  mkdirSync(pkg, { recursive: true });
+  writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@playwright/test', version, exports: { './cli': './cli.js', './package.json': './package.json' } }));
+  writeFileSync(path.join(pkg, 'cli.js'), readFileSync(path.join(app, 'node_modules/@playwright/test/cli.js')));
+  return s;
+}
+
+test('D: assertPlaywrightSupported wants @playwright/test 1.56.0 or newer (--test-list); an unreadable version is refused', () => {
+  for (const version of ['1.56.0', '1.56.1', '1.61.0', '1.63.0', '1.100.0', '2.0.0', '1.57.0-alpha-2025-10-01']) {
+    const { dir, cleanup } = appWithPlaywright(version);
+    try { assert.doesNotThrow(() => assertPlaywrightSupported(dir), version); } finally { cleanup(); }
+  }
+  for (const version of ['1.55.9', '1.55.0', '1.44.0', '1.9.0', '0.99.0', '1.56.0-alpha-2025-08-01', 'next', '']) {
+    const { dir, cleanup } = appWithPlaywright(version);
+    try {
+      assert.throws(() => assertPlaywrightSupported(dir), (e) => {
+        assert.equal(e.message, `e2e-rail: @playwright/test 1.56.0 or newer is required (found ${version}): selected and shard runs use --test-list`);
+        return true;
+      }, version);
+    } finally { cleanup(); }
+  }
+  assert.equal(MIN_PLAYWRIGHT, '1.56.0');
+  const { dir, cleanup } = scratch();
+  try { assert.throws(() => assertPlaywrightSupported(dir), /@playwright\/test not found/); } finally { cleanup(); }
 });
 
 test('flattenSuites returns app-relative POSIX files for the failing stub report', () => {

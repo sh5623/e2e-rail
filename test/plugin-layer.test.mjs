@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { USAGES } from '../src/commands/_args.mjs';
 import { assertPassthrough } from '../src/run.mjs';
+import { MIN_PLAYWRIGHT } from '../src/util/playwright.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKILLS = ['init', 'select', 'gate', 'measure', 'shadow'];
@@ -99,6 +100,19 @@ test('package.json, the Claude plugin and the Codex plugin carry one version', (
   const v = JSON.parse(read('package.json')).version;
   assert.equal(JSON.parse(read('.claude-plugin/plugin.json')).version, v);
   assert.equal(JSON.parse(read('plugins/e2e-rail/.codex-plugin/plugin.json')).version, v);
+});
+
+test('D: the Playwright floor is one number: peerDependencies, the runtime check, the READMEs, the init skill and the CI contract matrix', () => {
+  const floor = MIN_PLAYWRIGHT.split('.').slice(0, 2).join('.');
+  const esc = (s) => s.replace(/[.]/g, '\\.');
+  assert.equal(JSON.parse(read('package.json')).peerDependencies['@playwright/test'], `>=${floor}`);
+  assert.match(read('README.md'), new RegExp(`\`@playwright/test\` ≥ ${esc(floor)}`));
+  assert.match(read('README.ko.md'), new RegExp(`\`@playwright/test\` ≥ ${esc(floor)}`));
+  assert.match(read('skills/init/SKILL.md'), new RegExp(`\`@playwright/test\` ${esc(floor)} or newer`));
+  const ci = read('.github/workflows/ci.yml');
+  assert.match(ci, new RegExp(`playwright: "${esc(MIN_PLAYWRIGHT)}"`), 'a contract job on the minimum');
+  assert.match(ci, /npm i --no-save @playwright\/test@\$\{\{ matrix\.playwright \}\}/);
+  assert.match(ci, /run: npm run test:contract/);
 });
 
 // ── skills, agent, doctrine ────────────────────────────────────────────────────────────────────────────────────────

@@ -8,7 +8,7 @@ import { verifiedShardSet } from './verify.mjs';
 import { execCapture } from './util/exec.mjs';
 import { sha256 } from './util/hash.mjs';
 import { newId } from './util/id.mjs';
-import { listTests, playwrightCli } from './util/playwright.mjs';
+import { assertPlaywrightSupported, listTests, playwrightCli } from './util/playwright.mjs';
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const MODES = ['dev', 'preview'];
@@ -44,6 +44,7 @@ function durationSource(config, app, fromRun) {
 export function planShards({ config, app, count, fromRun = null, includeSpecs = [], mode = 'dev' }) {
   if (!Number.isInteger(count) || count < 1) throw new Error(`e2e-rail: shard count must be a whole number of 1 or more, got ${JSON.stringify(count)}`);
   if (!MODES.includes(mode)) throw new Error(`e2e-rail: unknown mode "${mode}" (expected ${MODES.join(' or ')})`);
+  assertPlaywrightSupported(appDir(config, app)); // D: its lists run with --test-list
   // The code id is taken before the tests are listed: if the code moves in between, the plan names older code than it
   // lists and never completes a set, rather than vouching for the newer code with an older list.
   const codeId = codeIdOf(config);

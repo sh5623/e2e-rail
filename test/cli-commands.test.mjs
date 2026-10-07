@@ -625,6 +625,22 @@ test('measure slowest / retries / workers print tables from the ledger', () => w
   assert.match(missing.stderr, /^e2e-rail: test list not found: /);
 }));
 
+test('D: an app on @playwright/test older than 1.56 is refused by map, select, run and shard plan, with the version found', () => withRepo(({ root, run, at }) => {
+  const pkg = at('node_modules/@playwright/test/package.json');
+  writeFileSync(pkg, readFileSync(pkg, 'utf8').replace('"1.61.0"', '"1.52.0"'));
+  const why = '@playwright/test 1.56.0 or newer is required (found 1.52.0): selected and shard runs use --test-list';
+  const map = run(['map']);
+  assert.equal(map.code, 1, map.out);
+  assert.ok(map.stderr.split('\n').includes(`e2e-rail: app web: ${why}`), map.stderr);
+  writeFileSync(at('src/components/Table.ts'), TABLE_EDIT); // a change select has to narrow, so it needs the spec index
+  for (const args of [['select', '--base', 'HEAD'], ['run', '--full', '--no-lock'], ['shard', 'plan', '--count', '1']]) {
+    const r = run(args);
+    assert.equal(r.code, 1, `${args.join(' ')} → ${r.out}`);
+    assert.equal(r.stderr, `e2e-rail: ${why}\n`, args.join(' '));
+  }
+  assert.deepEqual(ledgerLines(root), []);
+}));
+
 test('lock run holds the lock around a command and passes its rc through; status and reap need no config', () => withRepo(({ run, lockRoot }) => {
   assert.equal(run(['lock', 'run', 'light', '--', process.execPath, '-e', 'process.exit(3)']).code, 3);
   const missing = run(['lock', 'run', 'light', '--', 'e2e-rail-no-such-command', 'x']);

@@ -16,8 +16,8 @@ It is a zero-dependency Node CLI (`e2e-rail`) that your scripts and CI call, plu
 **Codex** that make agents use it honestly: no selected, rerun or filtered run reported as a full pass, a selection
 block with reasons for every selected run, and `verify` before any claim.
 
-**Status:** v0.1.0 (git tag `v0.1.0`). Requires Node ≥ 20, `@playwright/test` ≥ 1.44 and `typescript` ≥ 5 in the host
-repository (borrowed, not bundled).
+**Status:** v0.1.0 (git tag `v0.1.0`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
+`--test-list`; e2e-rail refuses an older one) and `typescript` ≥ 5 in the host repository (borrowed, not bundled).
 
 ## Install
 
@@ -158,6 +158,9 @@ when no selected spec has a Playwright project), runs nothing and records nothin
 selection, a shard plan or `--test-list <file>`) whose list matches no test is recorded as a failure (rc 1,
 `failed: test list matched no tests`) although Playwright exits 0 there; so is one with a line that matches nothing
 (`failed: test list line matched no tests: <line>`), unless the run is filtered (narrowed on purpose).
+On Playwright 1.56–1.57, whose `--test-list` matches a line only on a whole title path, e2e-rail lists the tests
+first and hands Playwright one such line per test the list covers (`.e2e-rail/reports/<run-id>.test-list.txt`); the
+list itself, and the check above, stay as written.
 `run --selection` on a selection computed for other code (files changed since `select`) computes it again from the
 same base, head and uncommitted setting, prints `selection <old> was for other code — reselected as <new>` (carrying
 over its `--add`s, not its `--remove`s) and runs the new one. If the code changes while the run waits for the lock,

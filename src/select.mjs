@@ -6,6 +6,7 @@ import { gitChangedFiles, gitDiffHash, gitHead, gitLocation, gitUncommittedFiles
 import { sha256 } from './util/hash.mjs';
 import { newId } from './util/id.mjs';
 import { loadTypeScript } from './util/ts.mjs';
+import { assertPlaywrightSupported } from './util/playwright.mjs';
 import { inCI } from './util/ci.mjs';
 import { loadOrBuildSpecIndex, routeMatches, slugOf } from './spec-index.mjs';
 import { affectedEntries, apiLiterals, findMain, loadOrBuildGraph } from './graph.mjs';
@@ -220,8 +221,10 @@ function appContext({ config, ts }) {
 
 // No base, no work tree, or a diff git cannot compute → changedFiles null → full (spec §6: "unknown" is not
 // "no change"). Git reports the whole repository relative to its toplevel; the table speaks config-root-relative, so a
-// file outside the config root becomes `../…` and classifies as unknown-root (R39).
+// file outside the config root becomes `../…` and classifies as unknown-root (R39). A selection runs as a --test-list,
+// so an app whose Playwright has none is refused first (D).
 export async function select({ config, ts, base, head = 'HEAD', includeUncommitted = !inCI(), app }) {
+  for (const a of app ? [findApp(config, app)] : config.apps) assertPlaywrightSupported(appDir(config, a));
   const loc = gitLocation(config.root);
   let changed = loc ? gitChangedFiles(config.root, base, head) : null;
   if (changed !== null && includeUncommitted) {

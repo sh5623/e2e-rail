@@ -15,7 +15,7 @@ import { readRuns } from '../../src/ledger.mjs';
 import { codeIdOf } from '../../src/select.mjs';
 import { verify } from '../../src/verify.mjs';
 import { execCapture } from '../../src/util/exec.mjs';
-import { flattenSuites, listTests } from '../../src/util/playwright.mjs';
+import { flattenSuites, listTests, playwrightVersion, testListTakesPrefixes } from '../../src/util/playwright.mjs';
 
 const skip = process.env.E2E_RAIL_CONTRACT ? false : 'set E2E_RAIL_CONTRACT=1 (npm run test:contract) to run the real-Playwright contract test';
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -80,6 +80,10 @@ test('real playwright: --list paths and rootDir, --test-list line format, JSON r
     assert.equal(entry.rootDir, 'e2e');
     assert.deepEqual(rows(entry), [['e2e/a.spec.ts', 'chromium', 'passed']]);
     assert.deepEqual(entry.failures, []);
+    // D: Playwright 1.56–1.57 match a line only on a whole title path; there the run is handed the list spelled out
+    const handed = path.join(root, '.e2e-rail/reports', `${entry.id}.test-list.txt`);
+    if (testListTakesPrefixes(playwrightVersion(root))) assert.equal(existsSync(handed), false);
+    else assert.equal(readFileSync(handed, 'utf8'), '[chromium] › a.spec.ts › a runs\n');
 
     // The JSON report the ledger line was parsed from: config.rootDir and suites[].file are what flattenSuites expects.
     const report = reportOf(root, entry);
@@ -149,13 +153,20 @@ test('real playwright: a full run that passes only because -G left a failing tes
     const plain = drive(root, {});
     assert.equal(plain.rc, 1);
     assert.deepEqual(plain.entry.failures.map((f) => [f.file, f.title]).sort(), [['e2e/c.spec.ts', 'c regression'], ['e2e/d.spec.ts', 'd snapshot']]);
-    for (const passthrough of [['-Gc regression', '--ignore-snapshots'], ['--ignore-snapshots', '-G', 'c regression']]) {
+    // `-G` (short for --grep-invert) exists from Playwright 1.61; before that Playwright refuses it as an unknown
+    // option. Either way the run is filtered and verifies nothing.
+    const [major, minor] = playwrightVersion(root).split('.').map(Number);
+    const shortG = major > 1 || minor >= 61;
+    for (const passthrough of [['--ignore-snapshots', '--grep-invert', 'c regression'], ['-Gc regression', '--ignore-snapshots'], ['--ignore-snapshots', '-G', 'c regression']]) {
       const { rc, entry } = drive(root, { passthrough });
-      assert.equal(rc, 0, passthrough.join(' '));
+      const passes = shortG || passthrough[0] === '--ignore-snapshots' && passthrough[1] === '--grep-invert';
+      assert.equal(rc, passes ? 0 : 1, passthrough.join(' '));
       assert.equal(entry.kind, 'full');
       assert.equal(entry.filtered, true, passthrough.join(' '));
-      assert.ok(!entry.specs.some((s) => s.file === 'e2e/c.spec.ts'), '-G left c out');
-      assert.deepEqual(entry.specs.find((s) => s.file === 'e2e/d.spec.ts')?.status, 'passed', 'the snapshot was not checked');
+      if (passes) {
+        assert.ok(!entry.specs.some((s) => s.file === 'e2e/c.spec.ts'), 'the grep-invert left c out');
+        assert.deepEqual(entry.specs.find((s) => s.file === 'e2e/d.spec.ts')?.status, 'passed', 'the snapshot was not checked');
+      }
       assert.equal(verify({ config, app }).status, 'stale');
       assert.equal(verify({ config, app }).lastVerifiedHead, null);
       assert.equal(existsSync(path.join(root, '.e2e-rail/last-green.web')), false);

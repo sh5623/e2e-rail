@@ -16,8 +16,8 @@
 **Claude Code** · **Codex** 스킬 층으로 이뤄진다. 선택·재실행·필터 실행을 전수 통과로 보고하지 않고, 선택 실행마다
 근거가 담긴 선택 블록을 붙이고, 어떤 주장 전에도 `verify` 를 거친다.
 
-**상태:** v0.1.0 (git 태그 `v0.1.0`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.44, `typescript` ≥ 5 가 필요하다
-(번들하지 않고 빌려 쓴다).
+**상태:** v0.1.0 (git 태그 `v0.1.0`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
+`--test-list` 를 쓰므로 더 낮으면 e2e-rail 이 거부한다), `typescript` ≥ 5 가 필요하다(번들하지 않고 빌려 쓴다).
 
 ## 설치
 
@@ -154,7 +154,9 @@ rc, spec 별 결과, 실패, flaky. 깨끗한 트리에서 필터 없이 통과�
 찍고 아무것도 돌리거나 기록하지 않는다. test list(선택, 샤드 계획, `--test-list <file>`)로 돈 실행에서 목록이 어떤
 테스트와도 맞지 않으면 Playwright 는 0 으로 끝나지만 실패로 기록된다(rc 1, `failed: test list matched no tests`). 맞는
 테스트가 없는 줄이 하나라도 있어도 그렇다(`failed: test list line matched no tests: <line>`). 단 일부러 좁힌(filtered)
-실행은 줄 검사를 하지 않는다. 다른 코드에 대해 계산된 선택(`select` 뒤에 파일이 바뀜)으로 `run --selection` 을 하면
+실행은 줄 검사를 하지 않는다. `--test-list` 의 줄을 테스트의 제목 경로 전체로만 맞추는 Playwright 1.56–1.57 에서는
+e2e-rail 이 먼저 테스트를 나열해, 목록이 덮는 테스트마다 그런 줄 하나씩을 Playwright 에 넘긴다
+(`.e2e-rail/reports/<run-id>.test-list.txt`). 목록 자체와 위의 검사는 쓰인 그대로다. 다른 코드에 대해 계산된 선택(`select` 뒤에 파일이 바뀜)으로 `run --selection` 을 하면
 같은 base · head · 미커밋 포함 여부로 선택을 다시 계산하고 `selection <old> was for other code — reselected as <new>` 를
 찍은 뒤(`--add` 는 옮겨 오고 `--remove` 는 옮겨 오지 않는다) 새 선택을 돌린다. 락을 기다리는 동안 코드가 바뀌면
 `the code changed while waiting for the lock (selection <id> no longer matches); run it again` 으로 멈추고 아무것도

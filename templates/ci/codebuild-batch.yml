@@ -1,5 +1,6 @@
 # e2e-rail: the full E2E suite split across the builds of one CodeBuild batch (build-graph), merged and verified.
 # Same shape as github-actions-shard.yml: build once → N native Playwright shards → merge + verify.
+# The app needs @playwright/test 1.56 or newer.
 # Use it as the project's buildspec with batch builds enabled. Set the env block, the build command and a bucket the
 # service role can read and write; builds of one batch hand dist, blob reports and ledger lines over through it.
 # Every e2e-rail command runs from the repository root, where e2e-rail.config.mjs lives. Hand-off files land in a

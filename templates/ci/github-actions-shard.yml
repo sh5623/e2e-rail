@@ -1,6 +1,6 @@
 # e2e-rail: the full E2E suite split across GitHub Actions jobs (Playwright's native sharding), merged and verified.
 # Copy to .github/workflows/e2e.yml and set the env block and the build command. Every e2e-rail command runs from the
-# repository root, where e2e-rail.config.mjs lives.
+# repository root, where e2e-rail.config.mjs lives. The app needs @playwright/test 1.56 or newer.
 #
 # Why the plumbing:
 # - dist is built once and shared, so every shard and the merge job fingerprint the same build.

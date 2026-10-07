@@ -11,6 +11,8 @@ import { acquire, lockDir, lockStatus } from '../src/lock.mjs';
 import { readLastGreen, readRuns } from '../src/ledger.mjs';
 import { promote, statePath } from '../src/shadow.mjs';
 import { planShards } from '../src/shard.mjs';
+import { loadOrBuildSpecIndex } from '../src/spec-index.mjs';
+import { loadTypeScript } from '../src/util/ts.mjs';
 import { loadConfig, findApp } from '../src/config.mjs';
 import { execCapture } from '../src/util/exec.mjs';
 import { makeTempRepo, readJson, fixtureDir, stubReport } from './helpers.mjs';
@@ -609,6 +611,68 @@ test('C: code that changes while a selection run waits for the lock is refused u
       assert.deepEqual(lockStatus(dir), { heavy: null, light: [] });
     });
   } finally { error.mock.restore(); }
+});
+
+test('D: with @playwright/test older than 1.56 nothing that lists or runs tests starts (runTests before the lock, the spec index, shard plan)', async () => {
+  await withRepo(async ({ root, config, app, argvFile }) => {
+    const pkg = path.join(root, 'node_modules/@playwright/test/package.json');
+    writeFileSync(pkg, readFileSync(pkg, 'utf8').replace('"1.61.0"', '"1.55.0"'));
+    const old = (e) => e.message === 'e2e-rail: @playwright/test 1.56.0 or newer is required (found 1.55.0): selected and shard runs use --test-list';
+    const held = await acquire({ dir: lockDir(config), cls: 'heavy', pollMs: 20 }); // a run that went for the lock would wait here
+    let timer;
+    const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('not refused before the lock')), 5000); });
+    try {
+      await assert.rejects(Promise.race([runTests({ config, app, mode: 'preview' }), deadline]).finally(() => clearTimeout(timer)), old);
+      await assert.rejects(loadOrBuildSpecIndex({ config, app, ts: await loadTypeScript(root) }), old);
+      assert.throws(() => planShards({ config, app, count: 1 }), old);
+    } finally { held.release(); }
+    assert.equal(existsSync(argvFile), false, 'Playwright never started');
+    assert.equal(existsSync(path.join(root, 'dist')), false, 'no preview build ran');
+    assert.deepEqual(readRuns(config), []);
+  });
+});
+
+// The --test-list file Playwright was handed in the last run (argv captured by the stub).
+const handedList = (argvFile) => { const argv = readJson(argvFile); return argv[argv.indexOf('--test-list') + 1]; };
+const setStubVersion = (root, version) => {
+  const pkg = path.join(root, 'node_modules/@playwright/test/package.json');
+  writeFileSync(pkg, readFileSync(pkg, 'utf8').replace('"1.61.0"', `"${version}"`));
+};
+
+test('D: Playwright 1.56–1.57 match a test-list line only on a whole title path, so the run gets one such line per listed test the list covers', async () => {
+  await withRepo(async ({ root, config, app, argvFile }) => {
+    setStubVersion(root, '1.57.0');
+    const list = path.join(root, 'mine.txt');
+    const text = '# a file, a file in one project, a title path in every project, a file that is gone\n[chromium] › orders.spec.ts\n[mobile-chrome] › cart.spec.ts\ncart.spec.ts › adds to cart\n[chromium] › gone.spec.ts\n';
+    writeFileSync(list, text);
+    const { rc, entry } = await runTests({ config, app, testList: list, workers: 1, lock: false, selectionId: 'sel-d' });
+    const given = handedList(argvFile);
+    assert.notEqual(given, list);
+    assert.equal(given, path.join(root, '.e2e-rail/reports', `${entry.id}.test-list.txt`));
+    assert.equal(readFileSync(given, 'utf8'), [
+      '[chromium] › orders.spec.ts › lists orders', '[mobile-chrome] › cart.spec.ts › adds to cart',
+      '[chromium] › cart.spec.ts › adds to cart', '[chromium] › gone.spec.ts', '',
+    ].join('\n'));
+    assert.equal(readFileSync(list, 'utf8'), text, 'the list itself is left as written');
+    assert.ok(entry.command.includes(`--test-list ${list}`), 'the ledger names the list the run was asked for');
+    // R56 still judges the list as written
+    assert.equal(rc, 1);
+    assert.deepEqual(entry.failures.map((f) => f.error), ['test list line matched no tests: [chromium] › gone.spec.ts']);
+    // a planned shard list is expanded the same way, after its manifest check
+    const { files } = planShards({ config, app, count: 1 });
+    const shard = await runTests({ config, app, shard: { index: 1, count: 1 }, testList: files[0], workers: 1, lock: false });
+    assert.equal(shard.rc, 0);
+    assert.equal(readFileSync(handedList(argvFile), 'utf8'), [
+      '[chromium] › cart.spec.ts › adds to cart', '[mobile-chrome] › cart.spec.ts › adds to cart', '[chromium] › order-detail.spec.ts › shows one order',
+      '[chromium] › orders.spec.ts › lists orders', '[chromium] › smoke.spec.ts › boots', '',
+    ].join('\n'));
+  });
+  await withRepo(async ({ root, config, app, argvFile }) => {
+    setStubVersion(root, '1.58.0'); // from 1.58.0 a line may name a file or a describe: the list goes as written
+    const list = writeList(root);
+    assert.equal((await runTests({ config, app, testList: list, workers: 1, lock: false })).rc, 0);
+    assert.equal(handedList(argvFile), list);
+  });
 });
 
 test('R50: lockClass overrides the derived lock class; an explicit heavy waits for a running light to finish', async () => {

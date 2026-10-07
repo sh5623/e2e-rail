@@ -16,7 +16,8 @@ lockfile, and nothing edits `package.json` without a yes. On a yes:
 ```sh
 pnpm add -D github:sh5623/e2e-rail#v0.1.0
 ```
-It needs Node ≥ 20 and borrows the repo's own `@playwright/test` and `typescript`.
+It needs Node ≥ 20 and borrows the repo's own `@playwright/test` 1.56 or newer and `typescript`; an older
+Playwright is refused (`@playwright/test 1.56.0 or newer is required (found <x>)`): ask the human to upgrade it.
 
 ## 2. Write the config
 ```sh

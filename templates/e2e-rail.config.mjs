@@ -1,6 +1,7 @@
 // e2e-rail configuration. Keep this file at the repository root.
 // A monorepo lists one entry per app in `apps`; a single-app repo keeps one.
 // Every path below is relative to the app root unless noted otherwise.
+// Each app needs @playwright/test 1.56 or newer (selected and shard runs use --test-list; an older one is refused).
 export default {
   apps: [
     {

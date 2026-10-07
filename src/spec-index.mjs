@@ -4,7 +4,7 @@ import { appDir, ledgerDir, runEnv } from './config.mjs';
 import { hashFiles, sha256 } from './util/hash.mjs';
 import { walk } from './util/glob.mjs';
 import { parseFile, readCompilerOptions } from './util/ts.mjs';
-import { listTests, toAppRel } from './util/playwright.mjs';
+import { assertPlaywrightSupported, listTests, toAppRel } from './util/playwright.mjs';
 import { isInternalMiss, pathsMatcher, tsconfigChain } from './graph.mjs';
 
 // Spec index (spec §4): for every Playwright spec, the routes it visits, the API globs it intercepts, the app
@@ -324,7 +324,10 @@ function readCache(abs) {
   try { return JSON.parse(readFileSync(abs, 'utf8')); } catch { return null; } // missing or damaged: rebuild
 }
 
+// D: map and select index the specs a selected run will name in a --test-list, so an app whose Playwright has no
+// --test-list is refused here, cached index or not.
 export async function loadOrBuildSpecIndex({ config, app, ts }) {
+  assertPlaywrightSupported(appDir(config, app));
   const cacheAbs = path.join(ledgerDir(config), `map.${app.name}.json`);
   const cached = readCache(cacheAbs);
   if (cached?.key === specIndexKey({ config, app })) return cached;

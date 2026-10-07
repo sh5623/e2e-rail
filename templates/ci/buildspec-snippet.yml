@@ -2,7 +2,8 @@
 # The full suite stays the gate. Next to it e2e-rail computes the selection for the same code and records whether
 # that selection would have caught every failure (shadow record). After enough hits in a row `shadow status` says
 # promotable, and a human decides whether to run `shadow promote`.
-# Merge the env, cache and build parts into your buildspec. Run from the repository root.
+# Merge the env, cache and build parts into your buildspec. Run from the repository root. The app needs
+# @playwright/test 1.56 or newer.
 version: 0.2
 
 env:

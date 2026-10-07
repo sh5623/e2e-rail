@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { constants } from 'node:os';
 import path from 'node:path';
 import { appDir, ledgerDir, runEnv } from './config.mjs';
@@ -10,7 +10,7 @@ import { inCI } from './util/ci.mjs';
 import { execInherit } from './util/exec.mjs';
 import { sha256 } from './util/hash.mjs';
 import { newId } from './util/id.mjs';
-import { flattenSuites, playwrightCli, toAppRel } from './util/playwright.mjs';
+import { assertPlaywrightSupported, flattenSuites, listTestCases, playwrightCli, testListTakesPrefixes, toAppRel } from './util/playwright.mjs';
 
 const MODES = ['dev', 'preview'];
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
@@ -218,6 +218,34 @@ function readListText(abs) {
   try { return readFileSync(abs, 'utf8'); } catch { return null; }
 }
 
+// D: Playwright 1.56–1.57 match a `--test-list` line only against a test's whole title path, so the lines e2e-rail
+// writes (`[project] › <file>`) would match nothing there. For such a Playwright the list is rewritten, for this run
+// only, into one whole-title line per listed test each line covers (listed in the run's env, under the lock, by the
+// same prefix rule testListShortfall applies). A line that covers no listed test, or whose tests have a title a line
+// cannot spell (a `›`, an empty or padded title), is kept as written: it still matches nothing and fails the run
+// (R56). Returns the path to hand Playwright: `outAbs`, or `listAbs` itself when the listing fails (Playwright then
+// reports the same error as a failed run).
+function wholeTitleList({ dirAbs, app, mode, listAbs, outAbs }) {
+  let listed;
+  try { listed = listTestCases(dirAbs, app.playwrightConfig, runEnv(app, mode)); } catch (e) {
+    console.error(`e2e-rail: could not list the tests to spell out ${listAbs} for this Playwright (${e.message.split('\n')[0]}); running it as written`);
+    return listAbs;
+  }
+  const { rootDir, cases } = listed;
+  const spellable = (t) => t.titlePath.length > 0 && t.titlePath.every((x) => x !== '' && x === x.trim() && !x.includes('›') && !x.includes('\n'));
+  const out = new Set();
+  for (const d of parseTestList(readFileSync(listAbs, 'utf8'))) {
+    const file = toAppRel(dirAbs, path.resolve(dirAbs, rootDir, d.file));
+    const covered = cases.filter((t) => t.file === file && (d.project === undefined || d.project === t.project)
+      && d.titlePath.length <= t.titlePath.length && d.titlePath.every((title, i) => t.titlePath[i] === title));
+    if (!covered.length || !covered.every(spellable)) { out.add(d.line); continue; }
+    for (const t of covered) out.add(`[${t.project}] › ${path.posix.relative(rootDir, t.file)} › ${t.titlePath.join(' › ')}`);
+  }
+  mkdirSync(path.dirname(outAbs), { recursive: true });
+  writeFileSync(outAbs, out.size ? `${[...out].join('\n')}\n` : '');
+  return outAbs;
+}
+
 // The ledger's `shard` field (R49, R52): which split this run is a part of, never taken from the caller's word. Without
 // a test list Playwright splits the whole suite itself ('native'). A list `<dir>/<i>.txt` with a `manifest.json` beside
 // it is list i of a `shard plan`: it has to be this app's plan, run as shard i/<plan count>, and unchanged since the plan
@@ -288,6 +316,7 @@ export async function runTests({
   }
   assertPassthrough(passthrough); // before the lock, the build and the ledger
   const dirAbs = appDir(config, app);
+  assertPlaywrightSupported(dirAbs); // D: so is a Playwright without --test-list
   const shardEntry = shardRecord({ app, dirAbs, shard, testList }); // before the lock too: a refused plan list runs nothing
   const cli = playwrightCli(dirAbs);
   const kind = kindOf({ lastFailed, shard, testList });
@@ -347,8 +376,13 @@ export async function runTests({
     }
     const shadowed = kind === 'selected' && shadowTrust(config);
     mkdirSync(path.dirname(reportAbs), { recursive: true });
+    // D: what Playwright is handed in place of the test list (the ledger's `command` keeps the list as given)
+    const handed = testList && !testListTakesPrefixes(fingerprint.playwright)
+      ? wholeTitleList({ dirAbs, app, mode, listAbs: path.resolve(dirAbs, testList), outAbs: path.join(ledgerDir(config), 'reports', `${id}.test-list.txt`) })
+      : testList;
+    const spawnArgs = args.map((a, i) => (i > 0 && args[i - 1] === '--test-list' ? handed : a));
     const t0 = Date.now();
-    const { status } = await execInherit(process.execPath, [cli, ...args, ...forwarded], { cwd: dirAbs, env, onSpawn: track });
+    const { status } = await execInherit(process.execPath, [cli, ...spawnArgs, ...forwarded], { cwd: dirAbs, env, onSpawn: track });
     child = null;
     const durationMs = Date.now() - t0;
     const lockInfo = held && {

@@ -11,7 +11,7 @@
     "test:contract": "E2E_RAIL_CONTRACT=1 node --test test/contract/*.test.mjs",
     "sync:codex": "node scripts/sync-codex.mjs"
   },
-  "peerDependencies": { "@playwright/test": ">=1.44", "typescript": ">=5" },
+  "peerDependencies": { "@playwright/test": ">=1.56", "typescript": ">=5" },
   "peerDependenciesMeta": { "@playwright/test": { "optional": true }, "typescript": { "optional": true } },
   "devDependencies": { "@playwright/test": "^1.61.0", "typescript": "^5.6.0" },
   "license": "MIT",

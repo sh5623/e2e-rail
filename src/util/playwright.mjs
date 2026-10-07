@@ -28,6 +28,33 @@ export function playwrightVersion(appDirAbs) {
   }
 }
 
+// D: selected and shard runs hand Playwright `--test-list`, which @playwright/test has from 1.56.0 (absent in 1.44–1.55).
+export const MIN_PLAYWRIGHT = '1.56.0';
+
+// semver order of `version` against `min` (x.y.z): prerelease tags sort below their release; unreadable is below all.
+function atLeast(version, min) {
+  const m = /^(\d+)\.(\d+)\.(\d+)(-.+)?$/.exec(String(version ?? ''));
+  if (!m) return false;
+  const want = min.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    const d = Number(m[i + 1]) - want[i];
+    if (d) return d > 0;
+  }
+  return !m[4];
+}
+
+// Refuses an app whose @playwright/test is older than MIN_PLAYWRIGHT (or cannot be read). Called before anything lists
+// or runs tests (runTests, the spec index, shard plan); an app that passes is not read again in this process.
+const supported = new Set();
+export function assertPlaywrightSupported(appDirAbs) {
+  if (supported.has(appDirAbs)) return;
+  const version = playwrightVersion(appDirAbs);
+  if (!atLeast(version, MIN_PLAYWRIGHT)) {
+    throw new Error(`e2e-rail: @playwright/test ${MIN_PLAYWRIGHT} or newer is required (found ${version}): selected and shard runs use --test-list`);
+  }
+  supported.add(appDirAbs);
+}
+
 // realpath of `p`; when it does not exist, realpath of its nearest existing parent plus the remaining segments.
 function realpathLoose(p) {
   const abs = path.resolve(p);
@@ -72,13 +99,18 @@ export function flattenSuites(report, appDirAbs) {
   return out;
 }
 
-// `playwright test --list` -> { rootDir, tests }
+// D: from 1.58.0 a `--test-list` line names a title-path prefix (a file, a describe, a test); 1.56–1.57 match a line
+// only against a test's whole title path, so a line naming a file matches nothing there.
+export const TEST_LIST_PREFIXES = '1.58.0';
+export const testListTakesPrefixes = (version) => atLeast(version, TEST_LIST_PREFIXES);
+
+// `playwright test --list` -> { rootDir, cases }
 //   rootDir: app-relative POSIX path of config.rootDir ('' when it is the app dir). `--test-list` lines are
 //            matched against path.relative(rootDir, file), so callers need it to write them.
-//   tests:   { [specRelToApp]: sorted project names }
+//   cases:   one per (test, project): { file (app-relative), project, titlePath }, in Playwright's order
 // `env` is the run environment of the mode the tests will run in (config runEnv): a Playwright config may choose its
 // projects or testDir by env, so a listing without it can name other tests than the run will see.
-export function listTests(appDirAbs, configRel, env = {}) {
+export function listTestCases(appDirAbs, configRel, env = {}) {
   const r = execCapture('node', [playwrightCli(appDirAbs), 'test', '--list', '--reporter=json', '--config', configRel], {
     cwd: appDirAbs,
     // A CI-wide JSON output path would divert the listing from stdout to a file.
@@ -91,12 +123,19 @@ export function listTests(appDirAbs, configRel, env = {}) {
   } catch {
     throw new Error(`playwright --list did not print JSON:\n${(r.stdout || r.stderr).slice(0, 500)}`);
   }
+  const rootDir = report.config?.rootDir ? toAppRel(appDirAbs, report.config.rootDir) : '';
+  const cases = flattenSuites(report, appDirAbs).map(({ file, project, titlePath }) => ({ file, project, titlePath }));
+  return { rootDir, cases };
+}
+
+// `playwright test --list` -> { rootDir, tests: { [specRelToApp]: sorted project names } } (see listTestCases)
+export function listTests(appDirAbs, configRel, env = {}) {
+  const { rootDir, cases } = listTestCases(appDirAbs, configRel, env);
   const tests = {};
-  for (const t of flattenSuites(report, appDirAbs)) {
+  for (const t of cases) {
     const projects = (tests[t.file] ??= []);
     if (!projects.includes(t.project)) projects.push(t.project);
   }
   for (const k of Object.keys(tests)) tests[k].sort();
-  const rootDir = report.config?.rootDir ? toAppRel(appDirAbs, report.config.rootDir) : '';
   return { rootDir, tests };
 }
