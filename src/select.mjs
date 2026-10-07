@@ -25,7 +25,7 @@ const under = (rel, dir) => dir === '' || rel.startsWith(`${dir}/`);
 const byFile = (a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0);
 
 // The ledger dir relative to the config root, when it lies inside it (its files are e2e-rail's own output).
-function ledgerRel(config) {
+export function ledgerRel(config) {
   const d = dirRel(config.ledger.dir);
   return d === '' || d === '..' || d.startsWith('../') || path.posix.isAbsolute(d) ? null : d;
 }

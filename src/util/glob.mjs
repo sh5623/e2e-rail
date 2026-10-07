@@ -34,7 +34,7 @@ export function globToRegExp(glob) {
 export const matchGlob = (glob, rel) => globToRegExp(glob).test(rel);
 export const matchAny = (globs, rel) => globs.some((g) => matchGlob(g, rel));
 
-const DEFAULT_SKIP = new Set(['node_modules', '.git', 'dist', '.e2e-rail', 'test-results', 'playwright-report']);
+export const DEFAULT_SKIP = new Set(['node_modules', '.git', 'dist', '.e2e-rail', 'test-results', 'playwright-report']);
 
 // Recursive file walk. Returns sorted POSIX paths relative to rootAbs.
 export function walk(rootAbs, { exts, skipDirs = [] } = {}) {
