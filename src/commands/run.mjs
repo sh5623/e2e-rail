@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { findApp, ledgerDir, loadConfig } from '../config.mjs';
+import { appDir, findApp, ledgerDir, loadConfig } from '../config.mjs';
 import { LAST_GREEN_DIRTY } from '../ledger.mjs';
 import { filteredBy, runTests } from '../run.mjs';
-import { codeIdOf, readSelection, testListLines } from '../select.mjs';
+import { amendSelection, codeIdOf, readSelection, select, testListLines, writeSelection } from '../select.mjs';
 import { oneOf, parse, positiveInt, printUsage, UsageError } from './_args.mjs';
 
 const OPTIONS = {
@@ -39,18 +39,43 @@ function testListPath(value) {
   return abs;
 }
 
+// C: a selection computed for other code (files changed since `select`) may miss what changed since. It is computed
+// again from its own base, head and uncommitted setting, for the apps it covered, and becomes the current selection.
+// Additions recorded with `--add` are carried over (an addition only widens; a spec that is gone is dropped);
+// removals are not (they were judged on the old change).
+async function reselect(config, sel) {
+  const names = Object.keys(sel.apps ?? {});
+  const fresh = await select({
+    config, base: sel.base || undefined, head: sel.head || undefined,
+    includeUncommitted: typeof sel.includeUncommitted === 'boolean' ? sel.includeUncommitted : undefined,
+    app: names.length === 1 && config.apps.length > 1 ? names[0] : undefined, // `select --app` covers one app
+  });
+  writeSelection(config, fresh);
+  console.log(`selection ${sel.id} was for other code — reselected as ${fresh.id}`);
+  let carried = 0;
+  for (const [name, a] of Object.entries(sel.apps ?? {})) {
+    const target = config.apps.find((x) => x.name === name);
+    if (!target || !fresh.apps[name]) continue;
+    const add = (a.added ?? []).filter((x) => existsSync(path.join(appDir(config, target), x.spec))).map(({ spec, reason }) => ({ spec, reason }));
+    if (add.length) { amendSelection(config, { app: name, add }); carried += add.length; }
+  }
+  if (carried) console.log(`carried over ${carried} --add spec(s) from selection ${sel.id}`);
+  const removed = Object.values(sel.apps ?? {}).reduce((n, a) => n + (a.removed?.length ?? 0), 0);
+  if (removed) console.log(`not carried over: ${removed} --remove of selection ${sel.id} (decide them again for this code)`);
+  return readSelection(config, fresh.id);
+}
+
 // The selection's entry for this app, its test list rebuilt from that very JSON (never a list another selection left).
 // null testList with `skip` when there is nothing to run; null testList without `skip` when the app runs in full.
-function fromSelection(config, app, id) {
-  const sel = readSelection(config, id || undefined);
-  const a = sel.apps?.[app.name];
-  if (!a) throw new Error(`selection ${sel.id} has no entry for app ${app.name}; run \`e2e-rail select --app ${app.name}\``);
-  if (sel.codeId !== codeIdOf(config)) {
-    console.error(`e2e-rail: warning: selection ${sel.id} was computed for other code (files changed since \`select\`), so it may miss the newer changes; run \`e2e-rail select\` again`);
-  }
+// `codeId` is the code the selection was computed for (runTests refuses to credit it to other code).
+async function fromSelection(config, app, id) {
+  let sel = readSelection(config, id || undefined);
+  if (!sel.apps?.[app.name]) throw new Error(`selection ${sel.id} has no entry for app ${app.name}; run \`e2e-rail select --app ${app.name}\``);
+  if (sel.codeId !== codeIdOf(config)) sel = await reselect(config, sel);
+  const a = sel.apps[app.name];
   if (a.mode === 'full') {
     console.log(`${app.name}: selection ${sel.id} runs this app in full (${a.reasons.slice(0, 3).join(' | ') || 'no reason recorded'}); running the full suite`);
-    return { selectionId: sel.id, testList: null };
+    return { selectionId: sel.id, codeId: sel.codeId, testList: null };
   }
   // Nothing to run is decided on the lines, not the specs: a spec with no Playwright project writes no line, and an
   // empty list would run nothing (R56 records that as a failure).
@@ -62,7 +87,7 @@ function fromSelection(config, app, id) {
   const abs = path.join(ledgerDir(config), `test-list.${app.name}.txt`);
   mkdirSync(path.dirname(abs), { recursive: true });
   writeFileSync(abs, `${lines.join('\n')}\n`);
-  return { selectionId: sel.id, testList: abs };
+  return { selectionId: sel.id, codeId: sel.codeId, testList: abs };
 }
 
 // One Playwright run through runTests: one ledger line, Playwright's exit code returned as is.
@@ -81,16 +106,17 @@ export default async function run(argv) {
   const app = findApp(config, values.app);
   let testList = null;
   let selectionId = null;
+  let expectCodeId = null;
   if (values['test-list'] !== undefined) testList = testListPath(values['test-list']);
   if (values.selection !== undefined) {
-    const picked = fromSelection(config, app, values.selection);
+    const picked = await fromSelection(config, app, values.selection);
     if (picked.skip) return 0;
-    ({ testList, selectionId } = picked);
+    ({ testList, selectionId, codeId: expectCodeId } = picked);
   }
 
   const { rc, entry, lastGreen } = await runTests({
     config, app, mode, testList, lastFailed: Boolean(values['last-failed']), workers, project: values.project, shard,
-    blob: Boolean(values.blob), lock: !values['no-lock'], build: !values['no-build'], selectionId, passthrough,
+    blob: Boolean(values.blob), lock: !values['no-lock'], build: !values['no-build'], selectionId, expectCodeId, passthrough,
   });
   if (!entry) return rc; // refused or the preview build failed: runTests said why, no ledger line
   // A narrowed or relaxed run (--project, -- --grep/-G, a file filter, --ignore-snapshots, --retries, an option

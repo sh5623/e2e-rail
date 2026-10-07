@@ -89,6 +89,7 @@ test('verify: verified after a full run; stale after an edit (names the differin
     const s = verify({ config, app });
     assert.equal(s.status, 'stale'); assert.equal(s.exitCode, 20); assert.deepEqual(s.differing, ['diff']);
     assert.equal(s.lastVerifiedHead.length, 40); assert.equal(s.lastVerifiedHead, entry.fingerprint.head);
+    select(config, app, { id: 'sel-x', specs: [ORDERS] }); // the selection the run was made from, for this code
     await run(config, app, { testList: listFile(root), selectionId: 'sel-x' });
     const i = verify({ config, app });
     assert.equal(i.status, 'insufficient'); assert.equal(i.exitCode, 21); assert.deepEqual(i.have, ['selected']);
@@ -102,15 +103,43 @@ test('verify --require selected (I4): only a selected run made from a selection 
   await withRepo(async ({ config, app }) => {
     synth(config, app, { kind: 'selected', selectionId: null });               // `run --test-list <file>`
     synth(config, app, { kind: 'selected', selectionId: '' });
+    select(config, app, { id: 'sel-m', specs: [ORDERS] });
     synth(config, app, { kind: 'selected', selectionId: 'sel-m', command: `playwright test --test-list x --workers 2 ${MEASURE_TAG}` });
     const i = verify({ config, app, require: 'selected' });
     assert.equal(i.status, 'insufficient'); assert.equal(i.exitCode, 21); assert.deepEqual(i.have, ['selected']);
+    select(config, app, { id: 'sel-1', specs: [ORDERS] });
     const ok = synth(config, app, { kind: 'selected', selectionId: 'sel-1', shadowed: true });
     const v = verify({ config, app, require: 'selected' });
     assert.equal(v.status, 'verified'); assert.equal(v.run.id, ok.id); assert.equal(v.run.selectionId, 'sel-1');
     synth(config, app, { kind: 'selected', selectionId: null });               // a newer ad-hoc run does not displace it
     assert.equal(verify({ config, app, require: 'selected' }).run.id, ok.id);
     assert.equal(verify({ config, app }).status, 'insufficient', 'never a full verification');
+  });
+});
+
+test('verify --require selected (C): a selected run counts only while its selection file exists and was made for the code the run tested', async () => {
+  await withRepo(async ({ config, app }) => {
+    // a selection made for other code (as `run --selection` used to run without reselecting), one that is gone, and a
+    // selection id that is no file name at all
+    select(config, app, { id: 'sel-old', specs: [ORDERS], codeId: 'c'.repeat(64) });
+    synth(config, app, { kind: 'selected', selectionId: 'sel-old' });
+    synth(config, app, { kind: 'selected', selectionId: 'sel-gone' });
+    synth(config, app, { kind: 'selected', selectionId: '../selection' });
+    const i = verify({ config, app, require: 'selected' });
+    assert.equal(i.status, 'insufficient'); assert.deepEqual(i.have, ['selected']);
+    // a damaged selection file counts as none
+    mkdirSync(path.join(ledgerDir(config), 'selections'), { recursive: true });
+    writeFileSync(path.join(ledgerDir(config), 'selections', 'sel-bad.json'), '{ nope');
+    synth(config, app, { kind: 'selected', selectionId: 'sel-bad' });
+    assert.equal(verify({ config, app, require: 'selected' }).status, 'insufficient');
+    // the selection for this very code
+    const sel = select(config, app, { specs: [ORDERS] });
+    const ok = synth(config, app, { kind: 'selected', selectionId: sel.id });
+    const v = verify({ config, app, require: 'selected' });
+    assert.equal(v.status, 'verified'); assert.equal(v.run.id, ok.id);
+    // rewritten for other code later (a hand edit): no longer counts
+    writeFileSync(path.join(ledgerDir(config), 'selections', `${sel.id}.json`), JSON.stringify({ ...sel, codeId: 'd'.repeat(64) }));
+    assert.equal(verify({ config, app, require: 'selected' }).status, 'insufficient');
   });
 });
 

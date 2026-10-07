@@ -274,11 +274,13 @@ const staleDist = (preview) => `e2e-rail: dist (${preview.dist}) is missing or o
 // Order: lock → (preview) build if dist is stale → fingerprint → spawn. The fingerprint is taken under the lock, right
 // before Playwright starts, so code edited while the run waited for the lock is not credited to the old code.
 // A shard of a `shard plan` list takes the plan's identity from the manifest beside the list (see shardRecord).
+// `expectCodeId`: the code the run's selection was computed for; when the fingerprint taken under the lock names other
+// code, runTests throws (lock released, no ledger line, Playwright not started) instead of crediting the selection.
 // `lockClass` ('heavy' | 'light') overrides the class derived from what runs (R50: a worker measurement needs the
 // machine to itself); left undefined, full, shard and worker-less runs are heavy and the rest light.
 export async function runTests({
   config, app, mode = 'dev', testList = null, lastFailed = false, workers, project, shard = null,
-  blob = false, lock = true, lockClass, build = true, selectionId = null, passthrough = [],
+  blob = false, lock = true, lockClass, build = true, selectionId = null, expectCodeId = null, passthrough = [],
 }) {
   if (!MODES.includes(mode)) throw new Error(`e2e-rail: unknown mode "${mode}" (expected ${MODES.join(' or ')})`);
   if (lockClass !== undefined && lockClass !== 'heavy' && lockClass !== 'light') {
@@ -339,6 +341,10 @@ export async function runTests({
       }
     }
     const fingerprint = computeFingerprint({ config, app, mode });
+    if (expectCodeId != null && fingerprint.codeId !== expectCodeId) {
+      // C: the code moved while this run waited for the lock (or built); its selection no longer describes it
+      throw new Error(`e2e-rail: the code changed while waiting for the lock (selection ${selectionId} no longer matches); run it again`);
+    }
     const shadowed = kind === 'selected' && shadowTrust(config);
     mkdirSync(path.dirname(reportAbs), { recursive: true });
     const t0 = Date.now();

@@ -41,7 +41,10 @@ The exit code is Playwright's. The summary line is the record:
   `e2e-rail: test list matched no tests — check paths are relative to Playwright rootDir`) — the list ran nothing, or
   some of it did not run (a renamed or deleted spec): rc 1, `FAILED`. Select again before you run again.
 - `<app>: selection <id> runs this app in full (…); running the full suite` — the run is `kind full`.
-- `e2e-rail: warning: selection <id> was computed for other code …` — select again before you rely on it.
+- `selection <old> was for other code — reselected as <new>` — files changed after `select`; the run used the new
+  selection (its `--add`s carried over, not its `--remove`s). Put the new id and its specs in the selection block.
+- `e2e-rail: the code changed while waiting for the lock (selection <id> no longer matches); run it again` — nothing
+  ran or was recorded.
 - `e2e-rail: <build command> failed (rc <n>); Playwright was not started.` — nothing ran or was recorded.
 - `last-green not moved: the working tree had uncommitted changes` — the pass verifies this exact code, not HEAD.
 
@@ -66,8 +69,8 @@ pnpm exec e2e-rail verify --app <app> --mode <mode> --require full
 
 After a selected run you may also quote `verify --app <app> --mode <mode> --require selected`
 (`verified: selected@<run-id> (selection <selection-id>, shadowed) (<age>)`; `, shadowed` only while trust is shadow),
-but the status stays "selected", never "full pass". Only a run made by `run --selection` counts there: an ad-hoc
-`--test-list` run or a `measure workers` run leaves `insufficient:`.
+but the status stays "selected", never "full pass". Only a run made by `run --selection` from a selection computed
+for that very code counts there: an ad-hoc `--test-list` run or a `measure workers` run leaves `insufficient:`.
 
 ## 3. Report (fixed format)
 ```

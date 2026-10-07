@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { ledgerDir } from './config.mjs';
 import { computeFingerprint } from './fingerprint.mjs';
 import { completeShardSet, latestFull, readRuns } from './ledger.mjs';
 import { isMeasure } from './measure.mjs';
@@ -40,14 +43,25 @@ export function verifiedShardSet({ config, app, mode = 'dev' }) {
 }
 
 // I4: a selected run stands for a selection only when it was made from one (`run --selection` records its id) and is
-// not a worker measurement; an ad-hoc `--test-list` run says nothing about what a change needs.
-const isSelectionRun = (r) => r.kind === 'selected' && typeof r.selectionId === 'string' && r.selectionId !== '' && !isMeasure(r);
+// not a worker measurement; an ad-hoc `--test-list` run says nothing about what a change needs. C: and only while
+// that selection (`selections/<id>.json`) exists and was computed for the code the run tested: a selection made for
+// other code may miss what changed since. A missing, unreadable or foreign selection does not count.
+function selectionMatches(config, r) {
+  if (!/^[\w.-]+$/.test(r.selectionId)) return false;
+  try {
+    const sel = JSON.parse(readFileSync(path.join(ledgerDir(config), 'selections', `${r.selectionId}.json`), 'utf8'));
+    return typeof sel?.codeId === 'string' && sel.codeId === r.fingerprint.codeId;
+  } catch { return false; }
+}
+const isSelectionRun = (config, r) => r.kind === 'selected' && typeof r.selectionId === 'string' && r.selectionId !== ''
+  && !isMeasure(r) && selectionMatches(config, r);
 
 // "Has exactly this code (fingerprint) already passed?" answered from the ledger (spec §8). Only runs of this app, in
 // this mode, with this fingerprint id that passed and were not narrowed (`filtered`) count. `require: 'full'` wants a
 // full run or a complete shard set; `'selected'` also takes a selected run made from a selection (isSelectionRun).
 // Exit codes: 0 verified, 20 stale (a different fingerprint, with the fields that moved since the last full pass),
-// 21 insufficient (this fingerprint only has runs that do not satisfy `require`). In preview mode an app with a
+// 21 insufficient (this fingerprint only has runs that do not satisfy `require`; a selected run whose selection was
+// made for other code is one of those). In preview mode an app with a
 // `run.preview` build is never verified while its dist is missing (stale, `differing` names `dist`).
 export function verify({ config, app, mode = 'dev', require = 'full', maxAgeMin = null }) {
   if (!REQUIRES.includes(require)) throw new Error(`e2e-rail: unknown --require "${require}" (expected ${REQUIRES.join(' or ')})`);
@@ -65,7 +79,7 @@ export function verify({ config, app, mode = 'dev', require = 'full', maxAgeMin 
     if (full) return { run: full };
     const shards = shardSetOf(runs, app, fingerprint);
     if (shards) return { run: newestOf(shards, runs), shards };
-    const selected = require === 'selected' ? [...runs].reverse().find(isSelectionRun) : null;
+    const selected = require === 'selected' ? [...runs].reverse().find((r) => isSelectionRun(config, r)) : null;
     return selected ? { run: selected } : null;
   };
 

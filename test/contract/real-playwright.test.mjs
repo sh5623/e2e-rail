@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { makeTempRepo } from '../helpers.mjs';
 import { loadConfig, findApp } from '../../src/config.mjs';
 import { readRuns } from '../../src/ledger.mjs';
+import { codeIdOf } from '../../src/select.mjs';
 import { verify } from '../../src/verify.mjs';
 import { execCapture } from '../../src/util/exec.mjs';
 import { flattenSuites, listTests } from '../../src/util/playwright.mjs';
@@ -68,7 +69,10 @@ test('real playwright: --list paths and rootDir, --test-list line format, JSON r
     assert.equal(listed.rootDir, 'e2e');
     assert.deepEqual(listed.tests, { 'e2e/a.spec.ts': ['chromium'], 'e2e/b.spec.ts': ['chromium', 'narrow'] });
 
-    // ② --test-list: `[project] › <path relative to rootDir>` runs a.spec.ts and nothing else.
+    // ② --test-list: `[project] › <path relative to rootDir>` runs a.spec.ts and nothing else. The run names a
+    // selection made for this code (verify --require selected reads its codeId).
+    mkdirSync(path.join(root, '.e2e-rail/selections'), { recursive: true });
+    writeFileSync(path.join(root, '.e2e-rail/selections/sel-contract.json'), JSON.stringify({ id: 'sel-contract', codeId: codeIdOf(config), apps: {} }));
     const { rc, entry } = runList(root, ['[chromium] › a.spec.ts'], 'sel-contract');
     assert.equal(rc, 0);
     assert.equal(entry.kind, 'selected');

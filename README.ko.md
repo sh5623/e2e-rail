@@ -120,7 +120,8 @@ rc, spec 별 결과, 실패, flaky. 깨끗한 트리에서 필터 없이 통과�
 
 `verify` 는 원장으로 «정확히 이 코드가 통과했는가» 에 답한다. 이 앱 · 이 모드 · 이 지문 · 통과 · 필터 없음인 실행만
 센다. `--require full` 은 전수 실행이나 완성된 샤드 세트를, `--require selected` 는 `run --selection` 으로 만든 선택
-실행까지 받는다(`verified: selected@<run-id> (selection <id>[, shadowed]) (<age>)` 를 찍는다). 임의의 `--test-list`
+실행까지 받는다(`verified: selected@<run-id> (selection <id>[, shadowed]) (<age>)` 를 찍는다). 단 그 실행의
+`selections/<id>.json` 이 남아 있고 실행이 시험한 코드에 대해 계산된 것이어야 한다. 임의의 `--test-list`
 실행과 `measure workers` 실행은 세지 않는다. 재실행은 절대 세지 않는다. preview 모드는 dist 가 없거나 낡았으면(git 이 아는 어떤 파일보다 오래됨) 먼저 다시 빌드하고,
 `--no-build` 면 대신 거부한다.
 
@@ -153,7 +154,11 @@ rc, spec 별 결과, 실패, flaky. 깨끗한 트리에서 필터 없이 통과�
 찍고 아무것도 돌리거나 기록하지 않는다. test list(선택, 샤드 계획, `--test-list <file>`)로 돈 실행에서 목록이 어떤
 테스트와도 맞지 않으면 Playwright 는 0 으로 끝나지만 실패로 기록된다(rc 1, `failed: test list matched no tests`). 맞는
 테스트가 없는 줄이 하나라도 있어도 그렇다(`failed: test list line matched no tests: <line>`). 단 일부러 좁힌(filtered)
-실행은 줄 검사를 하지 않는다.
+실행은 줄 검사를 하지 않는다. 다른 코드에 대해 계산된 선택(`select` 뒤에 파일이 바뀜)으로 `run --selection` 을 하면
+같은 base · head · 미커밋 포함 여부로 선택을 다시 계산하고 `selection <old> was for other code — reselected as <new>` 를
+찍은 뒤(`--add` 는 옮겨 오고 `--remove` 는 옮겨 오지 않는다) 새 선택을 돌린다. 락을 기다리는 동안 코드가 바뀌면
+`the code changed while waiting for the lock (selection <id> no longer matches); run it again` 으로 멈추고 아무것도
+기록하지 않는다.
 
 ## 섀도 모드
 

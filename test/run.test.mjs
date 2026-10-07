@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runTests, parsePlaywrightReport, parseTestList, testListShortfall, kindOf, isFiltered, filteredBy, assertPassthrough } from '../src/run.mjs';
 import { verify } from '../src/verify.mjs';
+import { computeFingerprint } from '../src/fingerprint.mjs';
 import { acquire, lockDir, lockStatus } from '../src/lock.mjs';
 import { readLastGreen, readRuns } from '../src/ledger.mjs';
 import { promote, statePath } from '../src/shadow.mjs';
@@ -577,6 +578,37 @@ test('shard plans (R52): a plan list run as another shard, edited, or beside a b
     assert.equal(existsSync(argvFile), false, 'Playwright never started');
     assert.deepEqual(readRuns(config), [], 'no ledger line');
   });
+});
+
+test('C: code that changes while a selection run waits for the lock is refused under the lock: no Playwright, no ledger line, the lock given back', async () => {
+  const error = mock.method(console, 'error', () => {});
+  try {
+    await withRepo(async ({ root, config, app, argvFile }) => {
+      const dir = lockDir(config);
+      const list = writeList(root);
+      const { codeId } = computeFingerprint({ config, app, mode: 'dev' });
+      // the code the selection was made for runs normally
+      const same = await runTests({ config, app, testList: list, workers: 1, selectionId: 'sel-c', expectCodeId: codeId });
+      assert.equal(same.rc, 0); assert.equal(same.entry.selectionId, 'sel-c');
+      rmSync(argvFile, { force: true });
+      // a heavy holder; the selection run waits behind it, and the code is edited meanwhile
+      const holder = await acquire({ dir, cls: 'heavy', pollMs: 20, purpose: 'unit' });
+      let held = true;
+      try {
+        const pending = runTests({ config, app, testList: list, workers: 1, selectionId: 'sel-c', expectCodeId: codeId });
+        await until(() => error.mock.calls.some((c) => /waiting for the light lock/.test(c.arguments.join(' '))));
+        writeFileSync(path.join(root, 'src/main.ts'), '// edited while waiting\n', { flag: 'a' });
+        holder.release(); held = false;
+        await assert.rejects(pending, (e) => {
+          assert.equal(e.message, 'e2e-rail: the code changed while waiting for the lock (selection sel-c no longer matches); run it again');
+          return true;
+        });
+      } finally { if (held) holder.release(); }
+      assert.equal(existsSync(argvFile), false, 'Playwright never started');
+      assert.deepEqual(readRuns(config).map((e) => e.id), [same.entry.id], 'no ledger line');
+      assert.deepEqual(lockStatus(dir), { heavy: null, light: [] });
+    });
+  } finally { error.mock.restore(); }
 });
 
 test('R50: lockClass overrides the derived lock class; an explicit heavy waits for a running light to finish', async () => {

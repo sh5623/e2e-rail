@@ -71,4 +71,5 @@ One block per app.
 
 ## 5. Hand off
 `e2e-rail:gate` runs it (`run --selection`). Do not run `playwright test` yourself. If files change after this step,
-select again: `run --selection` warns `selection <id> was computed for other code` and may miss the newer changes.
+`run --selection` selects again from the same base (`selection <old> was for other code — reselected as <new>`) and
+keeps your `--add`s, not your `--remove`s: update the block from the new selection.

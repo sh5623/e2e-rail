@@ -411,7 +411,53 @@ test('run --selection: test list rebuilt from the selection it reads ([id]); ful
   writeFileSync(at('src/features/cart/services/cart.ts'), 'export const addToCart = () => 2;\n'); // edited after select
   const late = run(['run', '--selection', '--no-lock']);
   assert.equal(late.code, 0, late.out);
-  assert.match(late.stderr, new RegExp(`^e2e-rail: warning: selection ${fullId} was computed for other code`, 'm'));
+  // C: reselected from the same base (still none: full), and that selection is the one that ran
+  const lateId = late.stdout.match(new RegExp(`^selection ${fullId} was for other code — reselected as (sel-\\S+)$`, 'm'))?.[1];
+  assert.ok(lateId && lateId !== fullId, late.stdout);
+  assert.match(late.stdout, new RegExp(`^web: selection ${lateId} runs this app in full \\(no-base\\); running the full suite$`, 'm'));
+  assert.equal(ledgerLines(root).at(-1).selectionId, lateId);
+  assert.equal(JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8')).id, lateId, 'the new selection is the current one');
+}));
+
+test('C (audit repro): run --selection on a selection made for other code reselects from the same base and runs what the newer change needs', () => withRepo(({ root, run, at }) => {
+  const cartFails = { STUB_PW_FAIL_IF_LISTED: 'cart.spec.ts' }; // the stub fails a run whose test list names cart.spec.ts
+  // select covers a change to the orders spec alone ...
+  writeFileSync(at('e2e/orders.spec.ts'), '// touched\n', { flag: 'a' });
+  const s = run(['select', '--base', 'HEAD']);
+  assert.equal(s.code, 0, s.out);
+  const old = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  assert.deepEqual(old.apps.web.specs.map((x) => x.file), ['e2e/orders.spec.ts']);
+  // ... then the cart service changes and breaks cart.spec.ts, which that selection never named
+  writeFileSync(at('src/features/cart/services/cart.ts'), 'export const addToCart = () => 2;\n');
+  const r = run(['run', '--selection', '--no-lock'], cartFails);
+  assert.equal(r.code, 1, r.out);
+  const fresh = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  assert.notEqual(fresh.id, old.id);
+  assert.ok(r.stdout.split('\n').includes(`selection ${old.id} was for other code — reselected as ${fresh.id}`), r.stdout);
+  assert.deepEqual([fresh.base, fresh.head, fresh.includeUncommitted], [old.base, old.head, old.includeUncommitted]);
+  assert.ok(fresh.apps.web.specs.some((x) => x.file === 'e2e/cart.spec.ts'));
+  assert.match(readFileSync(at('.e2e-rail/test-list.web.txt'), 'utf8'), /cart\.spec\.ts/);
+  const entry = ledgerLines(root).at(-1);
+  assert.deepEqual([entry.kind, entry.selectionId, entry.rc], ['selected', fresh.id, 1]);
+  assert.notEqual(run(['verify', '--require', 'selected']).code, 0, 'nothing verifies the current code');
+  // the old selection's id still names the old code: running it by id reselects too
+  const again = run(['run', '--selection', old.id, '--no-lock'], cartFails);
+  assert.match(again.stdout, new RegExp(`^selection ${old.id} was for other code — reselected as sel-`, 'm'));
+}));
+
+test('C: reselecting keeps the additions recorded with --add (they only widen), not the removals', () => withRepo(({ root, run, at }) => {
+  writeFileSync(at('e2e/orders.spec.ts'), '// touched\n', { flag: 'a' });
+  assert.equal(run(['select', '--base', 'HEAD']).code, 0);
+  assert.equal(run(['select', '--add', 'e2e/order-detail.spec.ts', '--reason', 'opens the detail modal by string']).code, 0);
+  writeFileSync(at('src/features/cart/services/cart.ts'), 'export const addToCart = () => 2;\n');
+  const r = run(['run', '--selection', '--no-lock']);
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.stdout, /^carried over 1 --add spec\(s\) from selection sel-\S+$/m);
+  const fresh = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  assert.deepEqual(fresh.apps.web.added, [{ spec: 'e2e/order-detail.spec.ts', reason: 'opens the detail modal by string' }]);
+  assert.ok(fresh.apps.web.specs.some((x) => x.file === 'e2e/order-detail.spec.ts'));
+  assert.match(readFileSync(at('.e2e-rail/test-list.web.txt'), 'utf8'), /order-detail\.spec\.ts/);
+  assert.equal(ledgerLines(root).at(-1).selectionId, fresh.id);
 }));
 
 test('select --app writes only that app and drops other test lists; --app is required where several apps are configured', () => withRepo(({ root, run, at }) => {

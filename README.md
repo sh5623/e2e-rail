@@ -124,8 +124,8 @@ uncommitted changes verifies that exact code but never its HEAD: it prints
 `verify` answers "has exactly this code passed?" from the ledger: only runs of this app, in this mode, with this
 fingerprint, that passed and were not filtered count. `--require full` wants a full run or a complete shard set;
 `--require selected` also takes a selected run made by `run --selection` (it prints
-`verified: selected@<run-id> (selection <id>[, shadowed]) (<age>)`); an ad-hoc `--test-list` run or a `measure workers`
-run does not count. A rerun never counts. Preview mode rebuilds a missing or stale dist
+`verified: selected@<run-id> (selection <id>[, shadowed]) (<age>)`) while its `selections/<id>.json` exists and was
+computed for the code the run tested; an ad-hoc `--test-list` run or a `measure workers` run does not count. A rerun never counts. Preview mode rebuilds a missing or stale dist
 (older than any file git knows) before it runs; `--no-build` refuses instead.
 
 ## Commands
@@ -158,6 +158,11 @@ when no selected spec has a Playwright project), runs nothing and records nothin
 selection, a shard plan or `--test-list <file>`) whose list matches no test is recorded as a failure (rc 1,
 `failed: test list matched no tests`) although Playwright exits 0 there; so is one with a line that matches nothing
 (`failed: test list line matched no tests: <line>`), unless the run is filtered (narrowed on purpose).
+`run --selection` on a selection computed for other code (files changed since `select`) computes it again from the
+same base, head and uncommitted setting, prints `selection <old> was for other code — reselected as <new>` (carrying
+over its `--add`s, not its `--remove`s) and runs the new one. If the code changes while the run waits for the lock,
+it stops with `the code changed while waiting for the lock (selection <id> no longer matches); run it again` and
+records nothing.
 
 ## Shadow mode
 
