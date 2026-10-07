@@ -16,7 +16,7 @@ It is a zero-dependency Node CLI (`e2e-rail`) that your scripts and CI call, plu
 **Codex** that make agents use it honestly: no selected, rerun or filtered run reported as a full pass, a selection
 block with reasons for every selected run, and `verify` before any claim.
 
-**Status:** v0.1.0, not tagged yet. Requires Node ≥ 20, `@playwright/test` ≥ 1.44 and `typescript` ≥ 5 in the host
+**Status:** v0.1.0 (git tag `v0.1.0`). Requires Node ≥ 20, `@playwright/test` ≥ 1.44 and `typescript` ≥ 5 in the host
 repository (borrowed, not bundled).
 
 ## Install
