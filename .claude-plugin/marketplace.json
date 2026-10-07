@@ -1,0 +1,24 @@
+{
+  "$schema": "https://www.schemastore.org/claude-code-marketplace.json",
+  "name": "e2e-rail",
+  "description": "Change-aware Playwright E2E: run only the specs a change can reach, record every run against a code fingerprint so a stale green is never reused, and shard by measured durations.",
+  "owner": {
+    "name": "Seungho",
+    "email": "seungho5623@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "e2e-rail",
+      "description": "Change-aware Playwright E2E — skills, a read-only impact analyst and a doctrine hook over the e2e-rail CLI installed in the repo (pnpm add -D github:sh5623/e2e-rail#v0.2.0).",
+      "source": "./",
+      "category": "engineering",
+      "tags": [
+        "e2e",
+        "playwright",
+        "testing",
+        "ci",
+        "harness"
+      ]
+    }
+  ]
+}
