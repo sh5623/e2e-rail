@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync, symlinkSync, unlinkSync } from 'node:fs';
+import { writeFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { sha256, hashFiles } from '../src/util/hash.mjs';
 import { newId } from '../src/util/id.mjs';
@@ -13,6 +14,7 @@ import {
   gitUntrackedHash,
   gitChangedFiles,
   gitUncommittedFiles,
+  gitLocation,
 } from '../src/util/git.mjs';
 import { makeTempRepo } from './helpers.mjs';
 
@@ -89,22 +91,52 @@ test('gitUntracked and gitUntrackedHash drop excluded prefixes (ledger dir)', ()
   } finally { cleanup(); }
 });
 
-test('git changed/uncommitted files are relative to the given root, not the git toplevel', () => {
+test('git changed/uncommitted/untracked files cover the whole repo, relative to the git toplevel, from any root (R39)', () => {
   const { root, cleanup } = makeTempRepo('sample-app');
   try {
     const head = gitHead(root);
-    // Make the fixture a subdirectory of the repo: move everything under apps/web and re-commit.
+    // Make part of the fixture a subdirectory of the repo and work from there.
     mkdirSync(path.join(root, 'apps'));
     execCapture('git', ['mv', 'src', 'apps/web-src'], { cwd: root });
     execCapture('git', ['commit', '-qm', 'move'], { cwd: root });
+    execCapture('git', ['config', 'diff.relative', 'true'], { cwd: root }); // a user setting must not re-scope the diff
     const sub = path.join(root, 'apps/web-src');
-    // From the subdirectory, paths must be relative to it (e.g. 'main.ts'), not 'apps/web-src/main.ts'.
+    assert.deepEqual(gitLocation(sub), { top: root, prefix: 'apps/web-src/' });
+    assert.deepEqual(gitLocation(root), { top: root, prefix: '' });
+    // From the subdirectory, a change outside it (the repo root here) must stay visible.
     writeFileSync(path.join(sub, 'main.ts'), '// edited\n', { flag: 'a' });
-    assert.deepEqual(gitUncommittedFiles(sub), ['main.ts']);
+    writeFileSync(path.join(root, 'outside.ts'), 'export {}\n');
+    assert.deepEqual(gitUntracked(sub), ['outside.ts']);
+    assert.deepEqual(gitUncommittedFiles(sub), ['apps/web-src/main.ts', 'outside.ts']);
+    execCapture('git', ['add', 'outside.ts'], { cwd: root });
     execCapture('git', ['commit', '-qam', 'edit'], { cwd: root });
-    const moved = gitChangedFiles(sub, head);
-    assert.ok(moved.includes('main.ts'));
-    assert.ok(moved.every((p) => !p.startsWith('apps/')));
+    const changed = gitChangedFiles(sub, head);
+    for (const f of ['apps/web-src/main.ts', 'src/main.ts', 'outside.ts']) assert.ok(changed.includes(f), f);
+  } finally { cleanup(); }
+});
+
+test('gitLocation is null outside a work tree', () => {
+  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'e2e-rail-nogit-')));
+  try {
+    assert.equal(gitLocation(dir), null);
+    assert.deepEqual(gitUntracked(dir), []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('gitUntracked excludes prefixes relative to the root it is given; the hash covers the whole repo (R39)', () => {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  try {
+    mkdirSync(path.join(root, 'web/ledger'), { recursive: true });
+    writeFileSync(path.join(root, 'web/ledger/run.json'), '{}\n');
+    writeFileSync(path.join(root, 'web/new.ts'), 'export {}\n');
+    writeFileSync(path.join(root, 'top.ts'), 'export {}\n');
+    const sub = path.join(root, 'web');
+    assert.deepEqual(gitUntracked(sub, ['ledger/']), ['top.ts', 'web/new.ts']);
+    const h = gitUntrackedHash(sub, ['ledger/']);
+    writeFileSync(path.join(root, 'web/ledger/run.json'), '{"changed":true}\n');
+    assert.equal(gitUntrackedHash(sub, ['ledger/']), h, 'ledger excluded');
+    writeFileSync(path.join(root, 'top.ts'), 'export const changed = 1;\n');
+    assert.notEqual(gitUntrackedHash(sub, ['ledger/']), h, 'an untracked file outside the root still counts');
   } finally { cleanup(); }
 });
 

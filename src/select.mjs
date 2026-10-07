@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import path from 'node:path';
 import { appDir, findApp, ledgerDir } from './config.mjs';
 import { matchAny, matchGlob, walk } from './util/glob.mjs';
-import { gitChangedFiles, gitDiffHash, gitHead, gitUncommittedFiles, gitUntrackedHash } from './util/git.mjs';
+import { gitChangedFiles, gitDiffHash, gitHead, gitLocation, gitUncommittedFiles, gitUntrackedHash } from './util/git.mjs';
 import { sha256 } from './util/hash.mjs';
 import { newId } from './util/id.mjs';
 import { loadTypeScript } from './util/ts.mjs';
@@ -44,6 +44,8 @@ function owningApp(config, rel) {
 // One changed path (relative to the config root) → the first matching row of the table in spec §6.
 export function classifyFile(config, repoRel) {
   const rel = path.posix.normalize(toPosix(repoRel)).replace(/^\.\//, '');
+  // Outside the config root (git reports the whole repository, R39): no glob or app root of this config describes it.
+  if (rel === '..' || rel.startsWith('../') || path.posix.isAbsolute(rel)) return { kind: 'unknown-root', reason: `unknown-root:${rel}` };
   const ledger = ledgerRel(config);
   if (matchAny(config.ignore, rel) || (ledger && under(rel, ledger))) return { kind: 'ignore', reason: 'ignore' };
   const owner = owningApp(config, rel);
@@ -208,16 +210,28 @@ function appContext({ config, ts }) {
 
 const inCI = () => Boolean(process.env.CI) && !/^(0|false)$/i.test(process.env.CI);
 
-// No base, or a diff git cannot compute → changedFiles null → full (spec §6: "unknown" is not "no change").
+// No base, no work tree, or a diff git cannot compute → changedFiles null → full (spec §6: "unknown" is not
+// "no change"). Git reports the whole repository relative to its toplevel; the table speaks config-root-relative, so a
+// file outside the config root becomes `../…` and classifies as unknown-root (R39).
 export async function select({ config, ts, base, head = 'HEAD', includeUncommitted = !inCI(), app }) {
-  let changed = gitChangedFiles(config.root, base, head);
-  if (changed !== null && includeUncommitted) changed = [...new Set([...changed, ...gitUncommittedFiles(config.root)])].sort();
+  const loc = gitLocation(config.root);
+  let changed = loc ? gitChangedFiles(config.root, base, head) : null;
+  if (changed !== null && includeUncommitted) {
+    const uncommitted = gitUncommittedFiles(config.root);
+    changed = uncommitted === null ? null : [...changed, ...uncommitted];
+  }
+  if (changed !== null) {
+    const here = `/${loc.prefix.replace(/\/$/, '')}`;
+    changed = [...new Set(changed.map((p) => path.posix.relative(here, `/${p}`)))].sort();
+  }
   return computeSelection({ config, changedFiles: changed, base: base ?? null, head, includeUncommitted, ctx: appContext({ config, ts }), app });
 }
 
-// Playwright `--test-list` lines are matched against the path relative to config.rootDir.
+// Playwright `--test-list` lines are matched against the path relative to config.rootDir, so without the spec index's
+// rootDir no line can be written (a guessed base makes every line match nothing).
 export function testListLines(appSel) {
-  return appSel.specs.flatMap((s) => s.projects.map((p) => `[${p}] › ${path.posix.relative(appSel.rootDir ?? '', s.file)}`));
+  if (appSel.specs.length && appSel.rootDir == null) throw new Error('test-list lines need the spec index rootDir, and this selection has none. Run `e2e-rail map` first.');
+  return appSel.specs.flatMap((s) => s.projects.map((p) => `[${p}] › ${path.posix.relative(appSel.rootDir, s.file)}`));
 }
 
 // `.e2e-rail/test-list.<app>.txt` per partial app (a full app gets none, and loses a stale one), then
@@ -289,7 +303,14 @@ export function amendSelection(config, { app, add = [], remove = [], allowRemove
     if (!a.specs.some((s) => s.file === spec)) throw new Error(`${spec} is not in the selection`);
     return { spec, reason };
   });
+  // A partial selection that needed no index (docs-only change) has no rootDir; its test-list lines need one.
+  let rootDir = a.rootDir ?? null;
+  if (adds.length && a.mode !== 'full' && rootDir === null) {
+    if (typeof index?.rootDir !== 'string') throw new Error(`app ${target.name}: no spec index yet, so the test-list base (rootDir) is unknown. Run \`e2e-rail map\` first, then add again.`);
+    rootDir = index.rootDir;
+  }
 
+  a.rootDir = rootDir;
   for (const x of adds) {
     if (a.mode !== 'full') {
       let s = a.specs.find((y) => y.file === x.spec);

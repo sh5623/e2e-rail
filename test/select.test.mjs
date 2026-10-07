@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   amendSelection, apiMatches, classifyFile, codeIdOf, computeSelection, readSelection, select, selectionExitCode,
@@ -11,7 +12,9 @@ import { loadTypeScript } from '../src/util/ts.mjs';
 import { loadOrBuildSpecIndex } from '../src/spec-index.mjs';
 import { findMain, loadOrBuildGraph } from '../src/graph.mjs';
 import { getAdapter } from '../src/adapters/index.mjs';
-import { makeTempRepo } from './helpers.mjs';
+import { execCapture } from '../src/util/exec.mjs';
+import { gitHead } from '../src/util/git.mjs';
+import { fixtureDir, makeTempRepo } from './helpers.mjs';
 
 async function setup() {
   const t = makeTempRepo('sample-app');
@@ -298,19 +301,79 @@ test('amendSelection validates everything before it changes anything', async () 
   } finally { cleanup(); }
 });
 
-test('amend reads projects from the cached index; without one the spec runs on chromium with a warning', async (t) => {
-  const { config, ts, cleanup } = await setup();
+test('amend on a selection that built no index: rootDir and projects from the cached index, refused without one', async (t) => {
+  const { root, config, ts, cleanup } = await setup();
   const warn = t.mock.method(console, 'warn', () => {});
+  const listAbs = path.join(root, '.e2e-rail/test-list.web.txt');
+  const lines = () => readFileSync(listAbs, 'utf8').trim().split('\n');
   try {
-    writeSelection(config, await computeSelection({ config, changedFiles: ['README.md'], ctx: noCtx })); // builds no index
-    const bare = amendSelection(config, { add: [{ spec: './e2e/cart.spec.ts', reason: 'r' }] });
-    assert.deepEqual(bare.apps.web.specs, [{ file: 'e2e/cart.spec.ts', projects: ['chromium'], reasons: ['added: r'] }]);
-    assert.equal(warn.mock.callCount(), 1);
+    // docs-only change: partial, no index built, rootDir unknown
+    writeSelection(config, await computeSelection({ config, changedFiles: ['README.md'], ctx: noCtx }));
+    assert.throws(() => amendSelection(config, { add: [{ spec: 'e2e/cart.spec.ts', reason: 'r' }] }), /e2e-rail map/);
+    assert.equal(readFileSync(listAbs, 'utf8'), '', 'a refused add writes no line against an unknown base');
     await computeSelection({ config, changedFiles: ['e2e/smoke.spec.ts'], ctx: realCtx(config, ts) }); // caches map.web.json
     writeSelection(config, await computeSelection({ config, changedFiles: ['README.md'], ctx: noCtx }));
-    const indexed = amendSelection(config, { add: [{ spec: 'e2e/cart.spec.ts', reason: 'r' }] });
-    assert.deepEqual(indexed.apps.web.specs[0].projects, ['chromium', 'mobile-chrome']);
+    const indexed = amendSelection(config, { add: [{ spec: './e2e/cart.spec.ts', reason: 'r' }] });
+    assert.equal(indexed.apps.web.rootDir, 'e2e');
+    assert.deepEqual(indexed.apps.web.specs, [{ file: 'e2e/cart.spec.ts', projects: ['chromium', 'mobile-chrome'], reasons: ['added: r'] }]);
+    assert.deepEqual(lines(), ['[chromium] › cart.spec.ts', '[mobile-chrome] › cart.spec.ts']);
+    assert.equal(warn.mock.callCount(), 0);
+    // a spec newer than the cached index: chromium only, with a warning
+    write(root, 'e2e/late.spec.ts', "import { test } from '@playwright/test';\ntest('l', async () => {});\n");
+    amendSelection(config, { add: [{ spec: 'e2e/late.spec.ts', reason: 'r' }] });
+    assert.deepEqual(lines(), ['[chromium] › cart.spec.ts', '[mobile-chrome] › cart.spec.ts', '[chromium] › late.spec.ts']);
     assert.equal(warn.mock.callCount(), 1);
+  } finally { cleanup(); }
+});
+
+test('testListLines refuses to write lines without a rootDir', () => {
+  assert.throws(() => testListLines({ rootDir: null, specs: [{ file: 'e2e/a.spec.ts', projects: ['chromium'], reasons: [] }] }), /rootDir/);
+  assert.deepEqual(testListLines({ rootDir: null, specs: [] }), []);
+  assert.deepEqual(testListLines({ rootDir: '', specs: [{ file: 'e2e/a.spec.ts', projects: ['chromium'], reasons: [] }] }), ['[chromium] › e2e/a.spec.ts']);
+});
+
+// The sample app one level down (config root = <top>/web), beside files outside it.
+function makeNestedRepo() {
+  const top = realpathSync(mkdtempSync(path.join(tmpdir(), 'e2e-rail-')));
+  cpSync(fixtureDir('sample-app'), path.join(top, 'web'), { recursive: true });
+  write(top, 'shared/x.ts', 'export const x = 1;\n');
+  write(top, 'pnpm-lock.yaml', 'lockfileVersion: 9\n');
+  for (const args of [['init', '-q'], ['config', 'user.email', 't@t'], ['config', 'user.name', 't'], ['add', 'web', 'shared', 'pnpm-lock.yaml'], ['commit', '-qm', 'init']]) {
+    execCapture('git', args, { cwd: top });
+  }
+  return { top, root: path.join(top, 'web'), cleanup: () => rmSync(top, { recursive: true, force: true }) };
+}
+
+test('config below the git toplevel: outside changes are unknown-root (full), inside changes still narrow (R39)', async () => {
+  const { top, root, cleanup } = makeNestedRepo();
+  try {
+    const config = await loadConfig(root);
+    const head = gitHead(top);
+    assert.equal(classifyFile(config, '../shared/x.ts').kind, 'unknown-root');
+    assert.equal(classifyFile(config, '../NOTES.md').kind, 'unknown-root', "the config's own ignore globs do not reach outside it");
+    writeFileSync(path.join(root, 'src/components/Table.ts'), 'export const Table = (rows: unknown[]) => rows.length + 1;\n');
+    const inside = await select({ config, base: 'HEAD' });
+    assert.deepEqual(inside.changedFiles, ['src/components/Table.ts']);
+    assert.equal(inside.apps.web.mode, 'partial');
+    assert.deepEqual(files(inside), ['e2e/cart.spec.ts', 'e2e/orders.spec.ts', 'e2e/smoke.spec.ts']);
+    write(top, 'shared/x.ts', 'export const x = 2;\n'); // tracked, outside
+    write(top, 'NOTES.md', 'x\n'); // untracked, outside
+    const outside = await select({ config, base: 'HEAD' });
+    assert.equal(outside.apps.web.mode, 'full');
+    assert.deepEqual(outside.apps.web.reasons, ['unknown-root:../NOTES.md', 'unknown-root:../shared/x.ts']);
+    assert.equal(selectionExitCode(outside), 10);
+    write(top, 'pnpm-lock.yaml', 'lockfileVersion: 10\n');
+    execCapture('git', ['commit', '-qam', 'outside'], { cwd: top });
+    const committed = await select({ config, base: head, includeUncommitted: false });
+    assert.equal(committed.apps.web.mode, 'full');
+    assert.ok(committed.apps.web.reasons.includes('unknown-root:../pnpm-lock.yaml'), committed.apps.web.reasons.join(' | '));
+    // codeId: the ledger dir is excluded under the toplevel-relative base; untracked files outside the root count
+    const cfg = { ...config, ledger: { dir: 'ledger' } };
+    const id = codeIdOf(cfg);
+    write(root, 'ledger/runs.jsonl', '{}\n');
+    assert.equal(codeIdOf(cfg), id);
+    write(top, 'shared/new.ts', 'export {}\n');
+    assert.notEqual(codeIdOf(cfg), id);
   } finally { cleanup(); }
 });
 
