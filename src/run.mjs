@@ -13,26 +13,51 @@ const MODES = ['dev', 'preview'];
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 const ANSI = /\u001b\[[0-9;]*m/g;
 
+// R46: passthrough options that change what runs, which config is used or where the report goes. Passed through, they
+// would make a sliced or empty run look like an unfiltered full one, so runTests refuses them and names what to use.
+const NOT_FINGERPRINTED = "it is not supported: the app's playwrightConfig is the one fingerprinted (set it in e2e-rail.config.mjs)";
+const REJECTED = new Map([
+  ['--test-list', 'use the testList parameter (CLI: --test-list <file>)'],
+  ['--test-list-invert', 'it is not supported'],
+  ['--shard', 'use the shard parameter (CLI: --shard i/n)'],
+  ['--last-failed', 'use the lastFailed parameter (CLI: --last-failed)'],
+  ['--list', 'it is not supported (it lists tests without running them)'],
+  ['--only-changed', 'it is not supported (`e2e-rail select` picks the specs a change reaches)'],
+  ['-c', NOT_FINGERPRINTED],
+  ['--config', NOT_FINGERPRINTED],
+  ['--reporter', 'it is not supported: e2e-rail sets the reporters itself (blob: the blob parameter, CLI --blob)'],
+  ['--output', 'it is not supported'],
+]);
+// `--opt`, `--opt value`, `--opt=value`; and `-cvalue`, which commander reads as `-c value`.
+const rejectedOption = (arg) => (/^-c[^-]/.test(arg) ? '-c' : [...REJECTED.keys()].find((opt) => arg === opt || arg.startsWith(`${opt}=`)) ?? null);
+
+export function assertPassthrough(passthrough) {
+  for (const arg of passthrough) {
+    const opt = rejectedOption(arg);
+    if (opt) throw new Error(`e2e-rail: ${opt} cannot be passed through to Playwright (it changes what runs or what is recorded); ${REJECTED.get(opt)}.`);
+  }
+}
+
 // Playwright options whose next argument is their value (not a positional file filter), and the ones that narrow
 // which tests run.
 const VALUE_OPTIONS = new Set([
-  '-c', '--config', '-g', '--grep', '--grep-invert', '--project', '--reporter', '--retries', '--repeat-each', '--shard',
-  '--timeout', '--trace', '-j', '--workers', '--output', '--max-failures', '--global-timeout', '--browser', '--test-list',
-  '--test-list-invert', '--tsconfig', '--ui-host', '--ui-port', '--update-source-method',
+  '-g', '--grep', '--grep-invert', '--project', '--retries', '--repeat-each', '--timeout', '--trace', '-j', '--workers',
+  '--max-failures', '--global-timeout', '--browser', '--tsconfig', '--ui-host', '--ui-port', '--update-source-method',
 ]);
-const FILTER_OPTION = /^(--grep|--grep-invert|--project|--only-changed|--last-failed)(=|$)|^-g/;
+const FILTER_OPTION = /^(--grep|--grep-invert|--project)(=|$)|^-g/;
 const SNAPSHOT_MODE = /^(all|changed|missing|none)$/;
 
 // R44: did this run narrow the suite beyond what its kind says? `project`, a test filter option in `passthrough`, or a
 // positional argument (a file or file:line filter). e2e-rail's own `--e2e-rail-*` tags never count. An unknown option
-// followed by a bare word reads as filtered: the safe side, since a filtered run never moves last-green.
+// followed by a bare word reads as filtered: the safe side, since a filtered run never moves last-green. An option
+// runTests refuses (R46) counts as filtered too, for callers that ask without running.
 export function isFiltered({ project = null, passthrough = [] } = {}) {
   if (project) return true;
   const args = passthrough.filter((a) => !a.startsWith('--e2e-rail-'));
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--') return args.length > i + 1;
-    if (FILTER_OPTION.test(a) || !a.startsWith('-')) return true;
+    if (rejectedOption(a) || FILTER_OPTION.test(a) || !a.startsWith('-')) return true;
     if (VALUE_OPTIONS.has(a)) i += 1;
     else if ((a === '-u' || a === '--update-snapshots') && SNAPSHOT_MODE.test(args[i + 1] ?? '')) i += 1;
   }
@@ -95,6 +120,7 @@ export async function runTests({
   lock = true, build = true, selectionId = null, passthrough = [],
 }) {
   if (!MODES.includes(mode)) throw new Error(`e2e-rail: unknown mode "${mode}" (expected ${MODES.join(' or ')})`);
+  assertPassthrough(passthrough); // before the lock, the build and the ledger
   const dirAbs = appDir(config, app);
   const cli = playwrightCli(dirAbs);
   const kind = kindOf({ lastFailed, shard, testList });

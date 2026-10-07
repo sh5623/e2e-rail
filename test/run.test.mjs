@@ -174,8 +174,8 @@ fs.writeFileSync(e.PLAYWRIGHT_JSON_OUTPUT_FILE, fs.readFileSync('stub/report-pas
 
 test('isFiltered (R44): project, test-filter options and positional filters; option values and e2e-rail tags are not', () => {
   const f = (passthrough, project) => isFiltered({ project, passthrough });
-  for (const pt of [['--grep', 'x'], ['--grep=x'], ['-g', 'x'], ['-gx'], ['--grep-invert', 'x'], ['--project', 'chromium'], ['--project=chromium'],
-    ['--only-changed'], ['--only-changed', 'main'], ['--last-failed'], ['e2e/cart.spec.ts'], ['e2e/cart.spec.ts:12'], ['--', 'cart'], ['--trace', 'on', 'cart']]) {
+  for (const pt of [['--grep', 'x'], ['--grep=x'], ['--grep=foo'], ['-g', 'x'], ['-gx'], ['--grep-invert', 'x'], ['--project', 'chromium'], ['--project=chromium'],
+    ['--only-changed'], ['--only-changed', 'main'], ['--last-failed'], ['--shard=2/4'], ['--test-list', 'x'], ['--list'], ['e2e/cart.spec.ts'], ['e2e/cart.spec.ts:12'], ['--', 'cart'], ['--trace', 'on', 'cart']]) {
     assert.equal(f(pt), true, pt.join(' '));
   }
   for (const pt of [[], ['--trace', 'on'], ['--retries', '2', '--timeout=1000'], ['-j', '2'], ['--headed', '-x'], ['-u', 'all'], ['-u'],
@@ -195,9 +195,49 @@ test('a --grep full run is recorded filtered and leaves last-green alone; a plai
     assert.equal(g.entry.filtered, true);
     assert.ok(readJson(argvFile).includes('--grep'));
     assert.equal(existsSync(lastGreen), false);
+    const eq = await runTests({ config, app, workers: 1, lock: false, passthrough: ['--grep=foo'] });
+    assert.equal(eq.entry.filtered, true);
+    assert.equal(existsSync(lastGreen), false);
     const plain = await runTests({ config, app, workers: 1, lock: false, passthrough: ['--trace', 'on', '--', '--e2e-rail-purpose=measure'] });
     assert.equal(plain.entry.filtered, false);
     assert.equal(readFileSync(lastGreen, 'utf8').trim(), plain.entry.fingerprint.head);
+  });
+});
+
+const REJECTED = {
+  '--test-list': /use the testList parameter \(CLI: --test-list <file>\)/,
+  '--test-list-invert': /it is not supported/,
+  '--shard': /use the shard parameter \(CLI: --shard i\/n\)/,
+  '--last-failed': /use the lastFailed parameter \(CLI: --last-failed\)/,
+  '--list': /not supported \(it lists tests without running them\)/,
+  '--only-changed': /not supported \(`e2e-rail select` picks/,
+  '-c': /not supported: the app's playwrightConfig is the one fingerprinted/,
+  '--config': /not supported: the app's playwrightConfig is the one fingerprinted/,
+  '--reporter': /not supported: e2e-rail sets the reporters itself/,
+  '--output': /it is not supported/,
+};
+
+test('R46: passthrough options that change what runs are refused, before the lock, the build and the ledger', async () => {
+  await withRepo(async ({ root, config, app, argvFile }) => {
+    // A heavy holder: a run that went for the lock before refusing would wait here, and the deadline below fails it.
+    const held = await acquire({ dir: lockDir(config), cls: 'heavy', pollMs: 20 });
+    const refusedFast = (p) => Promise.race([p, sleep(5000).then(() => { throw new Error('not refused before taking the lock'); })]);
+    try {
+      const cases = Object.keys(REJECTED).flatMap((opt) => [[opt], [opt, 'value'], [`${opt}=value`]]);
+      cases.push(['-cother.config.ts'], ['--grep', 'x', '--shard', '1/2']);
+      for (const passthrough of cases) {
+        const opt = passthrough.find((a) => a.startsWith('-') && a !== '--grep').replace(/=.*$/, '').replace(/^-c.+$/, '-c');
+        await assert.rejects(refusedFast(runTests({ config, app, mode: 'preview', passthrough })), (e) => {
+          assert.ok(e.message.startsWith(`e2e-rail: ${opt} cannot be passed through to Playwright`), `${passthrough.join(' ')} → ${e.message}`);
+          assert.match(e.message, REJECTED[opt]);
+          return true;
+        });
+      }
+    } finally { held.release(); }
+    assert.equal(existsSync(path.join(root, 'dist')), false, 'no preview build ran');
+    assert.equal(existsSync(argvFile), false, 'Playwright never started');
+    assert.deepEqual(readRuns(config), [], 'no ledger line');
+    assert.deepEqual(lockStatus(lockDir(config)), { heavy: null, light: [] });
   });
 });
 
