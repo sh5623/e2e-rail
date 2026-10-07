@@ -26,15 +26,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm -F web build   # the app's run.preview.build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: ${{ env.E2E_DIST }}
@@ -48,15 +48,15 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm -C "$E2E_APP_DIR" exec playwright install --with-deps
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: ${{ env.E2E_DIST }}
@@ -65,13 +65,13 @@ jobs:
       - run: find "$E2E_DIST" -type f -exec touch {} +
       - run: pnpm exec e2e-rail run --app "$E2E_APP" --full --shard ${{ matrix.shard }}/${{ env.E2E_SHARDS }} --blob --mode preview
       - if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: blob-report-${{ matrix.shard }}
           path: ${{ env.E2E_APP_DIR }}/blob-report
           retention-days: 1
       - if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-ledger-${{ matrix.shard }}
           path: .e2e-rail/ledger.jsonl
@@ -82,29 +82,29 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # Ledger history across workflow runs: durations for `shard plan` and `measure`. Optional.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: .e2e-rail/ledger.jsonl
           key: e2e-rail-ledger-${{ github.run_id }}
           restore-keys: e2e-rail-ledger-
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: ${{ env.E2E_DIST }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: blob-report-*
           merge-multiple: true
           path: ${{ runner.temp }}/blob-report
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: e2e-ledger-*
           path: ${{ runner.temp }}/ledgers
@@ -113,7 +113,7 @@ jobs:
       - run: pnpm exec e2e-rail shard merge --app "$E2E_APP" --dir "$RUNNER_TEMP/blob-report" --mode preview
       - run: pnpm exec e2e-rail verify --app "$E2E_APP" --mode preview --require full
       - if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: ${{ env.E2E_APP_DIR }}/playwright-report
@@ -126,27 +126,27 @@ jobs:
 #  plan:
 #    runs-on: ubuntu-latest
 #    steps:
-#      - uses: actions/checkout@v4
-#      - uses: pnpm/action-setup@v4
-#      - uses: actions/setup-node@v4
+#      - uses: actions/checkout@v7
+#      - uses: pnpm/action-setup@v6
+#      - uses: actions/setup-node@v7
 #        with:
 #          node-version: 22
 #          cache: pnpm
 #      - run: pnpm install --frozen-lockfile
-#      - uses: actions/cache/restore@v4   # durations from earlier merge jobs; without them specs weigh the same
+#      - uses: actions/cache/restore@v6   # durations from earlier merge jobs; without them specs weigh the same
 #        with:
 #          path: .e2e-rail/ledger.jsonl
 #          key: e2e-rail-ledger-${{ github.run_id }}
 #          restore-keys: e2e-rail-ledger-
 #      - run: pnpm exec e2e-rail shard plan --app "$E2E_APP" --count "$E2E_SHARDS"
-#      - uses: actions/upload-artifact@v4
+#      - uses: actions/upload-artifact@v7
 #        with:
 #          name: shard-plan
 #          path: .e2e-rail/shards/${{ env.E2E_APP }}/
 #          retention-days: 1
 #
 #  e2e job: needs: [build, plan], and in place of its run step:
-#      - uses: actions/download-artifact@v4
+#      - uses: actions/download-artifact@v8
 #        with:
 #          name: shard-plan
 #          path: .e2e-rail/shards/${{ env.E2E_APP }}
