@@ -78,17 +78,22 @@ export function verify({ config, app, mode = 'dev', require = 'full', maxAgeMin 
   if (found) return { status: 'verified', exitCode: 0, run: found.run, ...(found.shards && { shards: found.shards }), fingerprint };
   if (recent.length) return { status: 'insufficient', exitCode: 21, fingerprint, have: [...new Set(recent.map((r) => r.kind))] };
 
+  // `differing` is measured from the latest full pass of any tree; the head offered as a base to narrow from
+  // (`lastVerifiedHead`) only from a full pass of a clean tree (B): a pass with uncommitted changes verified that code,
+  // never its HEAD. `passedBefore`: some full pass exists at all.
   const base = lastVerified(counted, app.name);
-  const lastVerifiedHead = base?.fingerprint.head ?? null;
+  const clean = base?.fingerprint.clean === true ? base : lastVerified(counted.filter((r) => r.fingerprint.clean === true), app.name);
+  const lastVerifiedHead = clean?.fingerprint.head ?? null;
+  const passedBefore = base !== null;
   if (noDist) {
     const differing = base ? FIELDS.filter((f) => f === 'dist' || base.fingerprint[f] !== fingerprint[f]) : ['dist'];
-    return { status: 'stale', exitCode: 20, fingerprint, lastVerifiedHead, differing };
+    return { status: 'stale', exitCode: 20, fingerprint, lastVerifiedHead, passedBefore, differing };
   }
   const expired = settle(matching); // would verify without --max-age: the code is the same, the result is just old
   if (expired) {
     const ageMin = Math.floor((Date.now() - Date.parse(expired.run.ts)) / 60_000);
-    return { status: 'stale', exitCode: 20, fingerprint, lastVerifiedHead, differing: [], expired: { runId: expired.run.id, ageMin } };
+    return { status: 'stale', exitCode: 20, fingerprint, lastVerifiedHead, passedBefore, differing: [], expired: { runId: expired.run.id, ageMin } };
   }
   const differing = base ? FIELDS.filter((f) => base.fingerprint[f] !== fingerprint[f]) : [...FIELDS];
-  return { status: 'stale', exitCode: 20, fingerprint, lastVerifiedHead, differing };
+  return { status: 'stale', exitCode: 20, fingerprint, lastVerifiedHead, passedBefore, differing };
 }

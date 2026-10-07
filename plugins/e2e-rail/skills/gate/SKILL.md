@@ -43,6 +43,7 @@ The exit code is Playwright's. The summary line is the record:
 - `<app>: selection <id> runs this app in full (…); running the full suite` — the run is `kind full`.
 - `e2e-rail: warning: selection <id> was computed for other code …` — select again before you rely on it.
 - `e2e-rail: <build command> failed (rc <n>); Playwright was not started.` — nothing ran or was recorded.
+- `last-green not moved: the working tree had uncommitted changes` — the pass verifies this exact code, not HEAD.
 
 Run-shaping options never go after `--`. Only `--shard`, `--test-list`, `--last-failed` and `--project` have e2e-rail
 flags (use those); `--reporter`, `--config`, `--list`, `--only-changed`, `--output`, `--test-list-invert`,
@@ -59,7 +60,8 @@ pnpm exec e2e-rail verify --app <app> --mode <mode> --require full
 ```
 - exit 0 `verified: full@<run-id> …` / `verified: shards×<n>@<run-id> …` — a full pass of this code.
 - exit 20 `stale: …` — no passing run for this code: `differing: <fields>` names what moved since the last full pass,
-  `nothing verified yet` means nothing ever passed, `dist: not built` means the preview dist is missing. Not a pass.
+  `nothing verified yet` means nothing ever passed, `no full pass of a committed tree yet` means every pass had
+  uncommitted changes, `dist: not built` means the preview dist is missing. Not a pass.
 - exit 21 `insufficient: this code has only <kinds> run(s); --require full needs …` — expected after a selected run.
 
 After a selected run you may also quote `verify --app <app> --mode <mode> --require selected`

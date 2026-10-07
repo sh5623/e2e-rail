@@ -46,7 +46,7 @@ test('the fingerprint carries every field of spec section 7, and codeId is the s
     const { config, app } = await load(root);
     const head = execCapture('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim();
     const fp = computeFingerprint({ config, app, mode: 'dev' });
-    assert.deepEqual(Object.keys(fp).sort(), ['codeId', 'config', 'dist', 'diff', 'head', 'id', 'playwright', 'untracked'].sort());
+    assert.deepEqual(Object.keys(fp).sort(), ['clean', 'codeId', 'config', 'dist', 'diff', 'head', 'id', 'playwright', 'untracked'].sort());
     assert.equal(fp.head, head);
     for (const k of ['id', 'codeId', 'diff', 'untracked', 'config']) assert.match(fp[k], /^[0-9a-f]{64}$/, k);
     assert.equal(fp.codeId, codeIdOf(config));
@@ -55,6 +55,42 @@ test('the fingerprint carries every field of spec section 7, and codeId is the s
     writeFileSync(path.join(root, 'src/new.ts'), 'export {}\n');
     assert.equal(computeFingerprint({ config, app, mode: 'dev' }).codeId, codeIdOf(config));
     assert.equal(computeFingerprint({ config, app, mode: 'dev' }).id, computeFingerprint({ config, app, mode: 'dev' }).id);
+  } finally { cleanup(); }
+});
+
+test('clean (B): true only with no tracked change against HEAD and no untracked, non-ignored file; the ledger dir and ignored files do not count', async () => {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  try {
+    const { config, app } = await load(root);
+    const fp = () => computeFingerprint({ config, app, mode: 'dev' });
+    assert.equal(fp().clean, true);
+    // e2e-rail's own output and gitignored run output leave the tree clean
+    mkdirSync(path.join(root, '.e2e-rail'), { recursive: true });
+    writeFileSync(path.join(root, '.e2e-rail/ledger.jsonl'), '{}\n');
+    mkdirSync(path.join(root, 'test-results'));
+    writeFileSync(path.join(root, 'test-results/x.txt'), 'x');
+    assert.equal(fp().clean, true);
+    const rail = { ...config, ledger: { dir: 'rail-ledger' } }; // a ledger dir git does see is excluded by e2e-rail itself
+    mkdirSync(path.join(root, 'rail-ledger'));
+    writeFileSync(path.join(root, 'rail-ledger/ledger.jsonl'), '{}\n');
+    assert.equal(computeFingerprint({ config: rail, app, mode: 'dev' }).clean, true);
+    rmSync(path.join(root, 'rail-ledger'), { recursive: true });
+    // an untracked file, an unstaged edit, a staged edit, a staged deletion: dirty
+    writeFileSync(path.join(root, 'notes.txt'), 'x');
+    assert.equal(fp().clean, false);
+    rmSync(path.join(root, 'notes.txt'));
+    writeFileSync(path.join(root, 'src/main.ts'), '// e\n', { flag: 'a' });
+    const dirty = fp();
+    assert.equal(dirty.clean, false);
+    git(root, 'add', '--', 'src/main.ts');
+    assert.equal(fp().clean, false);
+    assert.equal(fp().id, dirty.id, 'staging changes nothing the fingerprint names');
+    git(root, 'commit', '-qm', 'edit');
+    assert.equal(fp().clean, true);
+    git(root, 'rm', '-q', '--', 'src/lib/dead.ts');
+    assert.equal(fp().clean, false);
+    git(root, 'reset', '-q', '--hard');
+    assert.equal(fp().clean, true);
   } finally { cleanup(); }
 });
 

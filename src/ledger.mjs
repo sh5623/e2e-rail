@@ -100,3 +100,13 @@ export function readLastGreen(config, app) {
   const p = lastGreenPath(config, app);
   return existsSync(p) ? readFileSync(p, 'utf8').trim() || null : null;
 }
+
+// B: last-green names a commit as verified, so only a full pass of a clean tree (fingerprint `clean`) moves it; a pass
+// with uncommitted changes verifies that code alone, never HEAD. A fingerprint without `clean` (an older ledger line)
+// counts as dirty. Returns 'moved' or 'dirty'; callers print LAST_GREEN_DIRTY for the latter.
+export const LAST_GREEN_DIRTY = 'last-green not moved: the working tree had uncommitted changes';
+export function passGreen(config, app, fingerprint) {
+  if (fingerprint?.clean !== true) return 'dirty';
+  writeLastGreen(config, app, fingerprint.head);
+  return 'moved';
+}

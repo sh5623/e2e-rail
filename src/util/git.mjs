@@ -21,8 +21,15 @@ export function gitLocation(root) {
   return top ? { top, prefix } : null;
 }
 
+// The tracked changes against HEAD, staged or not, as the fingerprint hashes them: { text, ok } (ok false when git
+// could not diff).
+export function gitDiffHead(root) {
+  const r = git(root, ['diff', 'HEAD', '--binary', '--no-color']);
+  return { text: r.stdout, ok: r.status === 0 };
+}
+
 export function gitDiffHash(root) {
-  return sha256(git(root, ['diff', 'HEAD', '--binary', '--no-color']).stdout);
+  return sha256(gitDiffHead(root).text);
 }
 
 // Untracked, non-ignored files of the whole repository (toplevel-relative), minus paths under an excluded prefix.

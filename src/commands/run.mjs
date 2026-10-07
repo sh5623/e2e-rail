@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { findApp, ledgerDir, loadConfig } from '../config.mjs';
+import { LAST_GREEN_DIRTY } from '../ledger.mjs';
 import { filteredBy, runTests } from '../run.mjs';
 import { codeIdOf, readSelection, testListLines } from '../select.mjs';
 import { oneOf, parse, positiveInt, printUsage, UsageError } from './_args.mjs';
@@ -87,7 +88,7 @@ export default async function run(argv) {
     ({ testList, selectionId } = picked);
   }
 
-  const { rc, entry } = await runTests({
+  const { rc, entry, lastGreen } = await runTests({
     config, app, mode, testList, lastFailed: Boolean(values['last-failed']), workers, project: values.project, shard,
     blob: Boolean(values.blob), lock: !values['no-lock'], build: !values['no-build'], selectionId, passthrough,
   });
@@ -106,5 +107,6 @@ export default async function run(argv) {
   }
   if (entry.filtered) console.log(`filtered: ${filteredBy({ project: values.project, passthrough }).join(' ')} narrow or relax the run; not a verification`);
   if (entry.shadowed) console.log('shadowed: a selected run does not replace a full run while trust=shadow');
+  if (lastGreen === 'dirty') console.log(LAST_GREEN_DIRTY);
   return rc;
 }

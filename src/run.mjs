@@ -3,7 +3,7 @@ import { constants } from 'node:os';
 import path from 'node:path';
 import { appDir, ledgerDir, runEnv } from './config.mjs';
 import { computeFingerprint, distStale } from './fingerprint.mjs';
-import { appendRun, writeLastGreen } from './ledger.mjs';
+import { appendRun, passGreen } from './ledger.mjs';
 import { acquire, describeHolders, lockDir } from './lock.mjs';
 import { readState } from './shadow.mjs';
 import { inCI } from './util/ci.mjs';
@@ -267,8 +267,9 @@ function shadowTrust(config) {
 }
 const staleDist = (preview) => `e2e-rail: dist (${preview.dist}) is missing or older than its sources. Run \`${preview.build}\` or drop --no-build.`;
 
-// Runs the host's Playwright once and appends exactly one ledger line; returns Playwright's exit code, except that a
-// test-list run whose list matched nothing, or lost lines, is a failure even when Playwright exited 0 (R56: rc 1).
+// Runs the host's Playwright once and appends exactly one ledger line; returns `{ rc, entry, lastGreen }` with
+// Playwright's exit code, except that a test-list run whose list matched nothing, or lost lines, is a failure even
+// when Playwright exited 0 (R56: rc 1).
 // `kind` is derived from what runs (a caller's `kind` is ignored): a run with a test list is never recorded as full.
 // Order: lock → (preview) build if dist is stale → fingerprint → spawn. The fingerprint is taken under the lock, right
 // before Playwright starts, so code edited while the run waited for the lock is not credited to the old code.
@@ -367,9 +368,10 @@ export async function runTests({
       rootDir: report?.config?.rootDir ? toAppRel(dirAbs, report.config.rootDir) : null,
       ...parsed, failures: [...parsed.failures, ...shortfall],
     });
-    // last-green is the base the next selection diffs from: only an unfiltered full pass may move it.
-    if (rc === 0 && kind === 'full' && !filtered) writeLastGreen(config, app.name, fingerprint.head);
-    return { rc, entry };
+    // last-green is the base the next selection diffs from: only an unfiltered full pass of a clean tree may move it
+    // (B). `lastGreen`: 'moved', 'dirty' (an unfiltered full pass with uncommitted changes), or null (no full pass).
+    const lastGreen = rc === 0 && kind === 'full' && !filtered ? passGreen(config, app.name, fingerprint) : null;
+    return { rc, entry, lastGreen };
   } finally {
     held?.release();
     for (const s of SIGNALS) process.removeListener(s, onSignal);

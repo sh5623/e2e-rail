@@ -110,10 +110,13 @@ API 글롭(`route()` 목), import 하는 소스 파일, support 헬퍼, Playwrig
 
 실행마다 지문을 남긴다: `head`, 미커밋 `diff` 해시, `untracked` 파일 해시(원장 디렉터리 제외), 두 설정의 해시,
 Playwright 버전, preview 모드면 빌드된 `dist` 해시. `id` 는 그 전부이고, `codeId` 는 head·diff·untracked 로 선택과
-실행을 짝짓는다. `.e2e-rail/ledger.jsonl` 에는 실행 1회가 append-only 한 줄로 남는다: `kind`(`full` · `selected` ·
-`rerun` · `shard`), `mode`, 지문, shard, workers, `filtered`, `shadowed`, 락 시각, rc, spec 별 결과, 실패, flaky.
-필터 없이 통과한 전수 실행은 자기 head 를 `.e2e-rail/last-green.<app>` 에 쓰고, 이것이 다음 선택의 base 가 된다.
-`complete: yes` 를 찍은 `shard merge` 도 그렇게 쓴다.
+실행을 짝짓는다. `clean`(`id` 에는 들어가지 않는다)은 작업 트리가 HEAD 그 자체였는지, 즉 추적 파일 변경도 원장 디렉터리
+밖의 untracked(무시되지 않은) 파일도 없었는지를 말한다. `.e2e-rail/ledger.jsonl` 에는 실행 1회가 append-only 한 줄로
+남는다: `kind`(`full` · `selected` · `rerun` · `shard`), `mode`, 지문, shard, workers, `filtered`, `shadowed`, 락 시각,
+rc, spec 별 결과, 실패, flaky. 깨끗한 트리에서 필터 없이 통과한 전수 실행은 자기 head 를
+`.e2e-rail/last-green.<app>` 에 쓰고, 이것이 다음 선택의 base 가 된다. 깨끗한 트리에서 돈 샤드로 `complete: yes` 를
+찍은 `shard merge` 도 그렇게 쓴다. 미커밋 변경이 있는 상태의 통과는 정확히 그 코드만 검증할 뿐 HEAD 를 검증하지 않는다:
+`last-green not moved: the working tree had uncommitted changes` 를 찍고, `verify` 도 그 head 를 base 로 내놓지 않는다.
 
 `verify` 는 원장으로 «정확히 이 코드가 통과했는가» 에 답한다. 이 앱 · 이 모드 · 이 지문 · 통과 · 필터 없음인 실행만
 센다. `--require full` 은 전수 실행이나 완성된 샤드 세트를, `--require selected` 는 `run --selection` 으로 만든 선택

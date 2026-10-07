@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { findApp, loadConfig } from '../config.mjs';
+import { LAST_GREEN_DIRTY } from '../ledger.mjs';
 import { mergeReports, planShards } from '../shard.mjs';
 import { ms, oneOf, parse, positiveInt, printUsage, shown, UsageError } from './_args.mjs';
 
@@ -27,8 +28,9 @@ export default async function shard(argv) {
   const config = await loadConfig(process.cwd());
   const app = findApp(config, values.app);
   if (sub === 'merge') {
-    const { rc, html, complete } = mergeReports({ config, app, dir: values.dir, mode });
+    const { rc, html, complete, lastGreen } = mergeReports({ config, app, dir: values.dir, mode });
     console.log(`merge: rc ${rc} · html ${html ? shown(html) : 'none'} · complete: ${complete ? 'yes (verify counts the shard set as a full run)' : 'no (not every shard of one plan passed on this code)'}`);
+    if (lastGreen === 'dirty') console.log(LAST_GREEN_DIRTY);
     return rc;
   }
   const { manifest, files } = planShards({ config, app, count, fromRun: values['from-run'] ?? null, includeSpecs: values.include ?? [], mode });

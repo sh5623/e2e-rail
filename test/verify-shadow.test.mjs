@@ -196,7 +196,8 @@ test('verify: a planned shard set verifies only when its plan was made for the c
   await withRepo(async ({ root, config, app }) => {
     const oldPlan = planShards({ config, app, count: 2 });
     assert.equal(oldPlan.manifest.codeId, codeIdOf(config));
-    touch(root, 'src/main.ts'); // the code moves on after the plan was made
+    touch(root, 'src/main.ts'); // the code moves on after the plan was made (committed: the shards run on a clean tree)
+    git(root, 'add', '--', 'src/main.ts'); git(root, 'commit', '-qm', 'move on');
     await planned(config, app, oldPlan, 1); await planned(config, app, oldPlan, 2);
     const old = verify({ config, app });
     assert.equal(old.status, 'insufficient'); assert.deepEqual(old.have, ['shard']);
@@ -215,6 +216,7 @@ test('verify: a planned shard set verifies only when its plan was made for the c
   await withRepo(async ({ root, config, app }) => {
     const plan = planShards({ config, app, count: 2 });
     touch(root, 'src/main.ts');
+    git(root, 'add', '--', 'src/main.ts'); git(root, 'commit', '-qm', 'move on');
     for (const index of [1, 2]) await planned(config, app, plan, index);
     touch(root, 'src/router.ts');
     assert.equal(verify({ config, app }).lastVerifiedHead, null, 'a set planned for older code is no baseline');
@@ -254,6 +256,7 @@ test('verify: an app that declares no preview build verifies in preview mode wit
     const without = text.replace("preview: { build: 'node build.mjs', dist: 'dist' }, ", '');
     assert.notEqual(without, text);
     writeFileSync(file, without);
+    git(root, 'add', '--', 'e2e-rail.config.mjs'); git(root, 'commit', '-qm', 'no preview build'); // a clean tree: a base
     const config = await loadConfig(root);
     const app = findApp(config);
     assert.equal(app.run.preview, null);
@@ -297,6 +300,36 @@ test('verify: selected and rerun runs are not the baseline `differing` is measur
     touch(root, 'src/main.ts');
     const s = verify({ config, app });
     assert.equal(s.status, 'stale'); assert.deepEqual(s.differing, ['head', 'diff']); assert.equal(s.lastVerifiedHead, entry.fingerprint.head);
+  });
+});
+
+test('verify (B): lastVerifiedHead is the last full pass of a clean tree; a dirty pass is measured from but never offered as a base', async () => {
+  await withRepo(async ({ root, config, app }) => {
+    // only dirty passes so far: something passed, but there is no base to narrow from
+    touch(root, 'src/main.ts');
+    const dirty = await run(config, app);
+    assert.equal(dirty.entry.fingerprint.clean, false);
+    touch(root, 'src/main.ts');
+    const s = verify({ config, app });
+    assert.equal(s.status, 'stale'); assert.deepEqual(s.differing, ['diff']);
+    assert.equal(s.lastVerifiedHead, null); assert.equal(s.passedBefore, true);
+    git(root, 'checkout', '--', 'src/main.ts');
+    const none = verify({ config, app });
+    assert.equal(none.status, 'stale'); assert.equal(none.lastVerifiedHead, null);
+    // a clean pass becomes the base; a later dirty pass of a newer commit does not replace it
+    const clean = await run(config, app);
+    assert.equal(clean.entry.fingerprint.clean, true);
+    git(root, 'commit', '--allow-empty', '-qm', 'next');
+    touch(root, 'src/main.ts');
+    const later = await run(config, app);
+    touch(root, 'src/main.ts');
+    const t = verify({ config, app });
+    assert.deepEqual(t.differing, ['diff'], 'measured from the newest pass');
+    assert.equal(t.lastVerifiedHead, clean.entry.fingerprint.head);
+    assert.notEqual(t.lastVerifiedHead, later.entry.fingerprint.head);
+    // an old ledger line without `clean` (v0.1.0) is no base either
+    synth(config, app, { fingerprint: { ...computeFingerprint({ config, app, mode: 'dev' }), id: 'old', head: 'f'.repeat(40), clean: undefined } });
+    assert.equal(verify({ config, app }).lastVerifiedHead, clean.entry.fingerprint.head);
   });
 });
 

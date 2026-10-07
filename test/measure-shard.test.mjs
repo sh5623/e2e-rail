@@ -256,7 +256,8 @@ test('planned shards run from the lists, merge-reports builds the HTML, and the 
     assert.equal(m.rc, 0);
     assert.equal(m.html, path.join(blobDir, 'index.html')); assert.ok(existsSync(m.html));
     assert.equal(m.complete, true);
-    // M9: a complete, unfiltered set is a full pass, so it moves last-green like a passing full run
+    // M9: a complete, unfiltered set is a full pass, so it moves last-green like a passing full run (on a clean tree, B)
+    assert.equal(m.lastGreen, 'moved');
     assert.equal(readLastGreen(config, 'web'), one.entry.fingerprint.head);
     assert.equal(verify({ config, app }).status, 'verified');
     assert.equal(mergeReports({ config, app, dir: blobDir, mode: 'preview' }).complete, false, 'the shards ran in dev mode');
@@ -269,6 +270,8 @@ test('planned shards run from the lists, merge-reports builds the HTML, and the 
     assert.equal(mergeReports({ config, app, dir: blobDir }).complete, false);
     const again = planShards({ config, app, count: 2 });
     await shardRun(1, again); await shardRun(2, again);
-    assert.equal(mergeReports({ config, app, dir: blobDir }).complete, true);
+    const dirty = mergeReports({ config, app, dir: blobDir });
+    assert.equal(dirty.complete, true);
+    assert.equal(dirty.lastGreen, 'dirty', 'the shards ran with src/main.ts uncommitted (B)');
   });
 });

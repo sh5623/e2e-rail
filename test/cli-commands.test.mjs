@@ -297,8 +297,16 @@ test('select → run --selection → verify round trip with exit codes', () => w
   writeFileSync(at('src/components/Table.ts'), 'export const Table = (rows: unknown[]) => rows.length + 2;\n');
   const v3 = run(['verify']);
   assert.equal(v3.code, 20, v3.out);
-  assert.match(v3.stdout, /differing: diff/);
-  assert.match(v3.stdout, /select --base [0-9a-f]{40}/);
+  // B: the full pass above had the Table edit uncommitted, so it vouches for that code only, never for a commit
+  assert.equal(v3.stdout, 'stale: no passing run for this code · differing: diff · no full pass of a committed tree yet, so no base to narrow from\n');
+
+  commit(root, ['src/components/Table.ts']);
+  assert.equal(run(['run', '--full', '--no-lock']).code, 0);
+  const head = execCapture('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim();
+  writeFileSync(at('src/components/Table.ts'), TABLE_EDIT);
+  const v4 = run(['verify']);
+  assert.equal(v4.code, 20, v4.out);
+  assert.equal(v4.stdout, `stale: no passing run for this code · differing: diff · last verified head ${head} · narrow with \`e2e-rail select --base ${head}\`\n`);
 }));
 
 test('a filtered full run says so: --project and --grep print kind full (filtered) and a filtered: line; a plain full run neither', () => withRepo(({ root, run }) => {
@@ -463,6 +471,44 @@ test('select --add/--remove amend the current selection with a reason; removing 
 
   const mixed = run(['select', '--base', 'HEAD', '--add', 'e2e/cart.spec.ts', '--reason', 'x']);
   assert.equal(mixed.code, 2, mixed.out);
+}));
+
+test('B: a full pass or a complete shard merge on a dirty tree says last-green did not move; on a clean tree it moves', () => withRepo(({ root, run, at }) => {
+  const DIRTY = 'last-green not moved: the working tree had uncommitted changes';
+  const lastGreen = () => (existsSync(at('.e2e-rail/last-green.web')) ? readFileSync(at('.e2e-rail/last-green.web'), 'utf8').trim() : null);
+  const head = () => execCapture('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim();
+  writeFileSync(at('src/components/Table.ts'), TABLE_EDIT);
+  const dirty = run(['run', '--full', '--no-lock']);
+  assert.equal(dirty.code, 0, dirty.out);
+  assert.ok(dirty.stdout.split('\n').includes(DIRTY), dirty.stdout);
+  assert.equal(lastGreen(), null);
+  assert.equal(run(['verify']).code, 0, 'the dirty pass still verifies its own code');
+  writeFileSync(at('src/components/Table.ts'), 'export const Table = (rows: unknown[]) => rows.length + 3;\n');
+  const stale = run(['verify']);
+  assert.equal(stale.code, 20, stale.out);
+  assert.equal(stale.stdout, 'stale: no passing run for this code · differing: diff · no full pass of a committed tree yet, so no base to narrow from\n');
+  writeFileSync(at('src/components/Table.ts'), TABLE_EDIT);
+  // a complete shard set of the same dirty code
+  assert.equal(run(['shard', 'plan', '--count', '1']).code, 0);
+  assert.equal(run(['run', '--test-list', '.e2e-rail/shards/web/1.txt', '--shard', '1/1', '--no-lock']).code, 0);
+  mkdirSync(at('blob-report'));
+  const merged = run(['shard', 'merge', '--dir', 'blob-report']);
+  assert.match(merged.stdout, /complete: yes/);
+  assert.ok(merged.stdout.split('\n').includes(DIRTY), merged.stdout);
+  assert.equal(lastGreen(), null);
+  // committed: the same runs move it, and say nothing
+  commit(root, ['src/components/Table.ts']);
+  const clean = run(['run', '--full', '--no-lock']);
+  assert.equal(clean.code, 0, clean.out);
+  assert.doesNotMatch(clean.out, /last-green not moved/);
+  assert.equal(lastGreen(), head());
+  rmSync(at('.e2e-rail/last-green.web'));
+  assert.equal(run(['shard', 'plan', '--count', '1']).code, 0);
+  assert.equal(run(['run', '--test-list', '.e2e-rail/shards/web/1.txt', '--shard', '1/1', '--no-lock']).code, 0);
+  const cleanMerge = run(['shard', 'merge', '--dir', 'blob-report']);
+  assert.match(cleanMerge.stdout, /complete: yes/);
+  assert.doesNotMatch(cleanMerge.out, /last-green not moved/);
+  assert.equal(lastGreen(), head());
 }));
 
 test('shard plan → each list run as its shard → merge reports complete; a list without a plan is noted as adhoc', () => withRepo(({ root, run, at }) => {

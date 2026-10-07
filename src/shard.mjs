@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { appDir, ledgerDir, runEnv } from './config.mjs';
-import { readRuns, writeLastGreen } from './ledger.mjs';
+import { passGreen, readRuns } from './ledger.mjs';
 import { fullUnits } from './measure.mjs';
 import { codeIdOf } from './select.mjs';
 import { verifiedShardSet } from './verify.mjs';
@@ -105,7 +105,8 @@ const mtimeOrNull = (abs) => statSync(abs, { throwIfNoEntry: false })?.mtimeMs ?
 // directory). `html` is the index.html this merge wrote (Playwright's html output dir: PLAYWRIGHT_HTML_OUTPUT_DIR /
 // PLAYWRIGHT_HTML_REPORT or the app's playwright-report/, or one written into the blob dir), else null. `complete`
 // says whether the ledger's shard runs add up to a full verification of the current code in `mode`, by verify's rules
-// (passing, unfiltered); a complete set is a full pass, so it moves last-green like a passing full run does (M9).
+// (passing, unfiltered); a complete set is a full pass, so it moves last-green like a passing full run does (M9): only
+// when its shards ran on a clean tree (B). `lastGreen`: 'moved', 'dirty' or null (no complete set).
 export function mergeReports({ config, app, dir, mode = 'dev' }) {
   if (typeof dir !== 'string' || !dir) throw new Error('e2e-rail: shard merge needs the blob report dir (--dir <dir>)');
   const blobDir = path.resolve(dir);
@@ -121,6 +122,6 @@ export function mergeReports({ config, app, dir, mode = 'dev' }) {
   if (r.status !== 0) console.error(`e2e-rail: playwright merge-reports failed (rc ${r.status}):\n${(r.stderr || r.stdout).trim()}`);
   const html = candidates.find((abs, i) => existsSync(abs) && mtimeOrNull(abs) !== before[i]) ?? null;
   const set = verifiedShardSet({ config, app, mode });
-  if (set) writeLastGreen(config, app.name, set[0].fingerprint.head);
-  return { rc: r.status, html, complete: set !== null };
+  const lastGreen = set ? passGreen(config, app.name, set[0].fingerprint) : null;
+  return { rc: r.status, html, complete: set !== null, lastGreen };
 }

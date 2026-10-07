@@ -5,12 +5,12 @@ import { codeIdOf, ledgerRel } from './select.mjs';
 import { sha256, hashFiles } from './util/hash.mjs';
 import { DEFAULT_SKIP, walk } from './util/glob.mjs';
 import { execCapture } from './util/exec.mjs';
-import { gitHead, gitDiffHash, gitLocation, gitTracked, gitUncommittedFiles, gitUntracked, gitUntrackedHash } from './util/git.mjs';
+import { gitDiffHead, gitHead, gitLocation, gitTracked, gitUncommittedFiles, gitUntracked } from './util/git.mjs';
 import { playwrightVersion, toAppRel } from './util/playwright.mjs';
 
 // The fingerprint (spec §7) names exactly what a run tested: commit + uncommitted diff + untracked files + config +
 // Playwright + (preview) the built dist. `id` is that whole identity; `codeId` is the code alone, so a selection
-// computed before the build can still be paired with the run that followed it.
+// computed before the build can still be paired with the run that followed it; `clean` says the tree was HEAD itself.
 
 const MODES = ['dev', 'preview'];
 
@@ -102,12 +102,17 @@ export function computeFingerprint({ config, app, mode }) {
   // The ledger is e2e-rail's own output: it must not change what is being fingerprinted (same rule as codeIdOf).
   const ledger = ledgerRel(config);
   const head = gitHead(config.root);
-  const diff = gitDiffHash(config.root);
-  const untracked = gitUntrackedHash(config.root, ledger ? [`${ledger}/`] : []);
+  const tracked = gitDiffHead(config.root);
+  const diff = sha256(tracked.text);
+  const untrackedFiles = gitUntracked(config.root, ledger ? [`${ledger}/`] : []);
+  const untracked = hashFiles(gitLocation(config.root).top, untrackedFiles); // = gitUntrackedHash, listed once
   const cfg = sha256(`${readFileSync(path.join(dirAbs, app.playwrightConfig), 'utf8')}\0${readFileSync(path.join(config.root, CONFIG_FILE), 'utf8')}`);
   const playwright = playwrightVersion(dirAbs);
   const dist = mode === 'preview' ? distHash({ config, app }) : null;
   const codeId = codeIdOf(config);
   const id = sha256(JSON.stringify({ head, diff, untracked, cfg, playwright, dist }));
-  return { id, codeId, head, diff, untracked, config: cfg, playwright, dist };
+  // B: the tree is exactly HEAD (no tracked change, no untracked non-ignored file outside the ledger dir). Derived from
+  // diff and untracked, so not part of `id`. Only a clean pass may name HEAD as verified (last-green, verify's base).
+  const clean = tracked.ok && tracked.text === '' && untrackedFiles.length === 0;
+  return { id, codeId, head, diff, untracked, config: cfg, playwright, dist, clean };
 }

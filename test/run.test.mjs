@@ -11,6 +11,7 @@ import { readLastGreen, readRuns } from '../src/ledger.mjs';
 import { promote, statePath } from '../src/shadow.mjs';
 import { planShards } from '../src/shard.mjs';
 import { loadConfig, findApp } from '../src/config.mjs';
+import { execCapture } from '../src/util/exec.mjs';
 import { makeTempRepo, readJson, fixtureDir, stubReport } from './helpers.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -364,6 +365,62 @@ test('A (audit repros): a pass that skipped snapshot checks or left a failing te
       assert.equal(v.lastVerifiedHead, null, 'not even a baseline');
       assert.equal(readLastGreen(config, 'web'), null, passthrough.join(' '));
     }
+  });
+});
+
+// A stub whose suite fails while src/lib/dead.ts says BUG (test B), so the code under test decides the outcome.
+const B_STUB = `
+const fs = require('node:fs');
+const bug = fs.readFileSync('src/lib/dead.ts', 'utf8').includes('BUG');
+fs.writeFileSync(process.env.PLAYWRIGHT_JSON_OUTPUT_FILE, fs.readFileSync(bug ? 'stub/report-fail.json' : 'stub/report-pass.json', 'utf8').replace(/<ABS_APP_DIR>/g, process.cwd()));
+process.exit(bug ? 1 : 0);
+`;
+
+test('B (audit repro): a pass on a dirty tree verifies its own code but never moves last-green, and is never offered as a base', async () => {
+  await withRepo(async ({ root, config, app }) => {
+    const git = (...args) => assert.equal(execCapture('git', args, { cwd: root }).status, 0, args.join(' '));
+    const head = () => execCapture('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim();
+    const full = () => runTests({ config, app, workers: 1, lock: false });
+    writeFileSync(stubCli(root), B_STUB);
+    git('add', '--', 'node_modules/@playwright/test/cli.js');
+    git('commit', '-qm', 'stub: B fails on BUG');
+    const h0 = head();
+    const green = await full();
+    assert.deepEqual([green.rc, green.entry.fingerprint.clean, green.lastGreen], [0, true, 'moved']);
+    assert.equal(readLastGreen(config, 'web'), h0);
+
+    // HEAD gets the failing B ...
+    writeFileSync(path.join(root, 'src/lib/dead.ts'), 'export const dead = "BUG";\n');
+    git('add', '--', 'src/lib/dead.ts');
+    git('commit', '-qm', 'B regression');
+    const h1 = head();
+    const red = await full();
+    assert.deepEqual([red.rc, red.lastGreen], [1, null]);
+    // ... and an uncommitted fix of B passes: that code is verified, HEAD is not
+    writeFileSync(path.join(root, 'src/lib/dead.ts'), 'export const dead = "fixed";\n');
+    const dirty = await full();
+    assert.deepEqual([dirty.rc, dirty.entry.kind, dirty.entry.filtered, dirty.entry.fingerprint.clean], [0, 'full', false, false]);
+    assert.equal(dirty.lastGreen, 'dirty');
+    assert.equal(readLastGreen(config, 'web'), h0, 'last-green stays at the last clean pass');
+    const v = verify({ config, app });
+    assert.equal(v.status, 'verified');
+    assert.equal(v.run.id, dirty.entry.id);
+
+    // back at HEAD (the fix dropped): stale, and the base offered is the last clean pass, never h1
+    git('checkout', '--', 'src/lib/dead.ts');
+    const back = verify({ config, app });
+    assert.equal(back.status, 'stale');
+    assert.deepEqual(back.differing, ['diff'], 'differing still measures from the last pass');
+    assert.equal(back.lastVerifiedHead, h0);
+    assert.notEqual(back.lastVerifiedHead, h1);
+
+    // the fix committed: a clean pass moves last-green
+    writeFileSync(path.join(root, 'src/lib/dead.ts'), 'export const dead = "fixed";\n');
+    git('add', '--', 'src/lib/dead.ts');
+    git('commit', '-qm', 'fix B');
+    const fixed = await full();
+    assert.deepEqual([fixed.rc, fixed.lastGreen], [0, 'moved']);
+    assert.equal(readLastGreen(config, 'web'), head());
   });
 });
 

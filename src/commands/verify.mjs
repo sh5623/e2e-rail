@@ -25,6 +25,10 @@ function line(res, { app, mode, require, maxAgeMin }) {
   }
   if (res.expired) return `stale: ${res.expired.runId} passed this exact code ${res.expired.ageMin} min ago, older than --max-age ${maxAgeMin}`;
   const head = res.lastVerifiedHead;
+  if (!head && res.passedBefore) {
+    // B: every full pass so far had uncommitted changes, so none of them vouches for a commit to narrow from
+    return `stale: no passing run for this code · differing: ${res.differing.join(',') || '-'} · no full pass of a committed tree yet, so no base to narrow from`;
+  }
   if (!head) {
     const dist = res.differing.length === 1 && res.differing[0] === 'dist' ? ' · dist: not built' : '';
     return `stale: nothing verified yet (no passing full run or shard set of app ${app.name} in ${mode} mode)${dist}`;
