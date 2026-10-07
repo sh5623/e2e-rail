@@ -10,6 +10,7 @@ import { appendRun, readRuns } from '../src/ledger.mjs';
 import { verify } from '../src/verify.mjs';
 import { codeIdOf } from '../src/select.mjs';
 import { findApp, loadConfig } from '../src/config.mjs';
+import { sha256 } from '../src/util/hash.mjs';
 import { makeTempRepo, readJson } from './helpers.mjs';
 
 // Temp repo + loaded config + a private lock dir (E2E_RAIL_LOCK_DIR, so the suite never touches the machine lock);
@@ -159,6 +160,8 @@ test('planShards lists the tests from Playwright and splits them greedily by the
     const { manifest, files } = planShards({ config, app, count: 2 });
     assert.deepEqual(files, [path.join(dir, '1.txt'), path.join(dir, '2.txt')]);
     assert.deepEqual(readJson(path.join(dir, 'manifest.json')), manifest);
+    // each shard records its list's content hash, so a run can tell its list is the one the plan wrote (R52)
+    assert.deepEqual(manifest.shards.map((s) => s.sha256), files.map((f) => sha256(readFileSync(f, 'utf8'))));
     assert.match(manifest.planId, /^plan-/);
     assert.notEqual(manifest.planId, cold.manifest.planId);
     assert.equal(manifest.codeId, codeIdOf(config));
@@ -225,9 +228,8 @@ test('planned shards run from the lists, merge-reports builds the HTML, and the 
   await withRepo(async ({ root, config, app }) => {
     const blobDir = path.join(root, 'blob-report');
     mkdirSync(blobDir, { recursive: true });
-    const shardRun = (index, plan) => run(config, app, {
-      shard: { index, count: 2 }, testList: plan.files[index - 1], shardPlan: { planId: plan.manifest.planId, codeId: plan.manifest.codeId }, blob: true,
-    });
+    // list i of the plan run as shard i/2: the run reads the plan's identity from the manifest beside the list (R52)
+    const shardRun = (index, plan) => run(config, app, { shard: { index, count: 2 }, testList: plan.files[index - 1], blob: true });
     const plan = planShards({ config, app, count: 2 });
     const one = await shardRun(1, plan);
     assert.deepEqual(one.entry.shard, { index: 1, count: 2, plan: plan.manifest.planId, planCodeId: plan.manifest.codeId });

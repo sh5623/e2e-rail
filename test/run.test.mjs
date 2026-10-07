@@ -7,6 +7,7 @@ import path from 'node:path';
 import { runTests, parsePlaywrightReport, kindOf, isFiltered } from '../src/run.mjs';
 import { acquire, lockDir, lockStatus } from '../src/lock.mjs';
 import { readRuns } from '../src/ledger.mjs';
+import { planShards } from '../src/shard.mjs';
 import { loadConfig, findApp } from '../src/config.mjs';
 import { makeTempRepo, readJson, fixtureDir, stubReport } from './helpers.mjs';
 
@@ -272,35 +273,81 @@ test('shard: Playwright splits a bare --shard run; a planned shard list is not s
     assert.equal(argv[argv.indexOf('--shard') + 1], '1/2');
     assert.equal(a.entry.kind, 'shard');
     assert.deepEqual(a.entry.shard, { index: 1, count: 2, plan: 'native' });
-    const list = writeList(root);
-    const plan = { planId: 'plan-20261007-000000-abcd', codeId: 'code-1' };
-    const b = await runTests({ config, app, shard: { index: 2, count: 2 }, testList: list, shardPlan: plan, workers: 1, blob: true, lock: false });
+    const { manifest, files } = planShards({ config, app, count: 2 });
+    const b = await runTests({ config, app, shard: { index: 2, count: 2 }, testList: files[1], workers: 1, blob: true, lock: false });
     argv = readJson(argvFile);
     assert.ok(argv.includes('--test-list'));
     assert.ok(!argv.includes('--shard'), 'the list already is shard 2/2');
     assert.ok(argv.includes('--reporter=blob,json'));
     assert.equal(b.entry.kind, 'shard');
-    assert.deepEqual(b.entry.shard, { index: 2, count: 2, plan: plan.planId, planCodeId: 'code-1' });
+    assert.deepEqual(b.entry.shard, { index: 2, count: 2, plan: manifest.planId, planCodeId: manifest.codeId });
     assert.match(b.entry.command, /--test-list \S+ --workers 1 --reporter=blob,json/);
   });
 });
 
-test('shard plans (R49): a test list without a plan is ad hoc; shardPlan needs a shard of a test list and a plan id and code id', async () => {
+test('shard plans (R52): a plan list takes its identity from the manifest beside it; any other test list is ad hoc', async () => {
   await withRepo(async ({ root, config, app }) => {
     const list = writeList(root);
     const adhoc = await runTests({ config, app, shard: { index: 1, count: 2 }, testList: list, workers: 1, lock: false });
     assert.deepEqual(adhoc.entry.shard, { index: 1, count: 2, plan: `adhoc:${list}` });
+    // a numbered list with no manifest beside it is ad hoc too
+    mkdirSync(path.join(root, 'loose'));
+    writeFileSync(path.join(root, 'loose/1.txt'), '[chromium] › orders.spec.ts\n');
+    const loose = await runTests({ config, app, shard: { index: 1, count: 1 }, testList: path.join(root, 'loose/1.txt'), workers: 1, lock: false });
+    assert.equal(loose.entry.shard.plan, `adhoc:${path.join(root, 'loose/1.txt')}`);
     // a caller's own `plan` on the shard object is not what gets recorded
     const forged = await runTests({ config, app, shard: { index: 1, count: 1, plan: 'plan-x', planCodeId: 'c' }, workers: 1, lock: false });
     assert.deepEqual(forged.entry.shard, { index: 1, count: 1, plan: 'native' });
-    const before = readRuns(config).length;
-    const plan = { planId: 'plan-1', codeId: 'code-1' };
-    await assert.rejects(runTests({ config, app, shard: { index: 1, count: 2 }, shardPlan: plan, workers: 1, lock: false }), /shardPlan/);
-    await assert.rejects(runTests({ config, app, testList: list, shardPlan: plan, workers: 1, lock: false }), /shardPlan/);
-    for (const bad of [{ planId: 'plan-1' }, { codeId: 'c' }, { planId: '', codeId: 'c' }, { planId: 'native', codeId: 'c' }, { planId: 'adhoc:x', codeId: 'c' }, 'plan-1']) {
-      await assert.rejects(runTests({ config, app, shard: { index: 1, count: 2 }, testList: list, shardPlan: bad, workers: 1, lock: false }), /shardPlan/);
-    }
-    assert.equal(readRuns(config).length, before, 'a refused shardPlan writes no ledger line');
+    // list i of an n-way plan run as i/n: the plan's id and code; a relative list path resolves against the app dir
+    const { manifest, files } = planShards({ config, app, count: 4 });
+    const planned = await runTests({ config, app, shard: { index: 3, count: 4 }, testList: path.relative(root, files[2]), workers: 1, lock: false });
+    assert.deepEqual(planned.entry.shard, { index: 3, count: 4, plan: manifest.planId, planCodeId: manifest.codeId });
+    // without a shard, a plan list is an ordinary selected run
+    const selected = await runTests({ config, app, testList: files[0], workers: 1, lock: false });
+    assert.equal(selected.entry.kind, 'selected'); assert.equal(selected.entry.shard, null);
+  });
+});
+
+test('shard plans (R52): a plan list run as another shard, edited, or beside a bad manifest is refused before the lock, the build and the ledger', async () => {
+  await withRepo(async ({ root, config, app, argvFile }) => {
+    const { manifest, files } = planShards({ config, app, count: 4 });
+    rmSync(argvFile, { force: true }); // planning listed the tests through the stub
+    const dir = path.dirname(files[0]);
+    const manifestAbs = path.join(dir, 'manifest.json');
+    // A heavy holder: a run that went for the lock before refusing would wait here, and the deadline below fails it.
+    const held = await acquire({ dir: lockDir(config), cls: 'heavy', pollMs: 20 });
+    const refusedFast = (p) => {
+      let timer;
+      const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('not refused before taking the lock')), 5000); });
+      return Promise.race([p, deadline]).finally(() => clearTimeout(timer));
+    };
+    const refused = (shard, testList, re) => assert.rejects(refusedFast(runTests({ config, app, mode: 'preview', shard, testList })), re);
+    const id = manifest.planId;
+    try {
+      // review repro 1: lists 1 and 2 of a 4-way plan run as 1/2 and 2/2 (a CI matrix shrunk without planning again)
+      await refused({ index: 1, count: 2 }, files[0], new RegExp(`is shard 1/4 of plan ${id}, not 1/2`));
+      await refused({ index: 2, count: 2 }, files[1], new RegExp(`is shard 2/4 of plan ${id}, not 2/2`));
+      // review repro 2: list 1 alone as 1/1
+      await refused({ index: 1, count: 1 }, files[0], /is shard 1\/4 of plan .*, not 1\/1/);
+      // the right count, another index
+      await refused({ index: 2, count: 4 }, files[0], /is shard 1\/4 of plan .*, not 2\/4/);
+      // a list edited after planning
+      writeFileSync(files[3], '[chromium] › orders.spec.ts\n', { flag: 'a' });
+      await refused({ index: 4, count: 4 }, files[3], /has changed since shard plan/);
+      // a numbered list the plan did not write
+      writeFileSync(path.join(dir, '9.txt'), '[chromium] › orders.spec.ts\n');
+      await refused({ index: 9, count: 9 }, path.join(dir, '9.txt'), new RegExp(`plan ${id} has no shard 9`));
+      // another app's plan, a manifest that cannot be read, a manifest without the plan fields
+      writeFileSync(manifestAbs, JSON.stringify({ ...manifest, app: 'admin' }));
+      await refused({ index: 1, count: 4 }, files[0], /belongs to a shard plan for app admin, not web/);
+      writeFileSync(manifestAbs, '{ not json');
+      await refused({ index: 1, count: 4 }, files[0], /manifest .* cannot be read/);
+      writeFileSync(manifestAbs, JSON.stringify({ app: 'web', count: 4 }));
+      await refused({ index: 1, count: 4 }, files[0], /is not a shard plan manifest/);
+    } finally { held.release(); }
+    assert.equal(existsSync(path.join(root, 'dist')), false, 'no preview build ran');
+    assert.equal(existsSync(argvFile), false, 'Playwright never started');
+    assert.deepEqual(readRuns(config), [], 'no ledger line');
   });
 });
 

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { constants } from 'node:os';
 import path from 'node:path';
 import { appDir, ledgerDir } from './config.mjs';
@@ -6,6 +6,7 @@ import { computeFingerprint, distStale } from './fingerprint.mjs';
 import { appendRun, writeLastGreen } from './ledger.mjs';
 import { acquire, describeHolders, lockDir } from './lock.mjs';
 import { execInherit } from './util/exec.mjs';
+import { sha256 } from './util/hash.mjs';
 import { newId } from './util/id.mjs';
 import { flattenSuites, playwrightCli, toAppRel } from './util/playwright.mjs';
 
@@ -108,18 +109,44 @@ function readReport(abs) {
   } catch { return null; } // Playwright died before writing it, or was cut off mid-write
 }
 
-// The ledger's `shard` field (R49): which split this run is a part of. Without a test list Playwright splits the whole
-// suite itself ('native'); a test list from `shard plan` names its plan and the code that plan was made for; any other
-// test list is 'adhoc:<list>', which never completes a set. A `plan` on the caller's `shard` object is not trusted.
+// The ledger's `shard` field (R49, R52): which split this run is a part of, never taken from the caller's word. Without
+// a test list Playwright splits the whole suite itself ('native'). A list `<dir>/<i>.txt` with a `manifest.json` beside
+// it is list i of a `shard plan`: it has to be this app's plan, run as shard i/<plan count>, and unchanged since the plan
+// wrote it (sha256); it records the plan's id and the code the plan was made for. Running list 1 of a 4-way plan as 1/1
+// (or lists 1 and 2 as 1/2, 2/2) would otherwise "complete" a set that never ran lists 3 and 4. Any other test list is
+// 'adhoc:<list>', which never completes a set. A list path resolves against the app dir, where Playwright reads it.
+const PLAN_LIST = /^(\d+)\.txt$/;
 const RESERVED_PLAN = /^(native$|adhoc:)/;
-function shardRecord(shard, testList, shardPlan) {
-  if (shardPlan == null) return shard && { index: shard.index, count: shard.count, plan: testList ? `adhoc:${testList}` : 'native' };
-  if (!shard || !testList) throw new Error('e2e-rail: shardPlan names the plan a shard test list came from; pass it together with shard and testList.');
-  const { planId, codeId } = typeof shardPlan === 'object' ? shardPlan : {};
-  if (typeof planId !== 'string' || !planId || RESERVED_PLAN.test(planId) || typeof codeId !== 'string' || !codeId) {
-    throw new Error(`e2e-rail: shardPlan must be { planId, codeId } from a shard plan manifest, got ${JSON.stringify(shardPlan)}`);
+function shardRecord({ app, dirAbs, shard, testList }) {
+  if (!shard) return null;
+  const { index, count } = shard;
+  if (!testList) return { index, count, plan: 'native' };
+  const listAbs = path.resolve(dirAbs, testList);
+  const numbered = PLAN_LIST.exec(path.basename(listAbs));
+  const manifestAbs = path.join(path.dirname(listAbs), 'manifest.json');
+  if (!numbered || !existsSync(manifestAbs)) return { index, count, plan: `adhoc:${testList}` };
+  const again = 'run `e2e-rail shard plan` again';
+  const firstLine = (e) => e.message.split('\n')[0];
+  let manifest;
+  try { manifest = JSON.parse(readFileSync(manifestAbs, 'utf8')); } catch (e) {
+    throw new Error(`e2e-rail: the shard plan manifest beside ${testList} cannot be read (${manifestAbs}: ${firstLine(e)}); ${again}.`);
   }
-  return { index: shard.index, count: shard.count, plan: planId, planCodeId: codeId };
+  const { planId, codeId, count: planCount, shards } = manifest ?? {};
+  if (typeof planId !== 'string' || !planId || RESERVED_PLAN.test(planId) || typeof codeId !== 'string' || !codeId
+    || !Number.isInteger(planCount) || !Array.isArray(shards)) {
+    throw new Error(`e2e-rail: ${manifestAbs} is not a shard plan manifest (planId, codeId, app, count, shards); ${again}.`);
+  }
+  if (manifest.app !== app.name) throw new Error(`e2e-rail: ${testList} belongs to a shard plan for app ${manifest.app}, not ${app.name}.`);
+  const i = Number(numbered[1]);
+  const planned = shards.find((s) => s?.index === i);
+  if (!planned) throw new Error(`e2e-rail: plan ${planId} has no shard ${i} (it has ${planCount}); ${testList} is not one of its lists.`);
+  if (index !== i || count !== planCount) {
+    throw new Error(`e2e-rail: ${testList} is shard ${i}/${planCount} of plan ${planId}, not ${index}/${count}; run it as --shard ${i}/${planCount}, or plan again with --count ${count}.`);
+  }
+  let text;
+  try { text = readFileSync(listAbs, 'utf8'); } catch (e) { throw new Error(`e2e-rail: cannot read the test list ${testList} (${firstLine(e)})`); }
+  if (sha256(text) !== planned.sha256) throw new Error(`e2e-rail: ${testList} has changed since shard plan ${planId} wrote it; ${again}.`);
+  return { index, count, plan: planId, planCodeId: codeId };
 }
 
 const refuse = (message) => { console.error(message); return { rc: 1, entry: null }; };
@@ -129,11 +156,11 @@ const staleDist = (preview) => `e2e-rail: dist (${preview.dist}) is missing or o
 // `kind` is derived from what runs (a caller's `kind` is ignored): a run with a test list is never recorded as full.
 // Order: lock → (preview) build if dist is stale → fingerprint → spawn. The fingerprint is taken under the lock, right
 // before Playwright starts, so code edited while the run waited for the lock is not credited to the old code.
-// `shardPlan` ({ planId, codeId } from a `shard plan` manifest) goes with a shard whose `testList` is that plan's list.
+// A shard of a `shard plan` list takes the plan's identity from the manifest beside the list (see shardRecord).
 // `lockClass` ('heavy' | 'light') overrides the class derived from what runs (R50: a worker measurement needs the
 // machine to itself); left undefined, full, shard and worker-less runs are heavy and the rest light.
 export async function runTests({
-  config, app, mode = 'dev', testList = null, lastFailed = false, workers, project, shard = null, shardPlan = null,
+  config, app, mode = 'dev', testList = null, lastFailed = false, workers, project, shard = null,
   blob = false, lock = true, lockClass, build = true, selectionId = null, passthrough = [],
 }) {
   if (!MODES.includes(mode)) throw new Error(`e2e-rail: unknown mode "${mode}" (expected ${MODES.join(' or ')})`);
@@ -141,8 +168,8 @@ export async function runTests({
     throw new Error(`e2e-rail: lockClass must be heavy or light (or left out), got ${JSON.stringify(lockClass)}`);
   }
   assertPassthrough(passthrough); // before the lock, the build and the ledger
-  const shardEntry = shardRecord(shard, testList, shardPlan);
   const dirAbs = appDir(config, app);
+  const shardEntry = shardRecord({ app, dirAbs, shard, testList }); // before the lock too: a refused plan list runs nothing
   const cli = playwrightCli(dirAbs);
   const kind = kindOf({ lastFailed, shard, testList });
   workers ??= process.env.CI ? app.run.workers.ci : app.run.workers.local;

@@ -8,6 +8,7 @@ import { runTests } from '../src/run.mjs';
 import { appendRun, readRuns } from '../src/ledger.mjs';
 import { computeFingerprint } from '../src/fingerprint.mjs';
 import { amendSelection, codeIdOf, computeSelection, writeSelection } from '../src/select.mjs';
+import { planShards } from '../src/shard.mjs';
 import { findApp, ledgerDir, loadConfig } from '../src/config.mjs';
 import { execCapture } from '../src/util/exec.mjs';
 import { newId } from '../src/util/id.mjs';
@@ -165,32 +166,32 @@ test('verify: a complete shard set verifies, an incomplete one is insufficient, 
   });
 });
 
-test('verify: a planned shard set verifies only when its plan was made for the current code (R49)', async () => {
+test('verify: a planned shard set verifies only when its plan was made for the current code (R49, R52)', async () => {
+  // list i of the plan run as shard i/count; the run takes the plan's identity from the manifest beside the list
+  const planned = (config, app, plan, index) => run(config, app, { shard: { index, count: plan.manifest.count }, testList: plan.files[index - 1] });
   await withRepo(async ({ root, config, app }) => {
-    const list = path.join(root, 'stub/list.json');
-    const planned = (index, shardPlan) => run(config, app, { shard: { index, count: 2 }, testList: list, shardPlan });
-    const oldPlan = { planId: 'plan-old', codeId: codeIdOf(config) };
+    const oldPlan = planShards({ config, app, count: 2 });
+    assert.equal(oldPlan.manifest.codeId, codeIdOf(config));
     touch(root, 'src/main.ts'); // the code moves on after the plan was made
-    await planned(1, oldPlan); await planned(2, oldPlan);
+    await planned(config, app, oldPlan, 1); await planned(config, app, oldPlan, 2);
     const old = verify({ config, app });
     assert.equal(old.status, 'insufficient'); assert.deepEqual(old.have, ['shard']);
     // Playwright's 1/2 plus a current plan's 2/2 is no set either
-    const plan = { planId: 'plan-now', codeId: codeIdOf(config) };
+    const plan = planShards({ config, app, count: 2 });
     await run(config, app, { shard: { index: 1, count: 2 } });
-    await planned(2, plan);
+    await planned(config, app, plan, 2);
     assert.equal(verify({ config, app }).status, 'insufficient');
-    const one = await planned(1, plan);
+    const one = await planned(config, app, plan, 1);
     const v = verify({ config, app });
     assert.equal(v.status, 'verified'); assert.equal(v.run.id, one.entry.id);
-    assert.ok(v.shards.every((r) => r.shard.plan === 'plan-now'));
-    // the old plan's set was never a verification: before the current plan finished, nothing was the baseline
+    assert.ok(v.shards.every((r) => r.shard.plan === plan.manifest.planId && r.shard.planCodeId === codeIdOf(config)));
     touch(root, 'src/main.ts');
     assert.equal(verify({ config, app }).lastVerifiedHead, one.entry.fingerprint.head);
   });
   await withRepo(async ({ root, config, app }) => {
-    const plan = { planId: 'plan-old', codeId: codeIdOf(config) };
+    const plan = planShards({ config, app, count: 2 });
     touch(root, 'src/main.ts');
-    for (const index of [1, 2]) await run(config, app, { shard: { index, count: 2 }, testList: path.join(root, 'stub/list.json'), shardPlan: plan });
+    for (const index of [1, 2]) await planned(config, app, plan, index);
     touch(root, 'src/router.ts');
     assert.equal(verify({ config, app }).lastVerifiedHead, null, 'a set planned for older code is no baseline');
   });

@@ -6,6 +6,7 @@ import { fullUnits } from './measure.mjs';
 import { codeIdOf } from './select.mjs';
 import { verifiedShardSet } from './verify.mjs';
 import { execCapture } from './util/exec.mjs';
+import { sha256 } from './util/hash.mjs';
 import { newId } from './util/id.mjs';
 import { listTests, playwrightCli } from './util/playwright.mjs';
 
@@ -32,10 +33,11 @@ function durationSource(config, app, fromRun) {
 // Splits the tests Playwright lists now into `count` test lists, balanced by measured durations: whole spec files (all
 // their projects together), longest first, each onto the lightest shard (the lower index on a tie). A (file, project)
 // no run has timed weighs the median of the timed ones and marks its spec `estimated`. Writes
-// `<ledger>/shards/<app>/<i>.txt` (test-list lines relative to Playwright's rootDir) and `manifest.json`; lists of an
-// earlier plan are removed. Run each list with `shardPlan: { planId, codeId }` from the manifest: a set of planned
-// shards verifies only the code its plan was made for (R49). `includeSpecs` (app-relative) must be among the listed
-// tests, so a plan can be checked to cover a spec; a spec Playwright does not list cannot be run from a test list.
+// `<ledger>/shards/<app>/<i>.txt` (test-list lines relative to Playwright's rootDir) and `manifest.json`, which records
+// each list's sha256; lists of an earlier plan are removed. Run list i as `--shard i/<count>`: the run reads the plan's
+// identity from the manifest and refuses any other index or count, or an edited list (R52), and a set of planned shards
+// verifies only the code its plan was made for (R49). `includeSpecs` (app-relative) must be among the listed tests, so a
+// plan can be checked to cover a spec; a spec Playwright does not list cannot be run from a test list.
 export function planShards({ config, app, count, fromRun = null, includeSpecs = [] }) {
   if (!Number.isInteger(count) || count < 1) throw new Error(`e2e-rail: shard count must be a whole number of 1 or more, got ${JSON.stringify(count)}`);
   // The code id is taken before the tests are listed: if the code moves in between, the plan names older code than it
@@ -76,10 +78,13 @@ export function planShards({ config, app, count, fromRun = null, includeSpecs = 
   const dir = path.join(ledgerDir(config), 'shards', app.name);
   mkdirSync(dir, { recursive: true });
   for (const name of readdirSync(dir)) if (/^\d+\.txt$/.test(name)) rmSync(path.join(dir, name));
+  // Lists first, manifest last: a plan cut off in between leaves lists that do not match the old manifest's hashes.
   const out = shards.map((s) => {
     const abs = path.join(dir, `${s.index}.txt`);
     const lines = s.specs.flatMap((x) => x.projects.map((p) => `[${p}] › ${path.posix.relative(rootDir, x.file)}`));
-    writeFileSync(abs, `${lines.join('\n')}\n`);
+    const text = `${lines.join('\n')}\n`;
+    writeFileSync(abs, text);
+    s.sha256 = sha256(text);
     return abs;
   });
   const manifest = {
