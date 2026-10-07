@@ -110,6 +110,44 @@ function readReport(abs) {
   } catch { return null; } // Playwright died before writing it, or was cut off mid-write
 }
 
+// A `--test-list` file as Playwright reads it (loadTestList): lines trimmed, blank and `#` lines skipped, tokens split
+// on `›` (or `>` when a line has no `›`), an optional `[project]` first, then the file (a `:line:col` suffix dropped),
+// then the title path. Paths are relative to Playwright's rootDir.
+export function parseTestList(text) {
+  return text.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#')).map((line) => {
+    const tokens = line.split(line.includes('›') ? '›' : '>').map((t) => t.trim());
+    let project;
+    if (tokens[0].startsWith('[') && tokens[0].endsWith(']')) project = tokens.shift().slice(1, -1);
+    const location = tokens[0] ?? '';
+    const file = (/^(.*?):(\d+):?(\d+)?$/.exec(location)?.[1] ?? location).split(path.sep).join('/');
+    return { line, project, file, titlePath: tokens.slice(1) };
+  });
+}
+
+const LIST_FAILURE = { file: null, title: null, project: null };
+
+// R56: with `--test-list`, Playwright says nothing and exits 0 when the list matches no test (a path written against
+// the wrong base, a renamed or deleted spec, an empty file). Returns the failures that make such a run fail: one when
+// the report holds no test at all, else one per list line that no reported test matches (a partial loss is no pass
+// either). `listText` null = the list could not be read back, so nothing can show that it ran.
+export function testListShortfall(listText, report, appDirAbs) {
+  const tests = flattenSuites(report ?? { suites: [] }, appDirAbs);
+  if (!tests.length) return [{ ...LIST_FAILURE, error: 'test list matched no tests' }];
+  if (listText === null) return [{ ...LIST_FAILURE, error: 'test list could not be read back to check what it matched' }];
+  const rootDir = report.config?.rootDir ?? appDirAbs;
+  return parseTestList(listText)
+    .filter((d) => {
+      const file = toAppRel(appDirAbs, path.resolve(rootDir, d.file));
+      return !tests.some((t) => t.file === file && (d.project === undefined || d.project === t.project)
+        && d.titlePath.length <= t.titlePath.length && d.titlePath.every((title, i) => t.titlePath[i] === title));
+    })
+    .map((d) => ({ ...LIST_FAILURE, error: `test list line matched no tests: ${d.line}` }));
+}
+
+function readListText(abs) {
+  try { return readFileSync(abs, 'utf8'); } catch { return null; }
+}
+
 // The ledger's `shard` field (R49, R52): which split this run is a part of, never taken from the caller's word. Without
 // a test list Playwright splits the whole suite itself ('native'). A list `<dir>/<i>.txt` with a `manifest.json` beside
 // it is list i of a `shard plan`: it has to be this app's plan, run as shard i/<plan count>, and unchanged since the plan
@@ -159,7 +197,8 @@ function shadowTrust(config) {
 }
 const staleDist = (preview) => `e2e-rail: dist (${preview.dist}) is missing or older than its sources. Run \`${preview.build}\` or drop --no-build.`;
 
-// Runs the host's Playwright once and appends exactly one ledger line; returns Playwright's exit code untouched.
+// Runs the host's Playwright once and appends exactly one ledger line; returns Playwright's exit code, except that a
+// test-list run whose list matched nothing, or lost lines, is a failure even when Playwright exited 0 (R56: rc 1).
 // `kind` is derived from what runs (a caller's `kind` is ignored): a run with a test list is never recorded as full.
 // Order: lock → (preview) build if dist is stale → fingerprint → spawn. The fingerprint is taken under the lock, right
 // before Playwright starts, so code edited while the run waited for the lock is not credited to the old code.
@@ -243,15 +282,25 @@ export async function runTests({
       waitMs: held.waitMs, loadAtStart: held.loadAtStart,
     };
     const report = readReport(reportAbs);
+    const parsed = parsePlaywrightReport(report ?? { suites: [] }, dirAbs);
+    // R56: a test list that matched nothing (or lost some of its lines) fails the run, whatever Playwright exited with.
+    // A non-zero Playwright exit code is kept as it is (an interrupt stays 130); a 0 becomes 1.
+    const shortfall = testList ? testListShortfall(readListText(path.resolve(dirAbs, testList)), report, dirAbs) : [];
+    for (const f of shortfall) {
+      console.error(f.error === 'test list matched no tests'
+        ? 'e2e-rail: test list matched no tests — check paths are relative to Playwright rootDir'
+        : `e2e-rail: ${f.error}`);
+    }
+    const rc = shortfall.length && status === 0 ? 1 : status;
     const entry = appendRun(config, {
       id, app: app.name, mode, kind, fingerprint, selectionId, shard: shardEntry, workers: workers ?? null, project: project ?? null,
-      filtered, shadowed, command, lock: lockInfo, rc: status, durationMs,
+      filtered, shadowed, command, lock: lockInfo, rc, durationMs,
       rootDir: report?.config?.rootDir ? toAppRel(dirAbs, report.config.rootDir) : null,
-      ...parsePlaywrightReport(report ?? { suites: [] }, dirAbs),
+      ...parsed, failures: [...parsed.failures, ...shortfall],
     });
     // last-green is the base the next selection diffs from: only an unfiltered full pass may move it.
-    if (status === 0 && kind === 'full' && !filtered) writeLastGreen(config, app.name, fingerprint.head);
-    return { rc: status, entry };
+    if (rc === 0 && kind === 'full' && !filtered) writeLastGreen(config, app.name, fingerprint.head);
+    return { rc, entry };
   } finally {
     held?.release();
     for (const s of SIGNALS) process.removeListener(s, onSignal);

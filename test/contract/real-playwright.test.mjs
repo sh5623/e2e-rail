@@ -41,14 +41,15 @@ async function withContractApp(fn) {
   }
 }
 
-// Writes `.e2e-rail/list.txt` and runs `runTests({ testList, workers: 1 })` against the real Playwright in a child
-// process. Returns { rc, entry }; the child's own output is only shown when it fails.
-function runList(root, lines) {
+// Writes `.e2e-rail/list.txt` (no lines: an empty file) and runs `runTests({ testList, workers: 1, selectionId })`
+// against the real Playwright in a child process. Returns { rc, entry }; the child's own output is only shown when the
+// driver itself fails.
+function runList(root, lines, selectionId) {
   mkdirSync(path.join(root, '.e2e-rail'), { recursive: true });
   const list = path.join(root, '.e2e-rail/list.txt');
-  writeFileSync(list, `${lines.join('\n')}\n`);
+  writeFileSync(list, lines.length ? `${lines.join('\n')}\n` : '');
   const resultFile = path.join(root, '.e2e-rail/driver-result.json');
-  const r = execCapture(process.execPath, [driver, root, resultFile, list], { cwd: root });
+  const r = execCapture(process.execPath, [driver, root, resultFile, list, ...(selectionId ? [selectionId] : [])], { cwd: root });
   assert.equal(r.status, 0, `run-driver failed (rc ${r.status}):\n${r.stderr}\n${r.stdout}`);
   return JSON.parse(readFileSync(resultFile, 'utf8'));
 }
@@ -63,9 +64,10 @@ test('real playwright: --list paths and rootDir, --test-list line format, JSON r
     assert.deepEqual(listed.tests, { 'e2e/a.spec.ts': ['chromium'], 'e2e/b.spec.ts': ['chromium', 'narrow'] });
 
     // ② --test-list: `[project] › <path relative to rootDir>` runs a.spec.ts and nothing else.
-    const { rc, entry } = runList(root, ['[chromium] › a.spec.ts']);
+    const { rc, entry } = runList(root, ['[chromium] › a.spec.ts'], 'sel-contract');
     assert.equal(rc, 0);
     assert.equal(entry.kind, 'selected');
+    assert.equal(entry.selectionId, 'sel-contract');
     assert.equal(entry.rootDir, 'e2e');
     assert.deepEqual(rows(entry), [['e2e/a.spec.ts', 'chromium', 'passed']]);
     assert.deepEqual(entry.failures, []);
@@ -91,19 +93,33 @@ test('real playwright: --list paths and rootDir, --test-list line format, JSON r
   });
 });
 
-test('real playwright: a project prefix and a describe title path select one test; app-relative lines select none', { skip }, async () => {
-  await withContractApp(async ({ root }) => {
+test('real playwright: a list that matches nothing (wrong base, empty file) or loses a line fails; a project prefix and a describe title path select one test', { skip }, async () => {
+  await withContractApp(async ({ root, config, app }) => {
+    const none = { file: null, title: null, project: null, error: 'test list matched no tests' };
+    // R56: the base is rootDir, not the app dir. The same file spelled from the app dir matches nothing, and Playwright
+    // says nothing about it and exits 0; so does an empty list. runTests records both as failures (rc 1).
+    for (const lines of [['[chromium] › e2e/a.spec.ts'], []]) {
+      const r = runList(root, lines, 'sel-contract');
+      assert.equal(r.rc, 1, JSON.stringify(lines));
+      assert.equal(r.entry.rc, 1);
+      assert.deepEqual(r.entry.specs, []);
+      assert.deepEqual(r.entry.failures, [none]);
+    }
+    // a line that matches nothing beside one that runs (a renamed spec): a partial loss is no pass either
+    const partial = runList(root, ['[chromium] › a.spec.ts', '[chromium] › gone.spec.ts'], 'sel-contract');
+    assert.equal(partial.rc, 1);
+    assert.deepEqual(rows(partial.entry), [['e2e/a.spec.ts', 'chromium', 'passed']]);
+    assert.deepEqual(partial.entry.failures, [{ ...none, error: 'test list line matched no tests: [chromium] › gone.spec.ts' }]);
+    assert.notEqual(verify({ config, app, require: 'selected' }).status, 'verified');
+
     const { rc, entry } = runList(root, ['[narrow] › b.spec.ts › group › b runs']);
     assert.equal(rc, 0);
     assert.deepEqual(rows(entry), [['e2e/b.spec.ts', 'narrow', 'passed']]);
+    assert.deepEqual(entry.failures, []);
     // b.spec.ts keeps its test in a nested suite; flattenSuites still reaches it through the file-level suite.
     const report = reportOf(root, entry);
     assert.deepEqual(report.suites.map((s) => s.file), ['b.spec.ts']);
     assert.deepEqual(flattenSuites(report, root).map((t) => [t.file, t.title, t.project]), [['e2e/b.spec.ts', 'b runs', 'narrow']]);
-
-    // The base is rootDir, not the app dir: the same file spelled from the app dir matches nothing (Playwright says
-    // nothing about it and exits 0, so a list written against the wrong base would otherwise pass unnoticed).
-    const wrongBase = runList(root, ['[chromium] › e2e/a.spec.ts']);
-    assert.deepEqual(wrongBase.entry.specs, []);
+    assert.deepEqual(flattenSuites(report, root).map((t) => t.titlePath), [['group', 'b runs']]);
   });
 });

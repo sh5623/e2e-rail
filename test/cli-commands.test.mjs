@@ -292,6 +292,21 @@ test('a filtered full run says so: --project and --grep print kind full (filtere
   }
 }));
 
+test('run --test-list that matches nothing is a failure (R56): rc 1, a failed: line without a test, the rootDir hint', () => withRepo(({ root, run, at }) => {
+  writeFileSync(at('stub/report-empty.json'), JSON.stringify({ config: { rootDir: '<ABS_APP_DIR>/e2e' }, suites: [] }));
+  writeFileSync(at('wrong.txt'), '[chromium] › e2e/orders.spec.ts\n');
+  const r = run(['run', '--test-list', 'wrong.txt', '--no-lock'], { STUB_PW_REPORT: at('stub/report-empty.json') });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.stdout, /^run-id run-\S+ · kind selected · rc 1 · \d+ms · failures 1$/m);
+  assert.match(r.stdout, /^ {2}failed: test list matched no tests$/m);
+  assert.match(r.stderr, /^e2e-rail: test list matched no tests — check paths are relative to Playwright rootDir$/m);
+  assert.equal(ledgerLines(root).at(-1).rc, 1);
+  writeFileSync(at('lost.txt'), '[chromium] › orders.spec.ts\n[chromium] › renamed.spec.ts\n');
+  const lost = run(['run', '--test-list', 'lost.txt', '--no-lock']);
+  assert.equal(lost.code, 1, lost.out);
+  assert.match(lost.stdout, /^ {2}failed: test list line matched no tests: \[chromium\] › renamed\.spec\.ts$/m);
+}));
+
 test('run --selection: test list rebuilt from the selection it reads ([id]); full selection runs full; 0 specs skips', () => withRepo(({ root, run, at }) => {
   const argvFile = at('argv.json');
   assert.equal(run(['select', '--base', 'HEAD']).code, 0); // nothing changed: partial with no spec

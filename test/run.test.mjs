@@ -4,7 +4,8 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { runTests, parsePlaywrightReport, kindOf, isFiltered } from '../src/run.mjs';
+import { runTests, parsePlaywrightReport, parseTestList, testListShortfall, kindOf, isFiltered } from '../src/run.mjs';
+import { verify } from '../src/verify.mjs';
 import { acquire, lockDir, lockStatus } from '../src/lock.mjs';
 import { readRuns } from '../src/ledger.mjs';
 import { promote, statePath } from '../src/shadow.mjs';
@@ -91,7 +92,7 @@ test('runTests spawns playwright with test-list + reporters, writes a ledger lin
     const argvFile = path.join(root, 'argv.json');
     process.env.STUB_PW_ARGV_FILE = argvFile;
     mkdirSync(path.join(root, '.e2e-rail'), { recursive: true });
-    writeFileSync(path.join(root, '.e2e-rail/test-list.web.txt'), '[chromium] › e2e/orders.spec.ts\n');
+    writeFileSync(path.join(root, '.e2e-rail/test-list.web.txt'), '[chromium] › orders.spec.ts\n');
     const { rc, entry } = await runTests({ config, app, kind: 'selected', testList: path.join(root, '.e2e-rail/test-list.web.txt'), workers: 2, lock: false, selectionId: 'sel-x' });
     assert.equal(rc, 0);
     const argv = readJson(argvFile);
@@ -103,6 +104,74 @@ test('runTests spawns playwright with test-list + reporters, writes a ledger lin
     assert.equal(failed.rc, 1); assert.equal(failed.entry.failures.length, 1);
     assert.equal(existsSync(path.join(root, '.e2e-rail/last-green.web')), false);
   } finally { delete process.env.STUB_PW_RC; delete process.env.STUB_PW_REPORT; delete process.env.STUB_PW_ARGV_FILE; cleanup(); }
+});
+
+test('parseTestList reads lines as Playwright does: comments, blanks, › or >, [project], file:line, title path', () => {
+  assert.deepEqual(parseTestList('# note\n\n  [chromium] › a.spec.ts › group › t  \nb.spec.ts:12:3\n[x] > c.spec.ts > t\n'), [
+    { line: '[chromium] › a.spec.ts › group › t', project: 'chromium', file: 'a.spec.ts', titlePath: ['group', 't'] },
+    { line: 'b.spec.ts:12:3', project: undefined, file: 'b.spec.ts', titlePath: [] },
+    { line: '[x] > c.spec.ts > t', project: 'x', file: 'c.spec.ts', titlePath: ['t'] },
+  ]);
+  assert.deepEqual(parseTestList(''), []);
+});
+
+test('testListShortfall (R56): no test at all, or a line no reported test matches, is a failure', () => {
+  const app = fixtureDir('sample-app');
+  const report = stubReport(app, 'report-pass');
+  const none = { file: null, title: null, project: null, error: 'test list matched no tests' };
+  assert.deepEqual(testListShortfall('[chromium] › orders.spec.ts\n', { config: report.config, suites: [] }, app), [none]);
+  assert.deepEqual(testListShortfall('', null, app), [none]);
+  assert.deepEqual(testListShortfall('[chromium] › orders.spec.ts\n', report, app), []);
+  assert.deepEqual(testListShortfall(null, report, app), [{ ...none, error: 'test list could not be read back to check what it matched' }]);
+  const lines = [
+    '[chromium] › orders.spec.ts', 'orders.spec.ts:3', '[mobile-chrome] › cart.spec.ts › adds to cart', 'cart.spec.ts',
+    '[firefox] › orders.spec.ts', '[chromium] › e2e/orders.spec.ts', '[chromium] › gone.spec.ts', '[chromium] › orders.spec.ts › nope',
+  ];
+  assert.deepEqual(testListShortfall(`# c\n${lines.join('\n')}\n`, report, app).map((f) => f.error), lines.slice(4).map((l) => `test list line matched no tests: ${l}`));
+});
+
+test('R56: a test list that matches nothing, an empty list, or lines that match nothing fail the run (rc 1) and never verify', async () => {
+  const error = mock.method(console, 'error', () => {});
+  try {
+    await withRepo(async ({ root, config, app }) => {
+      const empty = path.join(root, 'stub/report-empty.json');
+      writeFileSync(empty, JSON.stringify({ config: { rootDir: '<ABS_APP_DIR>/e2e' }, suites: [] }));
+      const list = (name, text) => { const abs = path.join(root, name); writeFileSync(abs, text); return abs; };
+      const none = { file: null, title: null, project: null, error: 'test list matched no tests' };
+      process.env.STUB_PW_REPORT = empty; // what Playwright reports (exit 0) when no line matched
+      for (const text of ['[chromium] › e2e/orders.spec.ts\n', '', '# only a comment\n']) {
+        const { rc, entry } = await runTests({ config, app, testList: list('l.txt', text), workers: 1, lock: false, selectionId: 'sel-x' });
+        assert.equal(rc, 1, JSON.stringify(text));
+        assert.equal(entry.rc, 1);
+        assert.equal(entry.kind, 'selected');
+        assert.deepEqual(entry.specs, []);
+        assert.deepEqual(entry.failures, [none]);
+        assert.match(error.mock.calls.at(-1).arguments.join(' '), /^e2e-rail: test list matched no tests — check paths are relative to Playwright rootDir$/);
+      }
+      // a failing Playwright exit code is kept
+      process.env.STUB_PW_RC = '3';
+      assert.equal((await runTests({ config, app, testList: list('l.txt', ''), workers: 1, lock: false })).rc, 3);
+      delete process.env.STUB_PW_RC;
+      // some lines ran, one matched nothing (a renamed spec): still a failure, one per lost line
+      delete process.env.STUB_PW_REPORT;
+      const partial = await runTests({ config, app, testList: list('p.txt', '[chromium] › orders.spec.ts\n[chromium] › renamed.spec.ts\n'), workers: 1, lock: false, selectionId: 'sel-x' });
+      assert.equal(partial.rc, 1);
+      assert.equal(partial.entry.specs.length, 5);
+      assert.deepEqual(partial.entry.failures, [{ ...none, error: 'test list line matched no tests: [chromium] › renamed.spec.ts' }]);
+      assert.match(error.mock.calls.at(-1).arguments.join(' '), /^e2e-rail: test list line matched no tests: \[chromium\] › renamed\.spec\.ts$/);
+      // the same holds for a planned shard list
+      const { files } = planShards({ config, app, count: 1 });
+      process.env.STUB_PW_REPORT = empty;
+      const shard = await runTests({ config, app, shard: { index: 1, count: 1 }, testList: files[0], workers: 1, lock: false });
+      assert.equal(shard.rc, 1); assert.deepEqual(shard.entry.failures, [none]);
+      delete process.env.STUB_PW_REPORT;
+      assert.ok(readRuns(config).every((e) => e.rc !== 0));
+      assert.equal(verify({ config, app, require: 'selected' }).status, 'stale');
+      assert.equal(verify({ config, app }).status, 'stale');
+      // a list whose every line matched passes
+      assert.equal((await runTests({ config, app, testList: list('ok.txt', '[chromium] › orders.spec.ts\n'), workers: 1, lock: false })).rc, 0);
+    });
+  } finally { error.mock.restore(); }
 });
 
 test('shadowed (spec §8): a selected run while trust=shadow; not after promote; never a full run; a damaged state reads as shadow', async () => {

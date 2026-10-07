@@ -125,6 +125,9 @@ test('flattenSuites falls back to the app dir when the report has no rootDir and
     }],
   };
   assert.deepEqual(flattenSuites(report, app).map((t) => [t.file, t.title]), [['e2e/a.spec.ts', 'inner']]);
+  // titlePath: describe titles below the file suite (anonymous ones left out) plus the test title
+  report.suites[0].suites[0].suites = [{ title: '', specs: [{ title: 'deep', tests: [{ projectName: 'p', status: 'expected', results: [] }] }] }];
+  assert.deepEqual(flattenSuites(report, app).map((t) => t.titlePath), [['group', 'inner'], ['group', 'deep']]);
 });
 
 test('toAppRel is consistent across symlinked directories and non-existent paths', () => {

@@ -1,6 +1,6 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { verify } from '../src/verify.mjs';
 import { demote, promote, readState, recordShadow, shadowStatus, statePath, writeState } from '../src/shadow.mjs';
@@ -34,6 +34,13 @@ const run = (config, app, opts = {}) => runTests({ config, app, workers: 1, lock
 const failing = (root) => { process.env.STUB_PW_RC = '1'; process.env.STUB_PW_REPORT = path.join(root, 'stub/report-fail.json'); };
 const passing = () => { delete process.env.STUB_PW_RC; delete process.env.STUB_PW_REPORT; };
 const git = (root, ...args) => execCapture('git', args, { cwd: root });
+// A test list every line of which the stub's report matches; in the ledger dir, so the fingerprint does not see it.
+const listFile = (root) => {
+  mkdirSync(path.join(root, '.e2e-rail'), { recursive: true });
+  const abs = path.join(root, '.e2e-rail/list.txt');
+  writeFileSync(abs, '[chromium] › orders.spec.ts\n');
+  return abs;
+};
 const touch = (root, rel, text = '// e\n') => writeFileSync(path.join(root, rel), text, { flag: 'a' });
 
 // A ledger line for a run of the current code, without spawning anything.
@@ -81,7 +88,7 @@ test('verify: verified after a full run; stale after an edit (names the differin
     const s = verify({ config, app });
     assert.equal(s.status, 'stale'); assert.equal(s.exitCode, 20); assert.deepEqual(s.differing, ['diff']);
     assert.equal(s.lastVerifiedHead.length, 40); assert.equal(s.lastVerifiedHead, entry.fingerprint.head);
-    await run(config, app, { testList: path.join(root, 'stub/list.json') });
+    await run(config, app, { testList: listFile(root), selectionId: 'sel-x' });
     const i = verify({ config, app });
     assert.equal(i.status, 'insufficient'); assert.equal(i.exitCode, 21); assert.deepEqual(i.have, ['selected']);
     assert.equal(verify({ config, app, require: 'selected' }).status, 'verified');
@@ -142,7 +149,7 @@ test('verify: filtered "full" runs never count, as verification or as baseline (
     assert.equal(verify({ config, app }).run.id, entry.id);
     // a filtered selected run does not satisfy --require selected either
     touch(root, 'src/main.ts');
-    await run(config, app, { testList: path.join(root, 'stub/list.json'), project: 'chromium' });
+    await run(config, app, { testList: listFile(root), project: 'chromium' });
     assert.equal(verify({ config, app, require: 'selected' }).status, 'stale');
   });
 });
@@ -154,7 +161,7 @@ test('verify: a complete shard set verifies, an incomplete one is insufficient, 
     assert.equal(half.status, 'insufficient'); assert.equal(half.exitCode, 21); assert.deepEqual(half.have, ['shard']);
     assert.equal(verify({ config, app, require: 'selected' }).status, 'insufficient');
     // an ad-hoc test list does not finish Playwright's own split (R49)
-    await run(config, app, { shard: { index: 2, count: 2 }, testList: path.join(root, 'stub/list.json') });
+    await run(config, app, { shard: { index: 2, count: 2 }, testList: listFile(root) });
     assert.equal(verify({ config, app }).status, 'insufficient');
     const b = await run(config, app, { shard: { index: 2, count: 2 } });
     const v = verify({ config, app });
@@ -268,7 +275,7 @@ test('verify: selected and rerun runs are not the baseline `differing` is measur
   await withRepo(async ({ root, config, app }) => {
     const { entry } = await run(config, app);
     git(root, 'commit', '--allow-empty', '-qm', 'next');
-    await run(config, app, { testList: path.join(root, 'stub/list.json') });
+    await run(config, app, { testList: listFile(root) });
     await run(config, app, { lastFailed: true });
     touch(root, 'src/main.ts');
     const s = verify({ config, app });

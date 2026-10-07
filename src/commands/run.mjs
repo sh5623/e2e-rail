@@ -92,7 +92,10 @@ export default async function run(argv) {
   // A narrowed run (--project, --grep, a file filter) is never a full pass, whatever its kind: both lines say so.
   const kind = `${entry.kind}${entry.filtered ? ' (filtered)' : ''}`;
   console.log(`run-id ${entry.id} · kind ${kind} · rc ${entry.rc} · ${entry.durationMs}ms · failures ${entry.failures.length}`);
-  for (const f of entry.failures.slice(0, SHOWN_FAILURES)) console.log(`  failed: ${f.file} › ${f.title} [${f.project}]${f.error ? ` — ${f.error}` : ''}`);
+  for (const f of entry.failures.slice(0, SHOWN_FAILURES)) {
+    // a failure of the run itself (a test list that matched nothing) names no test
+    console.log(`  failed: ${f.file ? `${f.file} › ${f.title} [${f.project}]${f.error ? ` — ${f.error}` : ''}` : f.error}`);
+  }
   if (entry.failures.length > SHOWN_FAILURES) console.log(`  … and ${entry.failures.length - SHOWN_FAILURES} more (ledger ${entry.id})`);
   if (entry.shard?.plan?.startsWith('adhoc:')) {
     console.log('note: this test list has no `shard plan` manifest beside it, so the run is recorded as an adhoc shard and never completes a full set (use the lists `e2e-rail shard plan` writes)');
