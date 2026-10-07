@@ -1,0 +1,19 @@
+{
+  "name": "e2e-rail",
+  "version": "0.1.0",
+  "description": "Change-aware selection, verification ledger and sharding for Playwright E2E. Runtime-agnostic core with Claude Code and Codex skill layers.",
+  "type": "module",
+  "bin": { "e2e-rail": "bin/e2e-rail.mjs" },
+  "files": ["bin", "src", "templates", "README.md", "LICENSE"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:contract": "E2E_RAIL_CONTRACT=1 node --test test/contract/*.test.mjs",
+    "sync:codex": "node scripts/sync-codex.mjs"
+  },
+  "peerDependencies": { "@playwright/test": ">=1.44", "typescript": ">=5" },
+  "peerDependenciesMeta": { "@playwright/test": { "optional": true }, "typescript": { "optional": true } },
+  "devDependencies": { "@playwright/test": "^1.61.0", "typescript": "^5.6.0" },
+  "license": "MIT",
+  "repository": "github:sh5623/e2e-rail"
+}
