@@ -72,20 +72,22 @@ const validShard = (s) => Number.isInteger(s?.count) && s.count >= 1 && Number.i
 const planOf = (s) => s.plan ?? 'native';
 
 // The passing shard runs (ordered by index 1..count) that together make up one full run of this fingerprint, or null.
-// Runs are grouped by `shard.count` AND `shard.plan` and never mixed across groups: a 2-way and a 3-way attempt, or
-// Playwright's split and a planned one, are different splits whose indexes do not add up. An ad-hoc test list never
+// Runs are grouped by `shard.count`, `shard.plan` AND `mode`, and never mixed across groups: a 2-way and a 3-way
+// attempt, or Playwright's split and a planned one, are different splits whose indexes do not add up; and a dev shard
+// and a preview shard ran different suites (I1: an app without a preview build gives both modes one fingerprint, so
+// dev 1/2 + preview 2/2 would otherwise "complete" a set in which no mode ran every test). An ad-hoc test list never
 // completes a set (nothing says it covers the suite), and a planned set counts only when its plan was made for
 // `codeId` (default: the code its runs tested), since a plan lists the tests that existed when it was made. If several
 // groups have a complete set, the one that finished most recently wins.
 export function completeShardSet(runs, app, fpId, { codeId } = {}) {
-  const groups = new Map(); // `${count} ${plan}` -> { count, byIndex: Map(index -> { run, pos }) }; a later pass replaces
+  const groups = new Map(); // `${count} ${plan} ${mode}` -> { count, byIndex: Map(index -> { run, pos }) }; a later pass replaces
   runs.forEach((r, pos) => {
     if (r.kind !== 'shard' || !passed(r) || !sameRun(r, app, fpId) || !validShard(r.shard)) return;
     const { index, count, planCodeId } = r.shard;
     const plan = planOf(r.shard);
     if (plan.startsWith('adhoc:')) return;
     if (plan !== 'native' && (typeof planCodeId !== 'string' || planCodeId !== (codeId ?? r.fingerprint.codeId))) return;
-    const key = `${count} ${plan}`;
+    const key = `${count} ${plan} ${r.mode}`;
     if (!groups.has(key)) groups.set(key, { count, byIndex: new Map() });
     groups.get(key).byIndex.set(index, { run: r, pos });
   });
@@ -118,11 +120,17 @@ export function lastFullPass(runs, appName) {
 // verify applies to lastVerifiedHead), in ANY mode: a selection is not tied to a mode. null when there is none. Read
 // from the ledger, never from the `last-green.<app>` file: 0.1.0 wrote that bare sha for dirty and relaxed passes too,
 // and nothing tells an old one from a current one. `last-green` is a keyword: a ref of that name is passed as its sha.
+// I1: completeness is decided within one mode, and the newest pass of any mode is taken after that.
 export const LAST_GREEN = 'last-green';
 export function lastGreenRun(config, appName) {
   const runs = readRuns(config, { app: appName })
     .filter((r) => passed(r) && !r.filtered && r.fingerprint?.id && r.fingerprint.clean === true && currentPolicy(r));
-  return lastFullPass(runs, appName);
+  let best = null;
+  for (const mode of new Set(runs.map((r) => r.mode))) {
+    const pass = lastFullPass(runs.filter((r) => r.mode === mode), appName);
+    if (pass && (!best || runs.indexOf(pass) > runs.indexOf(best))) best = pass;
+  }
+  return best;
 }
 
 // Marker of the last head that passed a full verification of a clean tree. Informational since 0.2.1: nothing e2e-rail

@@ -271,3 +271,19 @@ test('J2: lastGreenRun is the newest policy-current, unfiltered, passing full ru
     assert.equal(lastGreenHead(config, 'web'), 'h12');
   });
 });
+
+test('I1: shards of one split run in different modes never complete a set, even with one fingerprint (an app without a preview build)', async () => {
+  await withLedger(async (config) => {
+    const clean = { ...fp('F-m'), head: 'hm', clean: true };
+    const dev1 = shard(1, 2, { id: 'dev-1', fingerprint: clean });
+    const prev2 = shard(2, 2, { id: 'preview-2', mode: 'preview', fingerprint: clean });
+    assert.equal(completeShardSet([dev1, prev2], 'web', 'F-m'), null);
+    appendRun(config, dev1);
+    appendRun(config, prev2);
+    assert.equal(lastGreenRun(config, 'web'), null, 'dev 1/2 + preview 2/2 is no pass: no base');
+    const dev2 = appendRun(config, shard(2, 2, { id: 'dev-2', fingerprint: clean }));
+    assert.equal(lastGreenRun(config, 'web').id, dev2.id, 'dev 1/2 + dev 2/2 is');
+    assert.equal(lastGreenRun(config, 'web').fingerprint.head, 'hm');
+    assert.deepEqual(completeShardSet(readRuns(config), 'web', 'F-m').map((r) => r.id), ['dev-1', 'dev-2']);
+  });
+});
