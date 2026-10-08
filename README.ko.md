@@ -83,6 +83,7 @@ codex plugin add e2e-rail@e2e-rail-codex
 | 6 | `srcDir` 아래 | 닿는 spec(아래). 사각지대가 있으면 앱 전수 |
 | 7 | 그 밖의 앱 파일 | 그 앱 전수(`app-other:<file>`) |
 | – | base 없음, 또는 git 이 diff 를 못 냄 | 전 앱 전수(`no-base`) |
+| – | `--head <ref>` 가 HEAD 가 아닌 커밋 | 전 앱 전수(`head-not-HEAD:<ref>`): 실행은 작업 트리를 시험하므로 `<ref>` 뒤의 커밋도 포함된다 |
 
 6행에서는 import 그래프가 변경 파일에서 위로 올라가 닿는 라우트 엔트리를 찾는다. spec 은 그 라우트가 닿은 라우트와
 맞거나(`route:<route> ← <file>`), `page.route()` 목이 변경 파일의 API 리터럴과 맞거나(`api:<glob> ← <literal>`),
@@ -157,7 +158,7 @@ rc, spec 별 결과, 실패, flaky. 깨끗한 트리에서 필터 없이 통과�
 실행은 줄 검사를 하지 않는다. `--test-list` 의 줄을 테스트의 제목 경로 전체로만 맞추는 Playwright 1.56–1.57 에서는
 e2e-rail 이 먼저 테스트를 나열해, 목록이 덮는 테스트마다 그런 줄 하나씩을 Playwright 에 넘긴다
 (`.e2e-rail/reports/<run-id>.test-list.txt`). 목록 자체와 위의 검사는 쓰인 그대로다. 다른 코드에 대해 계산된 선택(`select` 뒤에 파일이 바뀜)으로 `run --selection` 을 하면
-같은 base · head · 미커밋 포함 여부로 선택을 다시 계산하고 `selection <old> was for other code — reselected as <new>` 를
+같은 base · 미커밋 포함 여부로 HEAD 까지 선택을 다시 계산하고 `selection <old> was for other code — reselected as <new>` 를
 찍은 뒤(`--add` 는 옮겨 오고 `--remove` 는 옮겨 오지 않는다) 새 선택을 돌린다. 락을 기다리는 동안 코드가 바뀌면
 `the code changed while waiting for the lock (selection <id> no longer matches); run it again` 으로 멈추고 아무것도
 기록하지 않는다.

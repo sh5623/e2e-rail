@@ -34,7 +34,8 @@ Reasons on a selected spec: `spec-self:<file>` · `route:<route> ← <file>` · 
 `import:<file>` · `unmapped` (the index cannot map that spec, so it runs on every src change) · `always-run` ·
 `added: <reason>`.
 
-A full app names why. Whatever the script cannot attribute widens, never narrows: `no-base` · `shared:<file>` ·
+A full app names why. Whatever the script cannot attribute widens, never narrows: `no-base` ·
+`head-not-HEAD:<ref>` (`--head` other than HEAD: a run tests the work tree) · `shared:<file>` ·
 `unknown-root:<file>` (outside every app root or outside the config root: every app runs in full) ·
 `tier-full:<glob>` · `support:<file>` · `app-other:<file>` · `spec-unindexed:<file>` · `adapter-unresolved:<…>` ·
 `graph-unresolved:<file>` (also when any internal import does not resolve) · `graph-shell:<file>` (the change

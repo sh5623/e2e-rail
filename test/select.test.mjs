@@ -456,6 +456,34 @@ test('select: base..head plus uncommitted work, TypeScript loaded per app, codeI
   } finally { cleanup(); }
 });
 
+test('G1: a --head other than HEAD runs every app full (head-not-HEAD): a run tests the work tree, so only HEAD can narrow', async () => {
+  const { root, config, cleanup } = await setup();
+  try {
+    const git = (...args) => { const r = execCapture('git', args, { cwd: root }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+    const x = git('rev-parse', 'HEAD');
+    write(root, 'src/components/Table.ts', 'export const Table = (rows: unknown[]) => rows.length + 1;\n');
+    git('add', '--', 'src/components/Table.ts'); git('commit', '-qm', 'Y: Table');
+    const y = git('rev-parse', 'HEAD');
+    write(root, 'src/features/cart/services/cart.ts', 'export const addToCart = () => 2;\n');
+    git('add', '--', 'src/features/cart/services/cart.ts'); git('commit', '-qm', 'Z: cart');
+    for (const head of [y, 'HEAD~1', x]) {
+      const sel = await select({ config, base: x, head, includeUncommitted: false });
+      assert.equal(sel.apps.web.mode, 'full', head);
+      assert.deepEqual(sel.apps.web.reasons, [`head-not-HEAD:${head}`], head);
+      assert.equal(sel.head, head, 'the selection still records the head it was asked for');
+      assert.equal(selectionExitCode(sel), 10);
+    }
+    // HEAD itself, by name or by sha: narrow as before
+    for (const head of ['HEAD', gitHead(root)]) {
+      const sel = await select({ config, base: y, head, includeUncommitted: false });
+      assert.equal(sel.apps.web.mode, 'partial', head);
+      assert.deepEqual(sel.changedFiles, ['src/features/cart/services/cart.ts']);
+    }
+    // an unusable head is no base either way
+    assert.deepEqual((await select({ config, base: x, head: 'nope', includeUncommitted: false })).apps.web.reasons, ['no-base']);
+  } finally { cleanup(); }
+});
+
 test('codeIdOf ignores the ledger dir but not other untracked files', async () => {
   const { root, config, cleanup } = await setup();
   try {

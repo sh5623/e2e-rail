@@ -83,6 +83,7 @@ About 30 minutes per repository.
 | 6 | under `srcDir` | the specs it reaches (below); a blind spot runs the app full |
 | 7 | any other file of the app | that app full (`app-other:<file>`) |
 | – | no base, or git cannot diff | every app full (`no-base`) |
+| – | `--head <ref>` names a commit other than HEAD | every app full (`head-not-HEAD:<ref>`): a run tests the work tree, commits after `<ref>` included |
 
 For row 6 the import graph climbs from the changed files to the route entries they reach. A spec is selected when its
 routes match a reached route (`route:<route> ← <file>`), its `page.route()` mocks match an API literal in the changed
@@ -162,7 +163,7 @@ On Playwright 1.56–1.57, whose `--test-list` matches a line only on a whole ti
 first and hands Playwright one such line per test the list covers (`.e2e-rail/reports/<run-id>.test-list.txt`); the
 list itself, and the check above, stay as written.
 `run --selection` on a selection computed for other code (files changed since `select`) computes it again from the
-same base, head and uncommitted setting, prints `selection <old> was for other code — reselected as <new>` (carrying
+same base and uncommitted setting up to HEAD, prints `selection <old> was for other code — reselected as <new>` (carrying
 over its `--add`s, not its `--remove`s) and runs the new one. If the code changes while the run waits for the lock,
 it stops with `the code changed while waiting for the lock (selection <id> no longer matches); run it again` and
 records nothing.

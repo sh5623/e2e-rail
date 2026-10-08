@@ -33,11 +33,15 @@ never presented as a verification it is not, and nothing narrows by guessing.
   offers only a clean pass's head as `last verified head`, and says
   `no full pass of a committed tree yet, so no base to narrow from` when every pass had uncommitted changes.
 - **A stale selection ran and verified (C, P1).** `run --selection` on a selection computed for other code computes it
-  again from the same base, head and uncommitted setting (same apps), prints
+  again from the same base and uncommitted setting up to HEAD (same apps), prints
   `selection <old> was for other code — reselected as <new>`, carries over its `--add` entries (not its `--remove`
   entries) and runs the new one. When the code changes while a selection run waits for the lock, the run stops under
   the lock with `the code changed while waiting for the lock (selection <id> no longer matches); run it again`, writes
   no ledger line and releases the lock.
+- **A selection made with `--head` other than HEAD verified code it never looked at (G1).** A run always tests the
+  work tree, so the commits between that head and HEAD were run but never selected for. `select --head <ref>` with a
+  `<ref>` that resolves to a commit other than HEAD now runs every app in full (`head-not-HEAD:<ref>`), and a
+  reselection always diffs up to HEAD.
 - **The declared minimum Playwright could not run selected runs (D, P2).** Besides the floor above: running the
   contract suite on 1.56.0 showed that 1.56.x and 1.57.x match a `--test-list` line only on a test's whole title path
   (1.58.0 made it a prefix), so the file-level lines e2e-rail writes matched nothing there. On those versions a run

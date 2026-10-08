@@ -13,6 +13,12 @@ export function gitHead(root) {
   return git(root, ['rev-parse', 'HEAD']).stdout.trim();
 }
 
+// The commit `ref` names, or null when it names none.
+export function gitResolveCommit(root, ref) {
+  const r = git(root, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+  return r.status === 0 ? r.stdout.trim() || null : null;
+}
+
 // Where `root` sits in its repository: { top: absolute toplevel, prefix: '' | 'apps/web/' }. null outside a work tree.
 export function gitLocation(root) {
   const r = git(root, ['rev-parse', '--show-toplevel', '--show-prefix']);

@@ -460,6 +460,33 @@ test('C: reselecting keeps the additions recorded with --add (they only widen), 
   assert.equal(ledgerLines(root).at(-1).selectionId, fresh.id);
 }));
 
+test('G1 (review repro): select --head <older commit> runs full, so a later breakage between it and HEAD is run; a reselection diffs to HEAD', () => withRepo(({ root, run, at }) => {
+  const head = () => execCapture('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim();
+  const x = head(); // X: everything passes
+  writeFileSync(at('e2e/orders.spec.ts'), '// Y: orders changed\n', { flag: 'a' });
+  commit(root, ['e2e/orders.spec.ts']);
+  const y = head();
+  writeFileSync(at('src/features/cart/services/cart.ts'), 'export const addToCart = () => 2;\n'); // Z = HEAD: cart broken
+  commit(root, ['src/features/cart/services/cart.ts']);
+  const s = run(['select', '--base', x, '--head', y]);
+  assert.equal(s.code, 10, s.out);
+  assert.match(s.stdout, new RegExp(`head-not-HEAD:${y}`));
+  const sel = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  assert.deepEqual([sel.apps.web.mode, sel.head], ['full', y]);
+  const r = run(['run', '--selection', '--no-lock'], { STUB_PW_RC: '1', STUB_PW_REPORT: at('stub/report-fail.json') });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.stdout, /kind full/);
+  assert.notEqual(run(['verify', '--require', 'selected']).code, 0);
+  // the code moves on: the reselection diffs base..HEAD (a stored non-HEAD head is dropped) and can narrow again
+  writeFileSync(at('e2e/smoke.spec.ts'), '// touched\n', { flag: 'a' });
+  const again = run(['run', '--selection', '--no-lock']);
+  assert.equal(again.code, 0, again.out);
+  assert.match(again.stdout, /reselected as sel-/);
+  const fresh = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  assert.deepEqual([fresh.head, fresh.base, fresh.apps.web.mode], ['HEAD', x, 'partial']);
+  assert.ok(fresh.apps.web.specs.some((f) => f.file === 'e2e/cart.spec.ts'), 'Z is inside base..HEAD');
+}));
+
 test('select --app writes only that app and drops other test lists; --app is required where several apps are configured', () => withRepo(({ root, run, at }) => {
   writeFileSync(at('e2e-rail.config.mjs'), `export default {
   apps: ['web', 'admin'].map((name) => ({

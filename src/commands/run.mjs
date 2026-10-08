@@ -40,13 +40,14 @@ function testListPath(value) {
 }
 
 // C: a selection computed for other code (files changed since `select`) may miss what changed since. It is computed
-// again from its own base, head and uncommitted setting, for the apps it covered, and becomes the current selection.
+// again from its own base and uncommitted setting, up to HEAD (G1: the run tests the work tree, so a stored head other
+// than HEAD is dropped), for the apps it covered, and becomes the current selection.
 // Additions recorded with `--add` are carried over (an addition only widens; a spec that is gone is dropped);
 // removals are not (they were judged on the old change).
 async function reselect(config, sel) {
   const names = Object.keys(sel.apps ?? {});
   const fresh = await select({
-    config, base: sel.base || undefined, head: sel.head || undefined,
+    config, base: sel.base || undefined,
     includeUncommitted: typeof sel.includeUncommitted === 'boolean' ? sel.includeUncommitted : undefined,
     app: names.length === 1 && config.apps.length > 1 ? names[0] : undefined, // `select --app` covers one app
   });
