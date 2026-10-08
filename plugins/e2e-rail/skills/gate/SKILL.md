@@ -43,8 +43,9 @@ The exit code is Playwright's. The summary line is the record:
   Playwright 1.56–1.57 a test whose title holds `›` or starts or ends with a space fails this way every time (a list
   line cannot spell it): report it and recommend Playwright ≥ 1.58.
 - `<app>: selection <id> runs this app in full (…); running the full suite` — the run is `kind full`.
-- `selection <old> was for other code — reselected as <new>` — files changed after `select`; the run used the new
-  selection (its `--add`s carried over, not its `--remove`s). Put the new id and its specs in the selection block.
+- `selection <old> was for other code — reselected as <new>` (or `… was made up to <head>, not HEAD — …`) — files
+  changed after `select`, or it was made up to another head; the run used the new selection (its `--add`s carried
+  over, not its `--remove`s). Put the new id and its specs in the selection block.
 - `e2e-rail: the code changed while waiting for the lock (selection <id> no longer matches); run it again` — nothing
   ran or was recorded.
 - `e2e-rail: <build command> failed (rc <n>); Playwright was not started.` — nothing ran or was recorded.

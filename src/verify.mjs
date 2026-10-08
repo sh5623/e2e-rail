@@ -5,6 +5,7 @@ import { computeFingerprint } from './fingerprint.mjs';
 import { completeShardSet, latestFull, readRuns } from './ledger.mjs';
 import { isMeasure } from './measure.mjs';
 import { testListText } from './select.mjs';
+import { gitResolveCommit } from './util/git.mjs';
 import { sha256 } from './util/hash.mjs';
 
 // Fingerprint fields `differing` can name, in the order they are listed.
@@ -49,12 +50,14 @@ export function verifiedShardSet({ config, app, mode = 'dev' }) {
 // that selection (`selections/<id>.json`) exists and was computed for the code the run tested: a selection made for
 // other code may miss what changed since. G2: and only while that selection still writes the very test list the run
 // read (`testListSha`): `select --add` rewrites a selection in place, and a run made before it never ran the addition.
+// H2: and only when the selection's head is the commit the run tested (a 0.1.0 `--head <sha>` selection is not).
 // A missing, unreadable or foreign selection, or a run that recorded no list hash, does not count.
 function selectionMatches(config, r) {
   if (!/^[\w.-]+$/.test(r.selectionId) || typeof r.testListSha !== 'string') return false;
   try {
     const sel = JSON.parse(readFileSync(path.join(ledgerDir(config), 'selections', `${r.selectionId}.json`), 'utf8'));
     if (typeof sel?.codeId !== 'string' || sel.codeId !== r.fingerprint.codeId || !sel.apps?.[r.app]) return false;
+    if (gitResolveCommit(config.root, sel.head || 'HEAD') !== r.fingerprint.head) return false;
     return sha256(testListText(sel.apps[r.app])) === r.testListSha;
   } catch { return false; }
 }

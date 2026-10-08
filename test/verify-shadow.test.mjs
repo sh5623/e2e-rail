@@ -147,6 +147,26 @@ test('verify --require selected (C): a selected run counts only while its select
   });
 });
 
+test('verify --require selected (H2): a run whose selection names a head other than the commit the run tested is not credited', async () => {
+  await withRepo(async ({ root, config, app }) => {
+    const older = git(root, 'rev-parse', 'HEAD').stdout.trim();
+    git(root, 'commit', '--allow-empty', '-qm', 'next');
+    const now = git(root, 'rev-parse', 'HEAD').stdout.trim();
+    // as 0.1.0 wrote it for `select --head <older sha>`: this code's codeId, a list, but another head
+    const sel = select(config, app, { specs: [ORDERS] });
+    const write = (head) => writeFileSync(path.join(ledgerDir(config), 'selections', `${sel.id}.json`), JSON.stringify({ ...sel, head }));
+    const ran = synth(config, app, { kind: 'selected', selectionId: sel.id, testListSha: listSha(sel) });
+    for (const head of [older, 'HEAD~1', 'nope']) {
+      write(head);
+      assert.equal(verify({ config, app, require: 'selected' }).status, 'insufficient', head);
+    }
+    for (const head of [now, 'HEAD']) {
+      write(head);
+      assert.equal(verify({ config, app, require: 'selected' }).run?.id, ran.id, head);
+    }
+  });
+});
+
 test('verify --require selected (G2): a selected run counts only for the very list its selection writes now', async () => {
   await withRepo(async ({ config, app }) => {
     const sel = select(config, app, { specs: [ORDERS] });

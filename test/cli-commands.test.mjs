@@ -451,6 +451,35 @@ test('C (audit repro): run --selection on a selection made for other code resele
   assert.match(again.stdout, new RegExp(`^selection ${old.id} was for other code — reselected as sel-`, 'm'));
 }));
 
+test('H2: run --selection reselects up to HEAD when the stored head is not HEAD, even for this very code (a 0.1.0 --head selection)', () => withRepo(({ root, run, at }) => {
+  const older = execCapture('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim();
+  writeFileSync(at('e2e/orders.spec.ts'), '// committed\n', { flag: 'a' });
+  commit(root, ['e2e/orders.spec.ts']);
+  writeFileSync(at('e2e/cart.spec.ts'), '// touched\n', { flag: 'a' });
+  assert.equal(run(['select', '--base', 'HEAD']).code, 0);
+  const sel = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  for (const head of [older, 'nope']) {
+    const hand = JSON.stringify({ ...sel, head }); // same codeId, as an old e2e-rail wrote a `--head <sha>` selection
+    writeFileSync(at('.e2e-rail/selection.json'), hand);
+    writeFileSync(at(`.e2e-rail/selections/${sel.id}.json`), hand);
+    const r = run(['run', '--selection', '--no-lock']);
+    assert.equal(r.code, 0, r.out);
+    const freshId = r.stdout.match(new RegExp(`^selection ${sel.id} was made up to ${head}, not HEAD — reselected as (sel-\\S+)$`, 'm'))?.[1];
+    assert.ok(freshId, r.stdout);
+    const fresh = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+    assert.deepEqual([fresh.id, fresh.head], [freshId, 'HEAD']);
+    assert.equal(ledgerLines(root).at(-1).selectionId, freshId);
+  }
+  // a selection of HEAD by sha is HEAD: no reselection
+  const bySha = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  const hand = JSON.stringify({ ...bySha, head: execCapture('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim() });
+  writeFileSync(at('.e2e-rail/selection.json'), hand);
+  writeFileSync(at(`.e2e-rail/selections/${bySha.id}.json`), hand);
+  const same = run(['run', '--selection', '--no-lock']);
+  assert.doesNotMatch(same.stdout, /reselected/);
+  assert.equal(run(['verify', '--require', 'selected']).code, 0);
+}));
+
 test('G3: run --selection <older id> reselects into selections/<new>.json only; the current selection and its decisions stay', () => withRepo(({ root, run, at }) => {
   writeFileSync(at('e2e/orders.spec.ts'), '// touched\n', { flag: 'a' });
   const older = JSON.parse(run(['select', '--base', 'HEAD', '--json']).stdout);
@@ -543,18 +572,15 @@ test('G1 (review repro): select --head <older commit> runs full, so a later brea
   assert.match(s.stdout, new RegExp(`head-not-HEAD:${y}`));
   const sel = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
   assert.deepEqual([sel.apps.web.mode, sel.head], ['full', y]);
-  const r = run(['run', '--selection', '--no-lock'], { STUB_PW_RC: '1', STUB_PW_REPORT: at('stub/report-fail.json') });
+  // run --selection does not run a selection made up to another head (H2): it reselects base..HEAD, which takes Z in
+  const r = run(['run', '--selection', '--no-lock'], { STUB_PW_FAIL_IF_LISTED: 'cart.spec.ts' });
   assert.equal(r.code, 1, r.out);
-  assert.match(r.stdout, /kind full/);
-  assert.notEqual(run(['verify', '--require', 'selected']).code, 0);
-  // the code moves on: the reselection diffs base..HEAD (a stored non-HEAD head is dropped) and can narrow again
-  writeFileSync(at('e2e/smoke.spec.ts'), '// touched\n', { flag: 'a' });
-  const again = run(['run', '--selection', '--no-lock']);
-  assert.equal(again.code, 0, again.out);
-  assert.match(again.stdout, /reselected as sel-/);
+  assert.match(r.stdout, new RegExp(`^selection ${sel.id} was made up to ${y}, not HEAD — reselected as sel-`, 'm'));
   const fresh = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
   assert.deepEqual([fresh.head, fresh.base, fresh.apps.web.mode], ['HEAD', x, 'partial']);
   assert.ok(fresh.apps.web.specs.some((f) => f.file === 'e2e/cart.spec.ts'), 'Z is inside base..HEAD');
+  assert.deepEqual([ledgerLines(root).at(-1).kind, ledgerLines(root).at(-1).rc], ['selected', 1]);
+  assert.notEqual(run(['verify', '--require', 'selected']).code, 0);
 }));
 
 test('select --app writes only that app and drops other test lists; --app is required where several apps are configured', () => withRepo(({ root, run, at }) => {

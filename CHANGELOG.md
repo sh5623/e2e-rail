@@ -50,6 +50,10 @@ never presented as a verification it is not, and nothing narrows by guessing.
   where it is the default, the selection ignored the uncommitted diff while its codeId, and the run, included it.
   On a tree with uncommitted or untracked (non-ignored, outside the ledger dir) changes such a selection now runs
   every app in full (`uncommitted-excluded`); a clean tree narrows as before.
+- **A selection made up to another head still ran and verified when its codeId matched (H2).** A selection file
+  whose `head` does not resolve to HEAD (as 0.1.0 wrote one for `select --head <sha>`) is now reselected up to HEAD
+  by `run --selection` (`selection <old> was made up to <head>, not HEAD — reselected as <new>`), and
+  `verify --require selected` no longer credits a run whose selection's head is not the commit the run tested.
 - **`select --add` after a run verified the amended selection with the earlier run (G2).** `select --add` rewrites
   the selection under the same id and code, so a run that never ran the added spec counted. Each run from a test list
   now records `testListSha` (the sha256 of the list as read under the lock, before any 1.56–1.57 spelling-out), and

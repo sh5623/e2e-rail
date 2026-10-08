@@ -128,7 +128,8 @@ uncommitted changes verifies that exact code but never its HEAD: it prints
 fingerprint, that passed and were not filtered count. `--require full` wants a full run or a complete shard set;
 `--require selected` also takes a selected run made by `run --selection` (it prints
 `verified: selected@<run-id> (selection <id>[, shadowed]) (<age>)`) while its `selections/<id>.json` exists, was
-computed for the code the run tested and still writes the list the run read (a `select --add` after the run needs a
+computed for the code the run tested, names the commit the run tested as its head, and still writes the list the run
+read (a `select --add` after the run needs a
 new run); an ad-hoc `--test-list` run or a `measure workers` run does not count. A rerun never counts. Preview mode rebuilds a missing or stale dist
 (older than any file git knows) before it runs; `--no-build` refuses instead.
 
@@ -165,7 +166,8 @@ selection, a shard plan or `--test-list <file>`) whose list matches no test is r
 On Playwright 1.56–1.57, whose `--test-list` matches a line only on a whole title path, e2e-rail lists the tests
 first and hands Playwright one such line per test the list covers (`.e2e-rail/reports/<run-id>.test-list.txt`); the
 list itself, and the check above, stay as written.
-`run --selection` on a selection computed for other code (files changed since `select`) computes it again from the
+`run --selection` on a selection computed for other code (files changed since `select`), or made up to a head that is
+not HEAD (`selection <old> was made up to <head>, not HEAD — …`), computes it again from the
 same base and uncommitted setting up to HEAD, prints `selection <old> was for other code — reselected as <new>` (carrying
 over its `--add`s, not its `--remove`s) and runs the new one; it becomes the current selection only when the run used
 the current one (`run --selection <id>` of another selection writes `selections/<new>.json` alone). Each selection

@@ -4,6 +4,7 @@ import { appDir, findApp, ledgerDir, loadConfig } from '../config.mjs';
 import { LAST_GREEN_DIRTY } from '../ledger.mjs';
 import { filteredBy, runTests } from '../run.mjs';
 import { amendSelection, codeIdOf, readSelection, select, testListLines, testListText, writeSelection } from '../select.mjs';
+import { gitHead, gitResolveCommit } from '../util/git.mjs';
 import { oneOf, parse, positiveInt, printUsage, UsageError } from './_args.mjs';
 
 const OPTIONS = {
@@ -45,7 +46,7 @@ function testListPath(value) {
 // one (`current`); a selection named by id is reselected into `selections/<new>.json` alone (G3).
 // Additions recorded with `--add` are carried over (an addition only widens; a spec that is gone is dropped);
 // removals are not (they were judged on the old change).
-async function reselect(config, sel, { current }) {
+async function reselect(config, sel, { current, why }) {
   const names = Object.keys(sel.apps ?? {});
   const fresh = await select({
     config, base: sel.base || undefined,
@@ -53,7 +54,7 @@ async function reselect(config, sel, { current }) {
     app: names.length === 1 && config.apps.length > 1 ? names[0] : undefined, // `select --app` covers one app
   });
   writeSelection(config, fresh, { current });
-  console.log(`selection ${sel.id} was for other code — reselected as ${fresh.id}`);
+  console.log(`selection ${sel.id} ${why} — reselected as ${fresh.id}`);
   let carried = 0;
   for (const [name, a] of Object.entries(sel.apps ?? {})) {
     const target = config.apps.find((x) => x.name === name);
@@ -80,7 +81,10 @@ function currentSelectionId(config) {
 async function fromSelection(config, app, id) {
   let sel = readSelection(config, id || undefined);
   if (!sel.apps?.[app.name]) throw new Error(`selection ${sel.id} has no entry for app ${app.name}; run \`e2e-rail select --app ${app.name}\``);
-  if (sel.codeId !== codeIdOf(config)) sel = await reselect(config, sel, { current: !id || id === currentSelectionId(config) });
+  // C: made for other code; H2: made up to a head that is not HEAD (a run tests the work tree, G1)
+  const why = sel.codeId !== codeIdOf(config) ? 'was for other code'
+    : gitResolveCommit(config.root, sel.head || 'HEAD') !== gitHead(config.root) ? `was made up to ${sel.head}, not HEAD` : null;
+  if (why) sel = await reselect(config, sel, { current: !id || id === currentSelectionId(config), why });
   const a = sel.apps[app.name];
   if (a.mode === 'full') {
     console.log(`${app.name}: selection ${sel.id} runs this app in full (${a.reasons.slice(0, 3).join(' | ') || 'no reason recorded'}); running the full suite`);
