@@ -74,7 +74,9 @@ codex plugin add e2e-rail@e2e-rail-codex
 `CI` 아래나 `--no-uncommitted` 면 제외) 변경 파일마다 처음 맞는 행으로 분류한다. 선택은 이름이 아니라 `<ref>` 가
 가리킨 커밋을 저장하므로(머리 줄: `base <sha7> (<ref>)..HEAD`), 나중의 재선택은 HEAD 나 브랜치가 움직인 뒤에도 그
 커밋에서 diff 한다. `--base last-green` 은 base 를 원장에서 가져온다: 현재 검증 정책(아래)으로 기록된, 깨끗한 트리에서
-필터 없이 통과한 그 앱의 마지막 전수 실행(또는 완성된 샤드 세트)의 head. 그런 실행이 없으면 base 도 없다.
+필터 없이 통과한 그 앱의 마지막 전수 실행(또는 완성된 샤드 세트)의 head 이며 모드는 가리지 않는다. 머리 줄이 그 실행을
+밝힌다(`base <sha7> (last-green: run <id>, <mode>)..HEAD`). 그런 실행이 없으면 base 도 없다. `last-green` 은
+키워드이므로, 이름이 정확히 `last-green` 인 브랜치나 태그는 그 SHA 로 넘긴다.
 
 | # | 변경 파일 | 결과(이유) |
 | --- | --- | --- |
@@ -198,7 +200,9 @@ HEAD 가 아닌 head 까지로 만들어졌거나(`selection <old> was made up t
 spec 을 적는다. `trivial`(선택이 전수)과 `unpaired`(이 코드의 선택 없음)는 streak 를 건드리지 않는다. 필터·재실행·선택·
 샤드 실행, 실패했는데 기록된 실패가 없는 실행, 그리고 이전 검증 정책으로 기록된 실행
 (`… was recorded under an older e2e-rail verification policy …`)은 거부된다. `shadow status` 가 `promotable yes` 를 찍으면 사람이
-`shadow promote` 를 실행할 수 있다. 자동 승격은 없다. `shadow demote` 는 streak 0 으로 섀도에 되돌린다. 섀도 비용은
+`shadow promote` 를 실행할 수 있다. 자동 승격은 없다. `shadow demote` 는 streak 0 으로 섀도에 되돌린다. 이전 검증
+정책으로 쓰인 `state.json` 은 streak 0 · 기록 없음으로 읽히고(trust 는 유지), 다음 `shadow record` 전까지
+`shadow status` 가 `streak reset: earlier records were made under an older verification policy` 를 찍는다. 섀도 비용은
 0 이다. 전수는 어차피 돈다.
 
 ### 씨앗 실패 훈련 (seeded-failure drill)
@@ -315,6 +319,10 @@ export default {
   있어서, `--mode preview` 로 돌리는 선택이 preview 전용 프로젝트를 놓칠 수 있다(preview 에 없는 프로젝트의 줄은 대신
   실행을 실패시킨다). `shard plan --mode preview` 는 preview 환경에서 나열한다. 프로젝트 구성을 모드와 무관하게 두거나,
   preview 게이트는 `run --full` 로 돌린다.
+- **`--base last-green` 은 모드를 가리지 않고(ANY mode) 가장 최근의 깨끗한 전수 통과를 고른다**: dev 에서는 통과했지만
+  preview 에서는 실패할 커밋이 `--mode preview` 로 돌릴 선택의 base 가 될 수 있다. 머리 줄이 그 실행과 모드를 밝힌다
+  (`base <sha7> (last-green: run <id>, <mode>)`). preview 에서 검증된 커밋에서 diff 하려면 그 커밋의 SHA 를 넘긴다
+  (`verify --mode preview` 가 `last verified head` 로 찍는다).
 
 아래 모양은 잘못 좁히지는 않지만 늘 앱 전수로 돈다(샘플 앱에서 실측).
 

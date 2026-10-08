@@ -19,7 +19,9 @@ The base is the last commit that passed a full verification on a clean tree. In 
    `shard merge` set that printed `complete: yes`, of a clean tree, recorded under the current verification policy;
    never a pass with uncommitted changes. With none it is no base (`no base (last-green: …)`, full). Do not read
    `.e2e-rail/last-green.<app>` yourself: that file is informational, and one an older e2e-rail wrote may name a
-   dirty or relaxed pass.
+   dirty or relaxed pass. `--base last-green` takes the newest clean full pass in ANY mode (the header says which:
+   `base <sha7> (last-green: run <id>, <mode>)`); to diff from a commit verified in preview, pass that commit's SHA.
+   `last-green` is a keyword: pass a branch or tag literally named `last-green` as its SHA.
 3. The merge-base with the target branch: `git merge-base HEAD origin/main`.
 
 No base → leave `--base` out and accept a full selection. Never pick a base to get a smaller selection.

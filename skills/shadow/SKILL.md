@@ -38,6 +38,8 @@ Recording the same run again changes nothing.
 pnpm exec e2e-rail shadow status
 ```
 `trust <shadow|selected> · streak <s>/<n> · promotable <yes|no>`, then `recent:` records. One state serves every app.
+`streak reset: earlier records were made under an older verification policy` — an older e2e-rail built that streak:
+it now reads as 0 (trust is kept), and the streak grows again from the next `shadow record`. Report it.
 
 ## 4. Decide — a human decides
 - `promotable yes` → ask the human: "Shadow streak <s>/<n> with no miss. Promote, so that selected runs stop being

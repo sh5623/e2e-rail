@@ -75,7 +75,8 @@ About 30 minutes per repository.
 stores the commit `<ref>` named, not the name (its header reads `base <sha7> (<ref>)..HEAD`), so a later reselection
 diffs from that commit even after HEAD or a branch has moved. `--base last-green` takes the base from the ledger: the
 head of the app's last unfiltered passing full run, or complete shard set, of a clean tree recorded under the current
-verification policy (below); with none, there is no base.
+verification policy (below), in any mode; the header names that run (`base <sha7> (last-green: run <id>, <mode>)..HEAD`).
+With none, there is no base. `last-green` is a keyword: pass a branch or tag literally named `last-green` as its SHA.
 
 | # | Changed file | Result (reason) |
 | --- | --- | --- |
@@ -207,7 +208,10 @@ and names the missed specs; `trivial` (the selection was full) and `unpaired` (n
 alone. Filtered, rerun, selected and shard runs are refused, and so are a failed run with no recorded failure and a
 run recorded under an older verification policy (`… was recorded under an older e2e-rail verification policy …`). When
 `shadow status` prints `promotable yes`, a human may run `shadow promote`; nothing promotes automatically.
-`shadow demote` returns to shadow with streak 0. Shadow mode costs nothing: the full run happens anyway.
+`shadow demote` returns to shadow with streak 0. A `state.json` written under an older verification policy reads as
+streak 0 with no records (trust is kept), and `shadow status` says
+`streak reset: earlier records were made under an older verification policy` until the next `shadow record`.
+Shadow mode costs nothing: the full run happens anyway.
 
 ### Seeded-failure drill
 
@@ -327,6 +331,10 @@ through before anyone trusts a selection.
   other projects in preview, so a selection run with `--mode preview` may miss a preview-only project (a line for a
   project preview does not have fails the run instead). `shard plan --mode preview` lists in the preview env. Keep the
   project set independent of the mode, or gate preview with `run --full`.
+- **`--base last-green` takes the newest clean full pass in ANY mode**: a commit that passed in dev but would fail in
+  preview can become the base of a selection you then run with `--mode preview`. The header names the run and its
+  mode (`base <sha7> (last-green: run <id>, <mode>)`). To diff from a commit verified in preview, pass that commit's
+  SHA (`verify --mode preview` prints it as `last verified head`).
 
 These shapes never narrow wrongly, but they always run the app in full (measured on the sample app):
 

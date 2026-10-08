@@ -14,6 +14,9 @@ Fixes from a second external audit of 0.2.0 (both reproduced with real Playwrigh
 - Replace `--base $(cat .e2e-rail/last-green.<app>)` with `--base last-green` in scripts and CI (init's suggested
   `e2e:select` script and `templates/ci/buildspec-snippet.yml` now do). The `last-green.<app>` file is still written,
   for information only; nothing e2e-rail documents reads it any more.
+- **The shadow streak restarts once.** `state.json` now records its policy; one written under an older policy reads
+  as streak 0 with no records (trust is kept: promotion was a human decision), and `shadow status` prints
+  `streak reset: earlier records were made under an older verification policy` until the next `shadow record`.
 
 ### Fixes
 
@@ -36,8 +39,11 @@ Fixes from a second external audit of 0.2.0 (both reproduced with real Playwrigh
 - **The last-green file could not tell an old pass from a current one (J2).** 0.1.0 wrote
   `.e2e-rail/last-green.<app>` for dirty and relaxed passes too, and scripts read that bare sha with `cat`.
   `select --base last-green` resolves the base from the ledger instead: the head of the app's newest current-policy,
-  unfiltered, passing full run (or complete shard set) of a clean tree, in any mode. None, or a commit the clone does
-  not have, is no base (`no base (last-green: …)`, full). It needs `--app` where several apps are configured.
+  unfiltered, passing full run (or complete shard set) of a clean tree, in any mode; the header names that run
+  (`base <sha7> (last-green: run <id>, <mode>)..HEAD`). None, or a commit the clone does not have, is no base
+  (`no base (last-green: …)`, full). It needs `--app` where several apps are configured. `last-green` is a keyword: a
+  branch or tag of that name is passed as its SHA. Limit: a dev pass can be the base of a selection run in preview;
+  to diff from a commit verified in preview, pass its SHA.
 
 ## 0.2.0 — 2026-10-08
 
