@@ -158,6 +158,39 @@ test('E: the shadow skill and both READMEs carry the seeded-failure drill: break
   assert.match(skill, /never `shadow record` a drill/i);
 });
 
+test('G5: on Playwright 1.56–1.57 a title a list line cannot spell is a documented limit, with ≥ 1.58 recommended', () => {
+  const section = (md, from, to) => md.slice(md.indexOf(from), md.indexOf(to));
+  const docs = {
+    'README.md Limits': section(read('README.md'), '## Limits', '## Plugin layer'),
+    'README.ko.md 한계': section(read('README.ko.md'), '## 한계', '## 플러그인 층'),
+    'CHANGELOG 0.2.0': section(read('CHANGELOG.md'), '## 0.2.0', '## 0.1.0'),
+    'gate skill': read('skills/gate/SKILL.md'),
+  };
+  for (const [where, text] of Object.entries(docs)) {
+    assert.match(text, /1\.56–1\.57/, where);
+    assert.match(text, /`›`/, where);
+    assert.match(text, /≥ 1\.58/, where);
+  }
+});
+
+test('G6: .claude-plugin/marketplace.json makes the repo a single-plugin marketplace: e2e-rail at "./", no version fields', () => {
+  const mk = JSON.parse(read('.claude-plugin/marketplace.json'));
+  assert.deepEqual(Object.keys(mk).sort(), ['$schema', 'description', 'name', 'owner', 'plugins']);
+  assert.equal(mk.$schema, 'https://www.schemastore.org/claude-code-marketplace.json');
+  assert.equal(mk.name, 'e2e-rail');
+  assert.deepEqual(Object.keys(mk.owner).sort(), ['email', 'name']);
+  assert.equal(mk.plugins.length, 1);
+  const [plugin] = mk.plugins;
+  assert.deepEqual(Object.keys(plugin).sort(), ['category', 'description', 'name', 'source', 'tags']);
+  assert.deepEqual([plugin.name, plugin.source, plugin.category], ['e2e-rail', './', 'engineering']);
+  assert.equal(plugin.name, JSON.parse(read('.claude-plugin/plugin.json')).name);
+  assert.ok(Array.isArray(plugin.tags) && plugin.tags.length > 0 && plugin.tags.every((t) => typeof t === 'string'));
+  assert.ok(!JSON.stringify(mk).includes('"version"'), 'the version lives in plugin.json and package.json only');
+  // an install ref it names is the package version
+  const v = JSON.parse(read('package.json')).version;
+  for (const ref of plugin.description.match(/e2e-rail#v[^\s)]+/g) ?? []) assert.equal(ref, `e2e-rail#v${v}`);
+});
+
 test('select: the selection block carries change, selected, added/removed, mobile, unmapped and final', () => {
   const md = read('skills/select/SKILL.md');
   for (const field of ['change:', 'selected:', 'added:', 'removed:', 'mobile:', 'unmapped:', 'final:']) assert.ok(md.includes(field), field);
