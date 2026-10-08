@@ -253,7 +253,8 @@ export async function select({ config, ts, base, head = 'HEAD', includeUncommitt
   const green = baseRef === LAST_GREEN ? lastGreenRun(config, findApp(config, app).name) : null;
   const named = baseRef === LAST_GREEN ? green?.fingerprint.head : baseRef;
   const baseCommit = loc && named ? gitResolveCommit(config.root, named) : null;
-  const baseRun = green && baseCommit ? { id: green.id, mode: green.mode } : null;
+  // M1: kept when its commit does not resolve here too (a shallow clone, a ledger cached from another branch): no base
+  const baseRun = green ? { id: green.id, mode: green.mode, head: green.fingerprint.head } : null;
   let changed = loc ? gitChangedFiles(config.root, baseCommit, head) : null;
   if (changed !== null && includeUncommitted) {
     const uncommitted = gitUncommittedFiles(config.root);

@@ -29,9 +29,14 @@ function topReasons(a) {
 // J1: `base <sha7> (<ref>)..<head>`; the ref is left out when it already is that sha (or an abbreviation of it). A
 // selection 0.2.0 wrote shows its base as stored; a ref that named no commit is no base, and says so (J2: so does
 // `last-green` with no clean full pass in the ledger). A `last-green` base names the run it came from and its mode
-// (`base <sha7> (last-green: run <id>, <mode>)`): it may be a pass of either mode.
+// (`base <sha7> (last-green: run <id>, <mode>)`): it may be a pass of either mode. M1: one whose commit this clone
+// does not have is no base, and names that run.
 function rangeOf(sel) {
-  if (!sel.base && sel.baseRef === LAST_GREEN) return `no base (${LAST_GREEN}: no full pass of a clean tree under the current verification policy)`;
+  if (!sel.base && sel.baseRef === LAST_GREEN) {
+    const r = sel.baseRun;
+    return r ? `no base (${LAST_GREEN}: run ${r.id} passed ${String(r.head).slice(0, 7)}, which this clone does not have)`
+      : `no base (${LAST_GREEN}: no full pass of a clean tree under the current verification policy)`;
+  }
   if (!sel.base) return sel.baseRef ? `no base (${JSON.stringify(sel.baseRef)} names no commit)` : 'no base';
   if (!isCommitId(sel.base)) return `base ${sel.base}..${sel.head}`;
   const ref = typeof sel.baseRef === 'string' ? sel.baseRef : '';

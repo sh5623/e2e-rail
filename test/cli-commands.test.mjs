@@ -826,9 +826,49 @@ test('J2 (audit repro legacy-ledger): verify names a matching run recorded under
   const sh = run(['shadow', 'record', '--run', older.id]);
   assert.equal(sh.code, 1, sh.out);
   assert.match(sh.stderr, /^e2e-rail: run \S+ was recorded under an older e2e-rail verification policy \(1 < 2\); shadow record needs a full run recorded by this version, so run it again$/m);
+  // M3: once this version has run the code and it FAILED, the failure is the news, not the older pass
+  const failed = run(['run', '--full', '--no-lock'], { STUB_PW_RC: '1', STUB_PW_REPORT: at('stub/report-fail.json') });
+  assert.equal(failed.code, 1, failed.out);
+  const afterFail = run(['verify']);
+  assert.equal(afterFail.code, 20, afterFail.out);
+  assert.equal(afterFail.stdout, 'stale: nothing verified yet (no passing full run or shard set of app web in dev mode)\n');
+  assert.equal(JSON.parse(run(['verify', '--json']).stdout).rejected, null);
   // run it again: verified
   assert.equal(run(['run', '--full', '--no-lock']).code, 0);
   assert.match(run(['verify']).stdout, /^verified: full@run-/);
+}));
+
+test('I1: dev shard 1/2 and preview shard 2/2 of one fingerprint never make a last-green base; dev 1/2 and dev 2/2 do', () => withRepo(({ root, run, at }) => {
+  // an app without a preview build: its dev and preview runs share the fingerprint id
+  const cfg = readFileSync(at('e2e-rail.config.mjs'), 'utf8');
+  writeFileSync(at('e2e-rail.config.mjs'), cfg.replace("preview: { build: 'node build.mjs', dist: 'dist' }, ", ''));
+  assert.notEqual(readFileSync(at('e2e-rail.config.mjs'), 'utf8'), cfg);
+  commit(root, ['e2e-rail.config.mjs']);
+  const head = execCapture('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim();
+  assert.equal(run(['run', '--full', '--shard', '1/2', '--no-lock']).code, 0);
+  assert.equal(run(['run', '--full', '--shard', '2/2', '--mode', 'preview', '--no-lock']).code, 0);
+  assert.equal(ledgerLines(root)[0].fingerprint.id, ledgerLines(root)[1].fingerprint.id, 'one fingerprint');
+  const mixed = run(['select', '--base', 'last-green']);
+  assert.equal(mixed.code, 10, mixed.out);
+  assert.match(mixed.stdout, /^selection sel-\S+ · no base \(last-green: no full pass of a clean tree under the current verification policy\) \+ uncommitted · apps: web$/m);
+  assert.equal(run(['verify']).code, 21, 'dev alone has half a set');
+  assert.equal(run(['run', '--full', '--shard', '2/2', '--no-lock']).code, 0);
+  const s = run(['select', '--base', 'last-green']);
+  assert.equal(s.code, 0, s.out);
+  const id = ledgerLines(root).at(-1).id;
+  assert.match(s.stdout, new RegExp(`^selection sel-\\S+ · base ${head.slice(0, 7)} \\(last-green: run ${id}, dev\\)\\.\\.HEAD \\+ uncommitted · apps: web$`, 'm'));
+}));
+
+test('M1: a last-green run whose commit this clone does not have is no base, and the header says so', () => withRepo(({ root, run, at }) => {
+  assert.equal(run(['run', '--full', '--no-lock']).code, 0);
+  const line = ledgerLines(root).at(-1);
+  const gone = 'f'.repeat(40); // a commit from a branch or a deeper history this clone never fetched
+  writeFileSync(at('.e2e-rail/ledger.jsonl'), `${JSON.stringify({ ...line, fingerprint: { ...line.fingerprint, head: gone } })}\n`);
+  const s = run(['select', '--base', 'last-green']);
+  assert.equal(s.code, 10, s.out);
+  assert.match(s.stdout, new RegExp(`^selection sel-\\S+ · no base \\(last-green: run ${line.id} passed ${gone.slice(0, 7)}, which this clone does not have\\) \\+ uncommitted · apps: web$`, 'm'));
+  const sel = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  assert.deepEqual([sel.base, sel.apps.web.reasons], [null, ['no-base']]);
 }));
 
 test('J2: shadow status reads a streak built under an older verification policy as 0 and says so; trust stays', () => withRepo(({ run, at }) => {
@@ -871,7 +911,7 @@ test('J2: select --base last-green takes the base from the ledger (last clean fu
   assert.equal(s.code, 0, s.out);
   // the header names the run the base came from, and its mode
   assert.ok(s.stdout.split('\n').includes(`selection ${current().id} · base ${h0.slice(0, 7)} (last-green: run ${green}, dev)..HEAD + uncommitted · apps: web`), s.stdout);
-  assert.deepEqual([current().base, current().baseRef, current().baseRun], [h0, 'last-green', { id: green, mode: 'dev' }]);
+  assert.deepEqual([current().base, current().baseRef, current().baseRun], [h0, 'last-green', { id: green, mode: 'dev', head: h0 }]);
   assert.deepEqual(current().apps.web.specs.map((x) => x.file), ['e2e/cart.spec.ts', 'e2e/orders.spec.ts']);
   // any mode: a clean preview pass of a newer commit becomes the base, and the header says preview
   commit(root, ['e2e/orders.spec.ts']);
