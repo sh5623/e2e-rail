@@ -831,6 +831,19 @@ test('J2 (audit repro legacy-ledger): verify names a matching run recorded under
   assert.match(run(['verify']).stdout, /^verified: full@run-/);
 }));
 
+test('J2: shadow status reads a streak built under an older verification policy as 0 and says so; trust stays', () => withRepo(({ run, at }) => {
+  const RESET = 'streak reset: earlier records were made under an older verification policy';
+  mkdirSync(at('.e2e-rail'), { recursive: true });
+  writeFileSync(at('.e2e-rail/state.json'), JSON.stringify({ trust: 'selected', streak: 7, window: [{ ts: 't', runId: 'run-old', hit: true }] }));
+  const older = run(['shadow', 'status']);
+  assert.equal(older.code, 0, older.out);
+  assert.equal(older.stdout, `trust selected · streak 0/2 · promotable no\n${RESET}\n`);
+  assert.equal(older.stderr, '');
+  // a policy-current state: no line, nothing reset
+  writeFileSync(at('.e2e-rail/state.json'), JSON.stringify({ trust: 'shadow', streak: 1, window: [], policy: 2 }));
+  assert.equal(run(['shadow', 'status']).stdout, 'trust shadow · streak 1/2 · promotable no\n');
+}));
+
 test('J2: select --base last-green takes the base from the ledger (last clean full pass under the current policy); a bare marker file is no base', () => withRepo(({ root, run, at }) => {
   const h0 = execCapture('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim();
   const current = () => JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));

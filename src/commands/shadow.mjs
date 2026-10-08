@@ -38,6 +38,7 @@ export default async function shadow(argv) {
   }
   const s = shadowStatus(config);
   console.log(`trust ${s.trust} · streak ${s.streak}/${s.promoteAfter} · promotable ${s.promotable ? 'yes' : 'no'}`);
+  if (s.policyReset) console.log('streak reset: earlier records were made under an older verification policy');
   if (s.promotable) console.log('promotable: a human may run `e2e-rail shadow promote` (never automatic)');
   if (s.recent.length) console.log('recent:');
   for (const r of s.recent) {

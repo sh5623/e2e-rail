@@ -18,30 +18,39 @@ const readJsonFile = (abs) => {
   try { const v = JSON.parse(readFileSync(abs, 'utf8')); return isObject(v) ? v : null; } catch { return null; }
 };
 
-// `{ trust, streak, window }`. A missing file is a fresh shadow state; a damaged one (or an unknown value in it) falls
-// back to the least trusting reading, with a warning, instead of failing every command that touches it.
+// `{ trust, streak, window, policy }`. A missing file is a fresh shadow state; a damaged one (or an unknown value in
+// it) falls back to the least trusting reading, with a warning, instead of failing every command that touches it.
+// J2: a state whose `policy` is missing or lower than VERIFY_POLICY counted hits by rules that no longer hold: its
+// streak reads as 0 and its window as empty (trust stays: promotion was a human decision), with `policyReset: true`
+// when that dropped something. Reading changes nothing on disk; the next writeState records the reset.
 export function readState(config) {
   const abs = statePath(config);
-  if (!existsSync(abs)) return { trust: 'shadow', streak: 0, window: [] };
+  if (!existsSync(abs)) return { trust: 'shadow', streak: 0, window: [], policy: VERIFY_POLICY };
   const raw = readJsonFile(abs);
   const state = {
     ...raw,
     trust: TRUSTS.includes(raw?.trust) ? raw.trust : 'shadow',
     streak: Number.isInteger(raw?.streak) && raw.streak >= 0 ? raw.streak : 0,
     window: Array.isArray(raw?.window) ? raw.window : [],
+    policy: VERIFY_POLICY,
   };
   if (!raw || state.trust !== raw.trust || state.streak !== raw.streak || state.window !== raw.window) {
     console.warn(`e2e-rail: ${abs} is damaged; using trust "${state.trust}", streak ${state.streak}`);
   }
+  if (raw && !currentPolicy(raw) && (state.streak > 0 || state.window.length > 0)) {
+    Object.assign(state, { streak: 0, window: [], policyReset: true });
+  }
   return state;
 }
 
-// Not part of the append-only ledger: overwritten in place (via a rename, so a crash cannot leave half a file).
+// Not part of the append-only ledger: overwritten in place (via a rename, so a crash cannot leave half a file). It
+// records the verification policy it was written under (J2).
 export function writeState(config, state) {
   const abs = statePath(config);
   mkdirSync(path.dirname(abs), { recursive: true });
+  const { policyReset: _reset, ...rest } = state;
   const tmp = `${abs}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`);
+  writeFileSync(tmp, `${JSON.stringify({ ...rest, policy: VERIFY_POLICY }, null, 2)}\n`);
   renameSync(tmp, abs);
 }
 
@@ -141,6 +150,7 @@ export function shadowStatus(config) {
     promotable: state.trust === 'shadow' && state.streak >= config.shadow.promoteAfter,
     recent: state.window.slice(-5),
     recentMisses: state.window.filter((r) => r.hit === false).slice(-5),
+    policyReset: Boolean(state.policyReset), // J2: the stored streak was built under an older verification policy
   };
 }
 

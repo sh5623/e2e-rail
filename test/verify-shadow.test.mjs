@@ -762,7 +762,7 @@ test('shadow: state keeps the last 20 records; an old run that left the window i
 
 test('shadow: status reports trust, streak, promotability, recent records and recent misses; promote needs a human, demote resets', async () => {
   await withRepo(async ({ config, app }) => {
-    assert.deepEqual(shadowStatus(config), { trust: 'shadow', streak: 0, promoteAfter: 2, promotable: false, recent: [], recentMisses: [] });
+    assert.deepEqual(shadowStatus(config), { trust: 'shadow', streak: 0, promoteAfter: 2, promotable: false, recent: [], recentMisses: [], policyReset: false });
     select(config, app, { specs: [SMOKE] });
     const rec = (over) => recordShadow({ config, app, runId: synth(config, app, over).id });
     rec({ rc: 1, failures: [fail(ORDERS)] });
@@ -786,17 +786,49 @@ test('shadow: state.json defaults to shadow, round-trips, and a damaged file fal
   await withRepo(async ({ config }) => {
     const warn = mock.method(console, 'warn', () => {});
     try {
-      assert.deepEqual(readState(config), { trust: 'shadow', streak: 0, window: [] });
+      assert.deepEqual(readState(config), { trust: 'shadow', streak: 0, window: [], policy: VERIFY_POLICY });
       assert.equal(existsSync(statePath(config)), false);
       writeState(config, { trust: 'selected', streak: 4, window: [{ runId: 'x' }] });
-      assert.deepEqual(readState(config), { trust: 'selected', streak: 4, window: [{ runId: 'x' }] });
+      assert.equal(JSON.parse(readFileSync(statePath(config), 'utf8')).policy, VERIFY_POLICY, 'the file records its policy');
+      assert.deepEqual(readState(config), { trust: 'selected', streak: 4, window: [{ runId: 'x' }], policy: VERIFY_POLICY });
       assert.equal(warn.mock.callCount(), 0);
       writeFileSync(statePath(config), '{ nope');
-      assert.deepEqual(readState(config), { trust: 'shadow', streak: 0, window: [] });
+      assert.deepEqual(readState(config), { trust: 'shadow', streak: 0, window: [], policy: VERIFY_POLICY });
       assert.equal(warn.mock.callCount(), 1); assert.match(warn.mock.calls[0].arguments[0], /state\.json/);
       writeFileSync(statePath(config), JSON.stringify({ trust: 'trusted', streak: -3, window: 'x' }));
-      assert.deepEqual(readState(config), { trust: 'shadow', streak: 0, window: [] });
+      assert.deepEqual(readState(config), { trust: 'shadow', streak: 0, window: [], policy: VERIFY_POLICY });
       assert.equal(warn.mock.callCount(), 2);
+    } finally { warn.mock.restore(); }
+  });
+});
+
+test('shadow (J2): a state built under an older verification policy reads as streak 0 with no records, trust kept, until the next write', async () => {
+  await withRepo(async ({ config, app }) => {
+    const warn = mock.method(console, 'warn', () => {});
+    try {
+      const older = { trust: 'selected', streak: 5, window: [{ runId: 'run-old', hit: true, streak: 5 }] };
+      mkdirSync(ledgerDir(config), { recursive: true });
+      for (const state of [older, { ...older, policy: 1 }]) {
+        writeFileSync(statePath(config), JSON.stringify(state));
+        assert.deepEqual(readState(config), { trust: 'selected', streak: 0, window: [], policy: VERIFY_POLICY, policyReset: true });
+        const s = shadowStatus(config);
+        assert.deepEqual([s.trust, s.streak, s.promotable, s.recent, s.policyReset], ['selected', 0, false, [], true]);
+        assert.deepEqual(JSON.parse(readFileSync(statePath(config), 'utf8')), state, 'reading changes nothing on disk');
+      }
+      // the next write records the reset (and the policy): the line is gone from then on
+      select(config, app, { specs: [SMOKE] });
+      recordShadow({ config, app, runId: synth(config, app).id });
+      const now = JSON.parse(readFileSync(statePath(config), 'utf8'));
+      assert.deepEqual([now.policy, now.trust, now.streak, now.window.length, 'policyReset' in now], [VERIFY_POLICY, 'selected', 1, 1, false]);
+      assert.equal(shadowStatus(config).policyReset, false);
+      // a policy-current state is left as it is
+      writeState(config, { trust: 'shadow', streak: 3, window: [{ runId: 'run-x', hit: true }] });
+      assert.deepEqual(readState(config), { trust: 'shadow', streak: 3, window: [{ runId: 'run-x', hit: true }], policy: VERIFY_POLICY });
+      assert.equal(shadowStatus(config).streak, 3);
+      // an older state that held nothing to reset says nothing
+      writeFileSync(statePath(config), JSON.stringify({ trust: 'shadow', streak: 0, window: [] }));
+      assert.equal(shadowStatus(config).policyReset, false);
+      assert.equal(warn.mock.callCount(), 0, 'an older state is not a damaged one');
     } finally { warn.mock.restore(); }
   });
 });
