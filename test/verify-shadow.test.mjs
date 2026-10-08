@@ -513,6 +513,12 @@ test('verify (J2): a matching line recorded under an older verification policy (
     olderLine(config, olderFull(config, app, { id: 'run-p1', policy: 1 }));
     const p1 = verify({ config, app });
     assert.deepEqual([p1.rejected, p1.olderPolicy], [{ runId: 'run-p1', why: 'policy' }, 1]);
+    // M3: a run this version recorded for the same code failed (or was filtered): that is the news, not the older pass
+    for (const over of [{ rc: 1, failures: [fail(ORDERS)] }, { filtered: true }]) {
+      const { id } = synth(config, app, over);
+      const f = verify({ config, app });
+      assert.deepEqual([f.status, f.rejected, f.olderPolicy], ['stale', undefined, undefined], id);
+    }
     // a line this version writes verifies
     const now = synth(config, app);
     assert.equal(now.policy, VERIFY_POLICY);

@@ -125,7 +125,10 @@ export function verify({ config, app, mode = 'dev', require = 'full', maxAgeMin 
   const differing = base ? FIELDS.filter((f) => base.fingerprint[f] !== fingerprint[f]) : [...FIELDS];
   // J2: when this code's only matches were recorded under an older verification policy, name one (the run that would
   // have satisfied `require`, else the newest) instead of crediting it: it may have passed by rules that no longer hold.
-  const older = matching.length ? [] : passedRuns(config, app, mode).filter((r) => !currentPolicy(r) && r.fingerprint.id === fingerprint.id);
+  // M3: not once this version has recorded any run of this code in this mode (a failed or filtered one included): its
+  // result is the news, and "run it again" would hide a failure.
+  const ranNow = readRuns(config, { app: app.name }).some((r) => r.mode === mode && currentPolicy(r) && r.fingerprint?.id === fingerprint.id);
+  const older = ranNow ? [] : passedRuns(config, app, mode).filter((r) => !currentPolicy(r) && r.fingerprint.id === fingerprint.id);
   if (older.length) {
     const run = settle(older)?.run ?? older.at(-1);
     return { status: 'stale', exitCode: 20, fingerprint, lastVerifiedHead, passedBefore, differing, rejected: { runId: run.id, why: 'policy' }, olderPolicy: policyOf(run) };
