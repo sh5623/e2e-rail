@@ -43,7 +43,15 @@ Fixes from a second external audit of 0.2.0 (both reproduced with real Playwrigh
   (`base <sha7> (last-green: run <id>, <mode>)..HEAD`). None, or a commit the clone does not have, is no base
   (`no base (last-green: …)`, full). It needs `--app` where several apps are configured. `last-green` is a keyword: a
   branch or tag of that name is passed as its SHA. Limit: a dev pass can be the base of a selection run in preview;
-  to diff from a commit verified in preview, pass its SHA.
+  to diff from a commit verified in preview, pass its SHA. A pass whose commit the clone does not have (a shallow
+  clone, a ledger cached from another branch) says so:
+  `no base (last-green: run <id> passed <sha7>, which this clone does not have)` (M1).
+- **Shards of different modes completed one set (I1).** Shard runs were grouped by count and plan only. For an app
+  without `run.preview`, dev and preview runs share a fingerprint, so dev `--shard 1/2` plus preview `--shard 2/2`
+  "completed" a set in which no mode ran every test, and `--base last-green` took it as a full pass. Shard runs are
+  now grouped by mode too wherever completeness is decided (`verify`, `shard merge`, `--base last-green`, `measure`).
+- **The older-policy line hid a failure (M3).** `verify` names an older-policy match only while this version has
+  recorded no run of that code in that mode; once one exists (a failed one included), it reports as usual.
 
 ## 0.2.0 — 2026-10-08
 
