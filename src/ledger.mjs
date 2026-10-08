@@ -6,11 +6,22 @@ import { newId } from './util/id.mjs';
 // The ledger is append-only: one JSON line per Playwright run, never rewritten or deleted.
 export const ledgerPath = (config) => path.join(ledgerDir(config), 'ledger.jsonl');
 
-// Appends `entry` (spec §7 line) and returns what was written; `id` and `ts` are filled when absent.
+// J2: what counts as a verification, by version. The fingerprint names the code, configs, Playwright and dist, not the
+// rules e2e-rail recorded a run under: 0.1.0 wrote an `--ignore-snapshots` pass as `filtered: false`, and that line
+// still matches its code. Every line carries the policy it was recorded under, and whatever grants trust (verify,
+// shadow record, a complete shard set, `select --base last-green`) counts only lines of this policy or a later one.
+// Bump it only when what counts as a verification changes; it invalidates every earlier line once.
+export const VERIFY_POLICY = 2;
+// The policy a line names (a number), or null for a line written before policies (0.1.0, 0.2.0).
+export const policyOf = (r) => (typeof r?.policy === 'number' && Number.isFinite(r.policy) ? r.policy : null);
+export const currentPolicy = (r) => (policyOf(r) ?? -Infinity) >= VERIFY_POLICY;
+
+// Appends `entry` (spec §7 line) and returns what was written; `id` and `ts` are filled when absent, and `policy` is
+// always this version's VERIFY_POLICY.
 export function appendRun(config, entry) {
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new TypeError('appendRun: entry must be an object');
-  const { id, ts, ...rest } = entry;
-  const full = { id: id ?? newId('run'), ts: ts ?? new Date().toISOString(), ...rest };
+  const { id, ts, policy: _given, ...rest } = entry;
+  const full = { id: id ?? newId('run'), ts: ts ?? new Date().toISOString(), policy: VERIFY_POLICY, ...rest };
   mkdirSync(ledgerDir(config), { recursive: true });
   // One O_APPEND fd: check the last byte, then write the (optional leading newline +) line in a single write.
   // A crash can leave a partial last line with no newline; without the guard the next entry would be glued onto it

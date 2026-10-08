@@ -805,6 +805,25 @@ test('select --add/--remove amend the current selection with a reason; removing 
   assert.equal(mixed.code, 2, mixed.out);
 }));
 
+test('J2 (audit repro legacy-ledger): verify names a matching run recorded under an older verification policy instead of crediting it; shadow record refuses it', () => withRepo(({ root, run, at }) => {
+  assert.equal(run(['run', '--full', '--no-lock']).code, 0);
+  const { policy, ...older } = ledgerLines(root).at(-1); // the same line as 0.2.0 wrote it: no policy
+  assert.equal(policy, 2);
+  writeFileSync(at('.e2e-rail/ledger.jsonl'), `${JSON.stringify(older)}\n`);
+  const v = run(['verify']);
+  assert.equal(v.code, 20, v.out);
+  assert.equal(v.stdout, `stale: run ${older.id} was recorded under an older e2e-rail verification policy (none < 2); run it again\n`);
+  assert.deepEqual(JSON.parse(run(['verify', '--json']).stdout).rejected, { runId: older.id, why: 'policy' });
+  writeFileSync(at('.e2e-rail/ledger.jsonl'), `${JSON.stringify({ ...older, policy: 1 })}\n`);
+  assert.equal(run(['verify']).stdout, `stale: run ${older.id} was recorded under an older e2e-rail verification policy (1 < 2); run it again\n`);
+  const sh = run(['shadow', 'record', '--run', older.id]);
+  assert.equal(sh.code, 1, sh.out);
+  assert.match(sh.stderr, /^e2e-rail: run \S+ was recorded under an older e2e-rail verification policy \(1 < 2\); shadow record needs a full run recorded by this version, so run it again$/m);
+  // run it again: verified
+  assert.equal(run(['run', '--full', '--no-lock']).code, 0);
+  assert.match(run(['verify']).stdout, /^verified: full@run-/);
+}));
+
 test('B: a full pass or a complete shard merge on a dirty tree says last-green did not move; on a clean tree it moves', () => withRepo(({ root, run, at }) => {
   const DIRTY = 'last-green not moved: the working tree had uncommitted changes';
   const lastGreen = () => (existsSync(at('.e2e-rail/last-green.web')) ? readFileSync(at('.e2e-rail/last-green.web'), 'utf8').trim() : null);

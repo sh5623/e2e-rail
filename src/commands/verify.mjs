@@ -1,4 +1,5 @@
 import { findApp, loadConfig } from '../config.mjs';
+import { VERIFY_POLICY } from '../ledger.mjs';
 import { verify } from '../verify.mjs';
 import { oneOf, parse, printUsage, UsageError } from './_args.mjs';
 
@@ -26,6 +27,9 @@ function line(res, { app, mode, require, maxAgeMin }) {
     if (why === 'uncommitted') return `insufficient: the selection run ${runId} left out uncommitted work the run included; run --selection again`;
     const wants = require === 'full' ? 'a full run or a complete shard set' : 'a full run, a complete shard set or a selected run from `run --selection`';
     return `insufficient: this code has only ${res.have.join('/')} run(s); --require ${require} needs ${wants}`;
+  }
+  if (res.rejected?.why === 'policy') {
+    return `stale: run ${res.rejected.runId} was recorded under an older e2e-rail verification policy (${res.olderPolicy ?? 'none'} < ${VERIFY_POLICY}); run it again`;
   }
   if (res.expired) return `stale: ${res.expired.runId} passed this exact code ${res.expired.ageMin} min ago, older than --max-age ${maxAgeMin}`;
   const head = res.lastVerifiedHead;

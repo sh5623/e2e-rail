@@ -1,12 +1,13 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { verify } from '../src/verify.mjs';
+import { verifiedShardSet, verify } from '../src/verify.mjs';
 import { demote, promote, readState, recordShadow, shadowStatus, statePath, writeState } from '../src/shadow.mjs';
 import { runTests } from '../src/run.mjs';
-import { MEASURE_TAG } from '../src/measure.mjs';
-import { appendRun, readRuns } from '../src/ledger.mjs';
+import { MEASURE_TAG, slowest } from '../src/measure.mjs';
+import { appendRun, ledgerPath, readRuns, VERIFY_POLICY } from '../src/ledger.mjs';
+import { mergeReports } from '../src/shard.mjs';
 import { computeFingerprint } from '../src/fingerprint.mjs';
 import { amendSelection, codeIdOf, computeSelection, testListText, writeSelection } from '../src/select.mjs';
 import { sha256 } from '../src/util/hash.mjs';
@@ -484,6 +485,80 @@ test('verify: rejects arguments it cannot honour', async () => {
   });
 });
 
+// J2: a ledger line as an older e2e-rail wrote it, appended as is (appendRun stamps the current policy).
+const olderLine = (config, line) => {
+  mkdirSync(ledgerDir(config), { recursive: true });
+  appendFileSync(ledgerPath(config), `${JSON.stringify(line)}\n`);
+  return line;
+};
+const olderFull = (config, app, over = {}) => ({
+  ts: new Date().toISOString(), app: app.name, mode: 'dev', kind: 'full', fingerprint: computeFingerprint({ config, app, mode: 'dev' }),
+  selectionId: null, shard: null, workers: 1, project: null, filtered: false, command: 'playwright test --ignore-snapshots',
+  lock: null, rc: 0, durationMs: 5, rootDir: 'e2e', specs: [{ file: ORDERS, project: 'chromium', status: 'passed', durationMs: 4321, retries: 0 }],
+  failures: [], flaky: [], ...over,
+});
+
+test('verify (J2): a matching line recorded under an older verification policy (0.1.0, 0.2.0, policy 1) never verifies; it is named', async () => {
+  await withRepo(async ({ config, app }) => {
+    assert.equal(VERIFY_POLICY, 2);
+    // 0.1.0 recorded an --ignore-snapshots pass as filtered: false, with no `clean` and no `policy`
+    const { clean: _clean, ...fp010 } = computeFingerprint({ config, app, mode: 'dev' });
+    olderLine(config, olderFull(config, app, { id: 'run-v010', fingerprint: fp010 }));
+    const a = verify({ config, app });
+    assert.deepEqual([a.status, a.exitCode, a.rejected, a.olderPolicy], ['stale', 20, { runId: 'run-v010', why: 'policy' }, null]);
+    assert.deepEqual([a.lastVerifiedHead, a.passedBefore], [null, false], 'an older line is no baseline either');
+    // 0.2.0 wrote `clean` and `testListSha`, still no `policy`
+    olderLine(config, olderFull(config, app, { id: 'run-v020', testListSha: null, shadowed: false }));
+    assert.deepEqual(verify({ config, app }).rejected, { runId: 'run-v020', why: 'policy' });
+    olderLine(config, olderFull(config, app, { id: 'run-p1', policy: 1 }));
+    const p1 = verify({ config, app });
+    assert.deepEqual([p1.rejected, p1.olderPolicy], [{ runId: 'run-p1', why: 'policy' }, 1]);
+    // a line this version writes verifies
+    const now = synth(config, app);
+    assert.equal(now.policy, VERIFY_POLICY);
+    const v = verify({ config, app });
+    assert.deepEqual([v.status, v.run.id], ['verified', now.id]);
+    // durations still come from older lines (measure, shard plan)
+    assert.deepEqual(slowest({ config, app }).map((s) => s.durationMs), [4321]);
+  });
+});
+
+test('verify --require selected (J2): an older selected line of a selection made for this code is not credited either', async () => {
+  await withRepo(async ({ config, app }) => {
+    const sel = select(config, app, { id: 'sel-old', specs: [ORDERS] });
+    const line = olderFull(config, app, { id: 'run-sel', kind: 'selected', selectionId: 'sel-old', testListSha: listSha(sel), shadowed: true });
+    olderLine(config, line);
+    const v = verify({ config, app, require: 'selected' });
+    assert.deepEqual([v.status, v.rejected], ['stale', { runId: 'run-sel', why: 'policy' }]);
+    const now = synth(config, app, { ...line, id: undefined, ts: undefined });
+    assert.deepEqual([verify({ config, app, require: 'selected' }).run.id, now.policy], [now.id, VERIFY_POLICY]);
+  });
+});
+
+test('verify (J2): baselines and shard sets count only policy-current lines; shard merge says incomplete', async () => {
+  await withRepo(async ({ root, config, app }) => {
+    const clean = await run(config, app); // policy-current, clean: the base
+    git(root, 'commit', '--allow-empty', '-qm', 'next');
+    olderLine(config, olderFull(config, app, { id: 'run-older-next' })); // an older clean pass of the new commit
+    const s = verify({ config, app });
+    assert.deepEqual([s.status, s.rejected], ['stale', { runId: 'run-older-next', why: 'policy' }]);
+    assert.equal(s.lastVerifiedHead, clean.entry.fingerprint.head, 'the older pass of the newer head is not offered as a base');
+    assert.deepEqual(s.differing, ['head']);
+    // an older complete shard set of this code: no verification, and merge reports it incomplete without moving last-green
+    git(root, 'commit', '--allow-empty', '-qm', 'next again');
+    for (const index of [1, 2]) olderLine(config, olderFull(config, app, { id: `run-older-shard-${index}`, kind: 'shard', shard: { index, count: 2, plan: 'native' } }));
+    assert.equal(verifiedShardSet({ config, app }), null);
+    assert.equal(verify({ config, app }).rejected?.why, 'policy');
+    const blobs = path.join(root, '.e2e-rail/blobs');
+    mkdirSync(blobs, { recursive: true });
+    const lastGreen = path.join(root, '.e2e-rail/last-green.web');
+    const before = readFileSync(lastGreen, 'utf8');
+    const m = mergeReports({ config, app, dir: blobs });
+    assert.deepEqual([m.complete, m.lastGreen], [false, null]);
+    assert.equal(readFileSync(lastGreen, 'utf8'), before);
+  });
+});
+
 // ---- shadow ----
 
 test('shadow: hit advances the streak, a miss resets it, trivial/unpaired do not count, promote/demote', async () => {
@@ -558,8 +633,17 @@ test('shadow: only an unfiltered full run can be recorded, and nothing is writte
     // a failed run that reports no failure (crash, global setup) cannot show that the failures were inside the selection
     const crashed = synth(config, app, { rc: 1, failures: [] });
     assert.throws(() => recordShadow({ config, app, runId: crashed.id }), /no failure/);
+    // J2: a full run recorded under an older verification policy is refused, readably
+    olderLine(config, olderFull(config, app, { id: 'run-older' }));
+    olderLine(config, olderFull(config, app, { id: 'run-p1', policy: 1 }));
+    assert.throws(() => recordShadow({ config, app, runId: 'run-older' }), {
+      message: `e2e-rail: run run-older was recorded under an older e2e-rail verification policy (none < ${VERIFY_POLICY}); shadow record needs a full run recorded by this version, so run it again`,
+    });
+    assert.throws(() => recordShadow({ config, app, runId: 'run-p1' }), /verification policy \(1 < 2\)/);
     assert.equal(existsSync(statePath(config)), false);
     assert.equal(existsSync(path.join(ledgerDir(config), 'shadow.jsonl')), false);
+    // a record carries the policy it was made under
+    assert.equal(recordShadow({ config, app, runId: synth(config, app).id }).policy, VERIFY_POLICY);
   });
 });
 

@@ -106,7 +106,8 @@ const mtimeOrNull = (abs) => statSync(abs, { throwIfNoEntry: false })?.mtimeMs ?
 // directory). `html` is the index.html this merge wrote (Playwright's html output dir: PLAYWRIGHT_HTML_OUTPUT_DIR /
 // PLAYWRIGHT_HTML_REPORT or the app's playwright-report/, or one written into the blob dir), else null. `complete`
 // says whether the ledger's shard runs add up to a full verification of the current code in `mode`, by verify's rules
-// (passing, unfiltered); a complete set is a full pass, so it moves last-green like a passing full run does (M9): only
+// (passing, unfiltered, recorded under the current verification policy, J2); a complete set is a full pass, so it
+// moves last-green like a passing full run does (M9): only
 // when its shards ran on a clean tree (B). `lastGreen`: 'moved', 'dirty' or null (no complete set).
 export function mergeReports({ config, app, dir, mode = 'dev' }) {
   if (typeof dir !== 'string' || !dir) throw new Error('e2e-rail: shard merge needs the blob report dir (--dir <dir>)');

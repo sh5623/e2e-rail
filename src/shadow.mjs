@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ledgerDir } from './config.mjs';
-import { readRuns } from './ledger.mjs';
+import { currentPolicy, policyOf, readRuns, VERIFY_POLICY } from './ledger.mjs';
 
 // Shadow mode (spec §8): every full run is paired with the selection computed for the same code, and the pair says
 // whether the selection would have contained every failure. After `promoteAfter` hits in a row a human may promote
@@ -83,12 +83,16 @@ function readShadowLog(config) {
 //   trivial   the selection runs this app in full (or does not cover it), so it proves nothing: streak unchanged;
 //   hit       every failed spec file is inside the selection (a passing run is a hit): streak + 1;
 //   miss      a failed spec is outside it (`missed`) or was removed from it (`removedMissed`): streak 0.
-// Recording the same run again returns the stored record and changes nothing.
+// Recording the same run again returns the stored record and changes nothing. J2: a run recorded under an older
+// verification policy is refused (its pass may count by rules that no longer hold); a record carries its policy.
 export function recordShadow({ config, app, runId }) {
   const run = readRuns(config, { app: app.name }).find((r) => r.id === runId);
   if (!run) throw new Error(`e2e-rail: run not found for app ${app.name}: ${runId}`);
   if (run.kind !== 'full' || run.filtered) {
     throw new Error(`e2e-rail: shadow record needs an unfiltered full run, but ${runId} is ${run.filtered ? 'a filtered ' : 'a '}${run.kind} run`);
+  }
+  if (!currentPolicy(run)) {
+    throw new Error(`e2e-rail: run ${runId} was recorded under an older e2e-rail verification policy (${policyOf(run) ?? 'none'} < ${VERIFY_POLICY}); shadow record needs a full run recorded by this version, so run it again`);
   }
   const failures = run.failures ?? [];
   // Without a failure list there is nothing to compare, and "no failure outside the selection" would hold vacuously.
@@ -103,7 +107,7 @@ export function recordShadow({ config, app, runId }) {
   const codeId = run.fingerprint?.codeId ?? null;
   const sel = pairedSelection(config, codeId);
   const rec = {
-    ts: new Date().toISOString(), app: app.name, runId, fp: run.fingerprint?.id ?? null, codeId, selectionId: sel?.id ?? null,
+    ts: new Date().toISOString(), policy: VERIFY_POLICY, app: app.name, runId, fp: run.fingerprint?.id ?? null, codeId, selectionId: sel?.id ?? null,
     hit: null, trivial: false, unpaired: !sel, missed: [], removedMissed: [], streak: state.streak,
   };
   if (sel) {

@@ -1,7 +1,7 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { appendRun, readRuns, ledgerPath, latestFull, completeShardSet, writeLastGreen, readLastGreen } from '../src/ledger.mjs';
+import { appendRun, readRuns, ledgerPath, latestFull, completeShardSet, writeLastGreen, readLastGreen, VERIFY_POLICY } from '../src/ledger.mjs';
 import { ledgerDir, loadConfig } from '../src/config.mjs';
 import { makeTempRepo } from './helpers.mjs';
 
@@ -60,6 +60,10 @@ test('appendRun keeps a given id/ts, fills missing ones, does not mutate the inp
     assert.ok(!Number.isNaN(Date.parse(filled.ts)));
     assert.deepEqual(readRuns(config).map((r) => r.id), ['run-fixed', filled.id]);
     assert.deepEqual(JSON.parse(lines(config)[0]), out);
+    // J2: every line carries the verification policy it was recorded under, whatever the caller passed
+    assert.equal(VERIFY_POLICY, 2);
+    assert.deepEqual([out.policy, filled.policy, appendRun(config, run({ policy: 1 })).policy], [2, 2, 2]);
+    assert.deepEqual(readRuns(config).map((r) => r.policy), [2, 2, 2]);
   });
 });
 

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ledgerDir } from './config.mjs';
 import { computeFingerprint } from './fingerprint.mjs';
-import { completeShardSet, latestFull, readRuns } from './ledger.mjs';
+import { completeShardSet, currentPolicy, latestFull, policyOf, readRuns } from './ledger.mjs';
 import { isMeasure } from './measure.mjs';
 import { testListText } from './select.mjs';
 import { gitResolveCommit } from './util/git.mjs';
@@ -28,9 +28,11 @@ function lastVerified(runs, appName) {
   return best?.run ?? null;
 }
 
-// The runs of this app in `mode` that can count: passed, not narrowed (`filtered`, R44), with a fingerprint.
-const countedRuns = (config, app, mode) => readRuns(config, { app: app.name })
+// The runs of this app in `mode` that passed, not narrowed (`filtered`, R44), with a fingerprint, under any policy.
+const passedRuns = (config, app, mode) => readRuns(config, { app: app.name })
   .filter((r) => r.mode === mode && r.rc === 0 && !r.filtered && r.fingerprint?.id);
+// Those that can count: recorded under the current verification policy (J2).
+const countedRuns = (config, app, mode) => passedRuns(config, app, mode).filter(currentPolicy);
 
 // R47: an app that declares a preview build tests the built dist in preview mode; without a dist nothing is credited.
 const distMissing = (app, mode, fingerprint) => mode === 'preview' && Boolean(app.run.preview) && fingerprint.dist === null;
@@ -76,7 +78,9 @@ const isSelectionRun = (config, r) => selectionCheck(config, r) === 'ok';
 // Exit codes: 0 verified, 20 stale (a different fingerprint, with the fields that moved since the last full pass),
 // 21 insufficient (this fingerprint only has runs that do not satisfy `require`; a selected run whose selection was
 // made for other code is one of those). In preview mode an app with a
-// `run.preview` build is never verified while its dist is missing (stale, `differing` names `dist`).
+// `run.preview` build is never verified while its dist is missing (stale, `differing` names `dist`). J2: only lines of
+// the current verification policy count, as verification and as baseline; a match recorded under an older one is
+// stale with `rejected: { runId, why: 'policy' }` and `olderPolicy` (its number, null for none).
 export function verify({ config, app, mode = 'dev', require = 'full', maxAgeMin = null }) {
   if (!REQUIRES.includes(require)) throw new Error(`e2e-rail: unknown --require "${require}" (expected ${REQUIRES.join(' or ')})`);
   if (maxAgeMin !== null && !(typeof maxAgeMin === 'number' && Number.isFinite(maxAgeMin) && maxAgeMin >= 0)) {
@@ -132,5 +136,12 @@ export function verify({ config, app, mode = 'dev', require = 'full', maxAgeMin 
     return { status: 'stale', exitCode: 20, fingerprint, lastVerifiedHead, passedBefore, differing: [], expired: { runId: expired.run.id, ageMin } };
   }
   const differing = base ? FIELDS.filter((f) => base.fingerprint[f] !== fingerprint[f]) : [...FIELDS];
+  // J2: when this code's only matches were recorded under an older verification policy, name one (the run that would
+  // have satisfied `require`, else the newest) instead of crediting it: it may have passed by rules that no longer hold.
+  const older = matching.length ? [] : passedRuns(config, app, mode).filter((r) => !currentPolicy(r) && r.fingerprint.id === fingerprint.id);
+  if (older.length) {
+    const run = settle(older)?.run ?? older.at(-1);
+    return { status: 'stale', exitCode: 20, fingerprint, lastVerifiedHead, passedBefore, differing, rejected: { runId: run.id, why: 'policy' }, olderPolicy: policyOf(run) };
+  }
   return { status: 'stale', exitCode: 20, fingerprint, lastVerifiedHead, passedBefore, differing };
 }
