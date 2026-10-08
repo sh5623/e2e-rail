@@ -161,10 +161,11 @@ rc, spec 별 결과, 실패, flaky. 깨끗한 트리에서 필터 없이 통과�
 테스트가 없는 줄이 하나라도 있어도 그렇다(`failed: test list line matched no tests: <line>`). 단 일부러 좁힌(filtered)
 실행은 줄 검사를 하지 않는다. `--test-list` 의 줄을 테스트의 제목 경로 전체로만 맞추는 Playwright 1.56–1.57 에서는
 e2e-rail 이 먼저 테스트를 나열해, 목록이 덮는 테스트마다 그런 줄 하나씩을 Playwright 에 넘긴다
-(`.e2e-rail/reports/<run-id>.test-list.txt`, 실행 뒤 삭제). 목록 자체와 위의 검사는 쓰인 그대로다. 다른 코드에 대해 계산된 선택(`select` 뒤에 파일이 바뀜)이나 HEAD 가 아닌
-head 까지로 만든 선택(`selection <old> was made up to <head>, not HEAD — …`)으로 `run --selection` 을 하면
-같은 base · 미커밋 포함 여부로 HEAD 까지 선택을 다시 계산하고 `selection <old> was for other code — reselected as <new>` 를
-찍은 뒤(`--add` 는 옮겨 오고 `--remove` 는 옮겨 오지 않는다) 새 선택을 돌린다. 새 선택은 실행이 현재 선택을 썼을 때만
+(`.e2e-rail/reports/<run-id>.test-list.txt`, 실행 뒤 삭제). 목록 자체와 위의 검사는 쓰인 그대로다. `run --selection` 은
+선택이 다른 코드에 대해 계산됐거나(`select` 뒤에 파일이 바뀜: `selection <old> was for other code — reselected as <new>`),
+HEAD 가 아닌 head 까지로 만들어졌거나(`selection <old> was made up to <head>, not HEAD — reselected as <new>`), 미커밋
+변경이 있는 트리에서 그것을 뺐으면(`selection <old> left out uncommitted work in a tree that is not clean — reselected as <new>`)
+같은 base · 미커밋 포함 여부로 HEAD 까지 선택을 다시 계산해(`--add` 는 옮겨 오고 `--remove` 는 옮겨 오지 않는다) 새 선택을 돌린다. 새 선택은 실행이 현재 선택을 썼을 때만
 현재 선택이 된다(다른 선택을 `run --selection <id>` 로 돌리면 `selections/<new>.json` 만 쓴다). 선택 실행은 자기만의 목록
 파일(`.e2e-rail/reports/<selection>.<app>.<pid>.test-list.txt`, 실행 뒤 삭제)을 Playwright 에 넘긴다. 락을 기다리는 동안 코드가 바뀌면
 `the code changed while waiting for the lock (selection <id> no longer matches); run it again` 으로 멈추고 아무것도
@@ -319,7 +320,7 @@ export default {
 `verify` 가 볼 수 없으니 그 파일을 바꾼 뒤에는 스위트를 다시 돌린다.
 
 Playwright 1.56–1.57 에서는 `--test-list` 줄이 테스트의 제목 경로 전체를 적어야 하는데, `›` 나 줄바꿈이 들어 있거나,
-공백으로 시작·끝나거나, 빈 제목은 줄로 적을 수 없다. 그런 테스트가 있는 spec 은 목록으로는 절대 돌지 않는다: 그 spec 의 선택 실행은
+앞뒤에 공백 문자(whitespace)가 있거나, 빈 제목은 줄로 적을 수 없다. 그런 테스트가 있는 spec 은 목록으로는 절대 돌지 않는다: 그 spec 의 선택 실행은
 매번 실패하고(`failed: test list line matched no tests: <line>`), 그것을 담은 샤드 계획은 완성되지 않는다. 줄이 파일을
 가리킬 수 있는 Playwright ≥ 1.58 을 쓰거나 테스트 이름을 바꾼다.
 

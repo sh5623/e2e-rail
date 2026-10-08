@@ -166,10 +166,12 @@ selection, a shard plan or `--test-list <file>`) whose list matches no test is r
 On Playwright 1.56–1.57, whose `--test-list` matches a line only on a whole title path, e2e-rail lists the tests
 first and hands Playwright one such line per test the list covers (`.e2e-rail/reports/<run-id>.test-list.txt`, deleted after the run); the
 list itself, and the check above, stay as written.
-`run --selection` on a selection computed for other code (files changed since `select`), or made up to a head that is
-not HEAD (`selection <old> was made up to <head>, not HEAD — …`), computes it again from the
-same base and uncommitted setting up to HEAD, prints `selection <old> was for other code — reselected as <new>` (carrying
-over its `--add`s, not its `--remove`s) and runs the new one; it becomes the current selection only when the run used
+`run --selection` computes a selection again from the same base and uncommitted setting up to HEAD, and runs the new
+one, when it was computed for other code (files changed since `select`:
+`selection <old> was for other code — reselected as <new>`), made up to a head that is not HEAD
+(`selection <old> was made up to <head>, not HEAD — reselected as <new>`), or left uncommitted work out of a tree that
+has some (`selection <old> left out uncommitted work in a tree that is not clean — reselected as <new>`); it carries
+over the `--add`s, not the `--remove`s, and the new selection runs; it becomes the current selection only when the run used
 the current one (`run --selection <id>` of another selection writes `selections/<new>.json` alone). Each selection
 run hands Playwright a list file of its own (`.e2e-rail/reports/<selection>.<app>.<pid>.test-list.txt`, deleted
 afterwards). If the code changes while the run waits for the lock,
@@ -329,7 +331,7 @@ modules `playwright.config.ts` imports. An edit to such a module still moves `he
 run the suite again after changing one, since `verify` cannot see it.
 
 On Playwright 1.56–1.57 a `--test-list` line has to spell a test's whole title path, and a title that holds `›` or a
-line break, starts or ends with a space, or is empty cannot be spelled. A spec with such a test never runs from a list: every selected run of
+line break, starts or ends with whitespace, or is empty cannot be spelled. A spec with such a test never runs from a list: every selected run of
 it fails (`failed: test list line matched no tests: <line>`), and a shard plan that holds it never completes. Use
 Playwright ≥ 1.58, where a line names the file, or rename the test.
 

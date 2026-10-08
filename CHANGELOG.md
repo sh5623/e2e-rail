@@ -54,6 +54,14 @@ never presented as a verification it is not, and nothing narrows by guessing.
   whose `head` does not resolve to HEAD (as 0.1.0 wrote one for `select --head <sha>`) is now reselected up to HEAD
   by `run --selection` (`selection <old> was made up to <head>, not HEAD — reselected as <new>`), and
   `verify --require selected` no longer credits a run whose selection's head is not the commit the run tested.
+- **A selection file that left uncommitted work out of a dirty tree still ran and verified (I1).** Whoever wrote it
+  (0.1.0 `select --no-uncommitted`, or any producer), a selection with `includeUncommitted: false` kept its codeId and
+  head, so it narrowed and its run verified although the uncommitted work ran unselected. `run --selection` now
+  reselects such a selection while the tree is not clean
+  (`selection <old> left out uncommitted work in a tree that is not clean — reselected as <new>`), and
+  `verify --require selected` never credits its run on a tree the run found dirty. verify names why a selection run
+  no longer counts (`… was made up to a head other than the one it ran` / `… left out uncommitted work the run
+  included`, next to the H5 list line).
 - **`select --add` after a run verified the amended selection with the earlier run (G2).** `select --add` rewrites
   the selection under the same id and code, so a run that never ran the added spec counted. Each run from a test list
   now records `testListSha` (the sha256 of the list as read under the lock, before any 1.56–1.57 spelling-out), and
@@ -64,7 +72,7 @@ never presented as a verification it is not, and nothing narrows by guessing.
   lists the tests under the lock and hands Playwright one whole-title line per test the list covers
   (`.e2e-rail/reports/<run-id>.test-list.txt`, deleted after the run); the list, the ledger's `command` and the empty-list check stay as
   written. CI runs the contract suite on 1.56.0 too. Limit: there a title that holds `›` or a line break, starts or
-  ends with a space, or is empty cannot be spelled as a line, so a spec with such a test fails every list run and a shard plan holding it
+  ends with whitespace, or is empty cannot be spelled as a line, so a spec with such a test fails every list run and a shard plan holding it
   never completes; Playwright ≥ 1.58 is recommended.
 
 ### Docs
