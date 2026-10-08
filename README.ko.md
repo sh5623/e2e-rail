@@ -113,7 +113,8 @@ API 글롭(`route()` 목), import 하는 소스 파일, support 헬퍼, Playwrig
 Playwright 버전, preview 모드면 빌드된 `dist` 해시. `id` 는 그 전부이고, `codeId` 는 head·diff·untracked 로 선택과
 실행을 짝짓는다. `clean`(`id` 에는 들어가지 않는다)은 작업 트리가 HEAD 그 자체였는지, 즉 추적 파일 변경도 원장 디렉터리
 밖의 untracked(무시되지 않은) 파일도 없었는지를 말한다. `.e2e-rail/ledger.jsonl` 에는 실행 1회가 append-only 한 줄로
-남는다: `kind`(`full` · `selected` · `rerun` · `shard`), `mode`, 지문, shard, workers, `filtered`, `shadowed`, 락 시각,
+남는다: `kind`(`full` · `selected` · `rerun` · `shard`), `mode`, 지문, `testListSha`(읽은 test list 의 sha256), shard,
+workers, `filtered`, `shadowed`, 락 시각,
 rc, spec 별 결과, 실패, flaky. 깨끗한 트리에서 필터 없이 통과한 전수 실행은 자기 head 를
 `.e2e-rail/last-green.<app>` 에 쓰고, 이것이 다음 선택의 base 가 된다. 깨끗한 트리에서 돈 샤드로 `complete: yes` 를
 찍은 `shard merge` 도 그렇게 쓴다. 미커밋 변경이 있는 상태의 통과는 정확히 그 코드만 검증할 뿐 HEAD 를 검증하지 않는다:
@@ -122,7 +123,8 @@ rc, spec 별 결과, 실패, flaky. 깨끗한 트리에서 필터 없이 통과�
 `verify` 는 원장으로 «정확히 이 코드가 통과했는가» 에 답한다. 이 앱 · 이 모드 · 이 지문 · 통과 · 필터 없음인 실행만
 센다. `--require full` 은 전수 실행이나 완성된 샤드 세트를, `--require selected` 는 `run --selection` 으로 만든 선택
 실행까지 받는다(`verified: selected@<run-id> (selection <id>[, shadowed]) (<age>)` 를 찍는다). 단 그 실행의
-`selections/<id>.json` 이 남아 있고 실행이 시험한 코드에 대해 계산된 것이어야 한다. 임의의 `--test-list`
+`selections/<id>.json` 이 남아 있고, 실행이 시험한 코드에 대해 계산됐으며, 실행이 읽은 목록을 지금도 그대로 써야
+한다(실행 뒤 `select --add` 를 했으면 다시 돌려야 한다). 임의의 `--test-list`
 실행과 `measure workers` 실행은 세지 않는다. 재실행은 절대 세지 않는다. preview 모드는 dist 가 없거나 낡았으면(git 이 아는 어떤 파일보다 오래됨) 먼저 다시 빌드하고,
 `--no-build` 면 대신 거부한다.
 

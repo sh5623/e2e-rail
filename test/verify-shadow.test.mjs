@@ -8,7 +8,8 @@ import { runTests } from '../src/run.mjs';
 import { MEASURE_TAG } from '../src/measure.mjs';
 import { appendRun, readRuns } from '../src/ledger.mjs';
 import { computeFingerprint } from '../src/fingerprint.mjs';
-import { amendSelection, codeIdOf, computeSelection, writeSelection } from '../src/select.mjs';
+import { amendSelection, codeIdOf, computeSelection, testListText, writeSelection } from '../src/select.mjs';
+import { sha256 } from '../src/util/hash.mjs';
 import { planShards } from '../src/shard.mjs';
 import { findApp, ledgerDir, loadConfig } from '../src/config.mjs';
 import { execCapture } from '../src/util/exec.mjs';
@@ -62,6 +63,9 @@ function select(config, app, { specs = [], added = [], removed = [], mode = 'par
   writeSelection(config, sel);
   return sel;
 }
+// The sha256 of the test list a selection writes for the app: what a run from it records as testListSha (G2).
+const listSha = (sel) => sha256(testListText(sel.apps.web));
+const readSelectionFile = (config, id) => JSON.parse(readFileSync(path.join(ledgerDir(config), 'selections', `${id}.json`), 'utf8'));
 const SMOKE = 'e2e/smoke.spec.ts';
 const ORDERS = 'e2e/orders.spec.ts';
 const CART = 'e2e/cart.spec.ts';
@@ -103,12 +107,12 @@ test('verify --require selected (I4): only a selected run made from a selection 
   await withRepo(async ({ config, app }) => {
     synth(config, app, { kind: 'selected', selectionId: null });               // `run --test-list <file>`
     synth(config, app, { kind: 'selected', selectionId: '' });
-    select(config, app, { id: 'sel-m', specs: [ORDERS] });
-    synth(config, app, { kind: 'selected', selectionId: 'sel-m', command: `playwright test --test-list x --workers 2 ${MEASURE_TAG}` });
+    const m = select(config, app, { id: 'sel-m', specs: [ORDERS] });
+    synth(config, app, { kind: 'selected', selectionId: 'sel-m', testListSha: listSha(m), command: `playwright test --test-list x --workers 2 ${MEASURE_TAG}` });
     const i = verify({ config, app, require: 'selected' });
     assert.equal(i.status, 'insufficient'); assert.equal(i.exitCode, 21); assert.deepEqual(i.have, ['selected']);
-    select(config, app, { id: 'sel-1', specs: [ORDERS] });
-    const ok = synth(config, app, { kind: 'selected', selectionId: 'sel-1', shadowed: true });
+    const one = select(config, app, { id: 'sel-1', specs: [ORDERS] });
+    const ok = synth(config, app, { kind: 'selected', selectionId: 'sel-1', testListSha: listSha(one), shadowed: true });
     const v = verify({ config, app, require: 'selected' });
     assert.equal(v.status, 'verified'); assert.equal(v.run.id, ok.id); assert.equal(v.run.selectionId, 'sel-1');
     synth(config, app, { kind: 'selected', selectionId: null });               // a newer ad-hoc run does not displace it
@@ -121,8 +125,8 @@ test('verify --require selected (C): a selected run counts only while its select
   await withRepo(async ({ config, app }) => {
     // a selection made for other code (as `run --selection` used to run without reselecting), one that is gone, and a
     // selection id that is no file name at all
-    select(config, app, { id: 'sel-old', specs: [ORDERS], codeId: 'c'.repeat(64) });
-    synth(config, app, { kind: 'selected', selectionId: 'sel-old' });
+    const old = select(config, app, { id: 'sel-old', specs: [ORDERS], codeId: 'c'.repeat(64) });
+    synth(config, app, { kind: 'selected', selectionId: 'sel-old', testListSha: listSha(old) });
     synth(config, app, { kind: 'selected', selectionId: 'sel-gone' });
     synth(config, app, { kind: 'selected', selectionId: '../selection' });
     const i = verify({ config, app, require: 'selected' });
@@ -134,12 +138,30 @@ test('verify --require selected (C): a selected run counts only while its select
     assert.equal(verify({ config, app, require: 'selected' }).status, 'insufficient');
     // the selection for this very code
     const sel = select(config, app, { specs: [ORDERS] });
-    const ok = synth(config, app, { kind: 'selected', selectionId: sel.id });
+    const ok = synth(config, app, { kind: 'selected', selectionId: sel.id, testListSha: listSha(sel) });
     const v = verify({ config, app, require: 'selected' });
     assert.equal(v.status, 'verified'); assert.equal(v.run.id, ok.id);
     // rewritten for other code later (a hand edit): no longer counts
     writeFileSync(path.join(ledgerDir(config), 'selections', `${sel.id}.json`), JSON.stringify({ ...sel, codeId: 'd'.repeat(64) }));
     assert.equal(verify({ config, app, require: 'selected' }).status, 'insufficient');
+  });
+});
+
+test('verify --require selected (G2): a selected run counts only for the very list its selection writes now', async () => {
+  await withRepo(async ({ config, app }) => {
+    const sel = select(config, app, { specs: [ORDERS] });
+    const ran = synth(config, app, { kind: 'selected', selectionId: sel.id, testListSha: listSha(sel) });
+    assert.equal(verify({ config, app, require: 'selected' }).run.id, ran.id);
+    // `select --add` after the run rewrites the same selection (same id, same code) with one more spec
+    const warn = mock.method(console, 'warn', () => {}); // no spec index here: added for chromium, with a warning
+    try { amendSelection(config, { app: 'web', add: [{ spec: CART, reason: 'opens the cart by string' }] }); } finally { warn.mock.restore(); }
+    assert.equal(readSelectionFile(config, sel.id).id, sel.id);
+    assert.equal(verify({ config, app, require: 'selected' }).status, 'insufficient', 'the run never ran the added spec');
+    // a run of the amended list counts; a run that recorded no list hash (v0.1.0) never does
+    synth(config, app, { kind: 'selected', selectionId: sel.id });
+    assert.equal(verify({ config, app, require: 'selected' }).status, 'insufficient');
+    const again = synth(config, app, { kind: 'selected', selectionId: sel.id, testListSha: listSha(readSelectionFile(config, sel.id)) });
+    assert.equal(verify({ config, app, require: 'selected' }).run.id, again.id);
   });
 });
 

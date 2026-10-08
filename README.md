@@ -116,7 +116,8 @@ ledger dir), a hash of both configs, the Playwright version and, in preview mode
 covers all of it; `codeId` covers head, diff and untracked files and pairs selections with runs; `clean` (not part of
 `id`) says the tree was HEAD itself: no tracked change and no untracked, non-ignored file outside the ledger dir.
 `.e2e-rail/ledger.jsonl` gets one append-only line per run: `kind` (`full` · `selected` · `rerun` · `shard`), `mode`,
-fingerprint, shard, workers, `filtered`, `shadowed`, lock times, rc, per-spec results, failures and flaky tests. An
+fingerprint, `testListSha` (the sha256 of the test list it read), shard, workers, `filtered`, `shadowed`, lock times,
+rc, per-spec results, failures and flaky tests. An
 unfiltered passing full run of a clean tree writes its head to `.e2e-rail/last-green.<app>`, the next selection's
 base; so does `shard merge` when it prints `complete: yes` for shards that ran on a clean tree. A pass with
 uncommitted changes verifies that exact code but never its HEAD: it prints
@@ -125,8 +126,9 @@ uncommitted changes verifies that exact code but never its HEAD: it prints
 `verify` answers "has exactly this code passed?" from the ledger: only runs of this app, in this mode, with this
 fingerprint, that passed and were not filtered count. `--require full` wants a full run or a complete shard set;
 `--require selected` also takes a selected run made by `run --selection` (it prints
-`verified: selected@<run-id> (selection <id>[, shadowed]) (<age>)`) while its `selections/<id>.json` exists and was
-computed for the code the run tested; an ad-hoc `--test-list` run or a `measure workers` run does not count. A rerun never counts. Preview mode rebuilds a missing or stale dist
+`verified: selected@<run-id> (selection <id>[, shadowed]) (<age>)`) while its `selections/<id>.json` exists, was
+computed for the code the run tested and still writes the list the run read (a `select --add` after the run needs a
+new run); an ad-hoc `--test-list` run or a `measure workers` run does not count. A rerun never counts. Preview mode rebuilds a missing or stale dist
 (older than any file git knows) before it runs; `--no-build` refuses instead.
 
 ## Commands

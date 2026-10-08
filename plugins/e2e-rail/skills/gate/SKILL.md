@@ -70,7 +70,8 @@ pnpm exec e2e-rail verify --app <app> --mode <mode> --require full
 After a selected run you may also quote `verify --app <app> --mode <mode> --require selected`
 (`verified: selected@<run-id> (selection <selection-id>, shadowed) (<age>)`; `, shadowed` only while trust is shadow),
 but the status stays "selected", never "full pass". Only a run made by `run --selection` from a selection computed
-for that very code counts there: an ad-hoc `--test-list` run or a `measure workers` run leaves `insufficient:`.
+for that very code, of the list that selection writes now, counts there: after a `select --add`, run again. An
+ad-hoc `--test-list` run or a `measure workers` run leaves `insufficient:`.
 
 ## 3. Report (fixed format)
 ```

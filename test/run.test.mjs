@@ -15,6 +15,7 @@ import { loadOrBuildSpecIndex } from '../src/spec-index.mjs';
 import { loadTypeScript } from '../src/util/ts.mjs';
 import { loadConfig, findApp } from '../src/config.mjs';
 import { execCapture } from '../src/util/exec.mjs';
+import { sha256 } from '../src/util/hash.mjs';
 import { makeTempRepo, readJson, fixtureDir, stubReport } from './helpers.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -25,7 +26,7 @@ async function until(fn, ms = 15_000) {
     await sleep(20);
   }
 }
-const ENTRY_FIELDS = ['app', 'mode', 'kind', 'fingerprint', 'selectionId', 'shard', 'workers', 'filtered', 'shadowed', 'command', 'lock', 'rc', 'durationMs', 'rootDir', 'specs', 'failures', 'flaky'];
+const ENTRY_FIELDS = ['app', 'mode', 'kind', 'fingerprint', 'selectionId', 'testListSha', 'shard', 'workers', 'filtered', 'shadowed', 'command', 'lock', 'rc', 'durationMs', 'rootDir', 'specs', 'failures', 'flaky'];
 const stubCli = (root) => path.join(root, 'node_modules/@playwright/test/cli.js');
 
 // Temp repo + loaded config + an argv capture file + a private lock dir (E2E_RAIL_LOCK_DIR, so the suite never touches
@@ -106,6 +107,7 @@ test('runTests spawns playwright with test-list + reporters, writes a ledger lin
     process.env.STUB_PW_RC = '1'; process.env.STUB_PW_REPORT = path.join(root, 'stub/report-fail.json');
     const failed = await runTests({ config, app, kind: 'full', lock: false });
     assert.equal(failed.rc, 1); assert.equal(failed.entry.failures.length, 1);
+    assert.equal(failed.entry.testListSha, null, 'no test list, no list hash');
     assert.equal(existsSync(path.join(root, '.e2e-rail/last-green.web')), false);
   } finally { delete process.env.STUB_PW_RC; delete process.env.STUB_PW_REPORT; delete process.env.STUB_PW_ARGV_FILE; cleanup(); }
 });
@@ -232,6 +234,7 @@ test('the ledger line carries every field; rootDir comes from the report; kind i
     const list = writeList(root);
     const { entry } = await runTests({ config, app, kind: 'full', testList: list, workers: 1, lock: false, selectionId: 'sel-1' });
     for (const k of ENTRY_FIELDS) assert.ok(k in entry, `entry.${k}`);
+    assert.equal(entry.testListSha, sha256(readFileSync(list, 'utf8')), 'G2: the list as read under the lock');
     assert.equal(entry.kind, 'selected');
     assert.equal(entry.app, 'web');
     assert.equal(entry.mode, 'dev');
@@ -656,6 +659,7 @@ test('D: Playwright 1.56–1.57 match a test-list line only on a whole title pat
         '[chromium] › cart.spec.ts › adds to cart', '[chromium] › gone.spec.ts', '',
       ].join('\n'));
       assert.equal(readFileSync(list, 'utf8'), text, 'the list itself is left as written');
+      assert.equal(entry.testListSha, sha256(text), 'G2: the hash is of the list as given, not of what it was spelled out to');
       assert.ok(entry.command.includes(`--test-list ${list}`), 'the ledger names the list the run was asked for');
       // R56 still judges the list as written
       assert.equal(rc, 1);

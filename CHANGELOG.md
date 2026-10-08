@@ -16,8 +16,9 @@ never presented as a verification it is not, and nothing narrows by guessing.
   `filtered`. A run that passed `--retries`, `--timeout` or `-u` used to verify and no longer does. `--ui`, `--debug`,
   `--run-agents` and `--last-failed-file` are refused. The `filtered:` line now reads
   `filtered: <options> narrow or relax the run; not a verification`.
-- `verify --require selected` counts a selected run only while `selections/<id>.json` exists and was computed for the
-  code the run tested.
+- `verify --require selected` counts a selected run only while `selections/<id>.json` exists, was computed for the
+  code the run tested and still writes the test list the run read (ledger `testListSha`). Selected runs recorded by
+  0.1.0 have no list hash and no longer count.
 
 ### Fixes
 
@@ -42,6 +43,10 @@ never presented as a verification it is not, and nothing narrows by guessing.
   work tree, so the commits between that head and HEAD were run but never selected for. `select --head <ref>` with a
   `<ref>` that resolves to a commit other than HEAD now runs every app in full (`head-not-HEAD:<ref>`), and a
   reselection always diffs up to HEAD.
+- **`select --add` after a run verified the amended selection with the earlier run (G2).** `select --add` rewrites
+  the selection under the same id and code, so a run that never ran the added spec counted. Each run from a test list
+  now records `testListSha` (the sha256 of the list as read under the lock, before any 1.56–1.57 spelling-out), and
+  `verify --require selected` compares it with the list the selection writes now.
 - **The declared minimum Playwright could not run selected runs (D, P2).** Besides the floor above: running the
   contract suite on 1.56.0 showed that 1.56.x and 1.57.x match a `--test-list` line only on a test's whole title path
   (1.58.0 made it a prefix), so the file-level lines e2e-rail writes matched nothing there. On those versions a run

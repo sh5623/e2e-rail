@@ -4,6 +4,8 @@ import { ledgerDir } from './config.mjs';
 import { computeFingerprint } from './fingerprint.mjs';
 import { completeShardSet, latestFull, readRuns } from './ledger.mjs';
 import { isMeasure } from './measure.mjs';
+import { testListText } from './select.mjs';
+import { sha256 } from './util/hash.mjs';
 
 // Fingerprint fields `differing` can name, in the order they are listed.
 const FIELDS = ['head', 'diff', 'untracked', 'config', 'playwright', 'dist'];
@@ -45,12 +47,15 @@ export function verifiedShardSet({ config, app, mode = 'dev' }) {
 // I4: a selected run stands for a selection only when it was made from one (`run --selection` records its id) and is
 // not a worker measurement; an ad-hoc `--test-list` run says nothing about what a change needs. C: and only while
 // that selection (`selections/<id>.json`) exists and was computed for the code the run tested: a selection made for
-// other code may miss what changed since. A missing, unreadable or foreign selection does not count.
+// other code may miss what changed since. G2: and only while that selection still writes the very test list the run
+// read (`testListSha`): `select --add` rewrites a selection in place, and a run made before it never ran the addition.
+// A missing, unreadable or foreign selection, or a run that recorded no list hash, does not count.
 function selectionMatches(config, r) {
-  if (!/^[\w.-]+$/.test(r.selectionId)) return false;
+  if (!/^[\w.-]+$/.test(r.selectionId) || typeof r.testListSha !== 'string') return false;
   try {
     const sel = JSON.parse(readFileSync(path.join(ledgerDir(config), 'selections', `${r.selectionId}.json`), 'utf8'));
-    return typeof sel?.codeId === 'string' && sel.codeId === r.fingerprint.codeId;
+    if (typeof sel?.codeId !== 'string' || sel.codeId !== r.fingerprint.codeId || !sel.apps?.[r.app]) return false;
+    return sha256(testListText(sel.apps[r.app])) === r.testListSha;
   } catch { return false; }
 }
 const isSelectionRun = (config, r) => r.kind === 'selected' && typeof r.selectionId === 'string' && r.selectionId !== ''

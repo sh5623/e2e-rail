@@ -223,9 +223,10 @@ function readListText(abs) {
 // only, into one whole-title line per listed test each line covers (listed in the run's env, under the lock, by the
 // same prefix rule testListShortfall applies). A line that covers no listed test, or whose tests have a title a line
 // cannot spell (a `›`, an empty or padded title), is kept as written: it still matches nothing and fails the run
-// (R56). Returns the path to hand Playwright: `outAbs`, or `listAbs` itself when the listing fails (Playwright then
-// reports the same error as a failed run).
-function wholeTitleList({ dirAbs, app, mode, listAbs, outAbs }) {
+// (R56). `listText` is the list as read under the lock. Returns the path to hand Playwright: `outAbs`, or `listAbs`
+// itself when the list or the listing cannot be read (Playwright then reports the same error as a failed run).
+function wholeTitleList({ dirAbs, app, mode, listAbs, listText, outAbs }) {
+  if (listText === null) return listAbs;
   let listed;
   try { listed = listTestCases(dirAbs, app.playwrightConfig, runEnv(app, mode)); } catch (e) {
     console.error(`e2e-rail: could not list the tests to spell out ${listAbs} for this Playwright (${e.message.split('\n')[0]}); running it as written`);
@@ -234,7 +235,7 @@ function wholeTitleList({ dirAbs, app, mode, listAbs, outAbs }) {
   const { rootDir, cases } = listed;
   const spellable = (t) => t.titlePath.length > 0 && t.titlePath.every((x) => x !== '' && x === x.trim() && !x.includes('›') && !x.includes('\n'));
   const out = new Set();
-  for (const d of parseTestList(readFileSync(listAbs, 'utf8'))) {
+  for (const d of parseTestList(listText)) {
     const file = toAppRel(dirAbs, path.resolve(dirAbs, rootDir, d.file));
     const covered = cases.filter((t) => t.file === file && (d.project === undefined || d.project === t.project)
       && d.titlePath.length <= t.titlePath.length && d.titlePath.every((title, i) => t.titlePath[i] === title));
@@ -377,8 +378,13 @@ export async function runTests({
     const shadowed = kind === 'selected' && shadowTrust(config);
     mkdirSync(path.dirname(reportAbs), { recursive: true });
     // D: what Playwright is handed in place of the test list (the ledger's `command` keeps the list as given)
+    // G2: the list is read once, here under the lock: its sha256 goes into the ledger (verify credits a selection's run
+    // only while the selection still writes that very list) and R56 checks the report against this text.
+    const listAbs = testList ? path.resolve(dirAbs, testList) : null;
+    const listText = listAbs ? readListText(listAbs) : null;
+    const testListSha = listText === null ? null : sha256(listText);
     const handed = testList && !testListTakesPrefixes(fingerprint.playwright)
-      ? wholeTitleList({ dirAbs, app, mode, listAbs: path.resolve(dirAbs, testList), outAbs: path.join(ledgerDir(config), 'reports', `${id}.test-list.txt`) })
+      ? wholeTitleList({ dirAbs, app, mode, listAbs, listText, outAbs: path.join(ledgerDir(config), 'reports', `${id}.test-list.txt`) })
       : testList;
     const spawnArgs = args.map((a, i) => (i > 0 && args[i - 1] === '--test-list' ? handed : a));
     const t0 = Date.now();
@@ -394,7 +400,7 @@ export async function runTests({
     // R56: a test list that matched nothing (or lost some of its lines) fails the run, whatever Playwright exited with.
     // A non-zero Playwright exit code is kept as it is (an interrupt stays 130); a 0 becomes 1.
     const shortfall = testList
-      ? testListShortfall(readListText(path.resolve(dirAbs, testList)), report, dirAbs, { perLine: !filtered && !lastFailed })
+      ? testListShortfall(listText, report, dirAbs, { perLine: !filtered && !lastFailed })
       : [];
     for (const f of shortfall) {
       console.error(f.error === 'test list matched no tests'
@@ -403,7 +409,7 @@ export async function runTests({
     }
     const rc = shortfall.length && status === 0 ? 1 : status;
     const entry = appendRun(config, {
-      id, app: app.name, mode, kind, fingerprint, selectionId, shard: shardEntry, workers: workers ?? null, project: project ?? null,
+      id, app: app.name, mode, kind, fingerprint, selectionId, testListSha, shard: shardEntry, workers: workers ?? null, project: project ?? null,
       filtered, shadowed, command, lock: lockInfo, rc, durationMs,
       rootDir: report?.config?.rootDir ? toAppRel(dirAbs, report.config.rootDir) : null,
       ...parsed, failures: [...parsed.failures, ...shortfall],

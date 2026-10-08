@@ -251,6 +251,13 @@ export function testListLines(appSel) {
   return appSel.specs.flatMap((s) => s.projects.map((p) => `[${p}] › ${path.posix.relative(appSel.rootDir, s.file)}`));
 }
 
+// The test-list file of a partial app, exactly as it is written ('' when it has no line). G2: a run from a selection
+// records the sha256 of the list it read, and verify credits the run only while the selection still writes that list.
+export function testListText(appSel) {
+  const lines = testListLines(appSel);
+  return lines.length ? `${lines.join('\n')}\n` : '';
+}
+
 // `.e2e-rail/test-list.<app>.txt` per partial app (a full app gets none, and loses a stale one; so does an app the
 // selection does not cover, e.g. after `select --app`), then `selections/<id>.json` and `selection.json` (the current
 // selection) last.
@@ -269,8 +276,7 @@ export function writeSelection(config, selection) {
       testLists[name] = null;
       continue;
     }
-    const lines = testListLines(a);
-    writeFileSync(abs, lines.length ? `${lines.join('\n')}\n` : '');
+    writeFileSync(abs, testListText(a));
     testLists[name] = abs;
   }
   const text = `${JSON.stringify(selection, null, 2)}\n`;

@@ -72,7 +72,8 @@ test('real playwright: --list paths and rootDir, --test-list line format, JSON r
     // ② --test-list: `[project] › <path relative to rootDir>` runs a.spec.ts and nothing else. The run names a
     // selection made for this code (verify --require selected reads its codeId).
     mkdirSync(path.join(root, '.e2e-rail/selections'), { recursive: true });
-    writeFileSync(path.join(root, '.e2e-rail/selections/sel-contract.json'), JSON.stringify({ id: 'sel-contract', codeId: codeIdOf(config), apps: {} }));
+    const apps = { web: { mode: 'partial', rootDir: 'e2e', specs: [{ file: 'e2e/a.spec.ts', projects: ['chromium'], reasons: ['contract'] }] } };
+    writeFileSync(path.join(root, '.e2e-rail/selections/sel-contract.json'), JSON.stringify({ id: 'sel-contract', codeId: codeIdOf(config), apps }));
     const { rc, entry } = runList(root, ['[chromium] › a.spec.ts'], 'sel-contract');
     assert.equal(rc, 0);
     assert.equal(entry.kind, 'selected');

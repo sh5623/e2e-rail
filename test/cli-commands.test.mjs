@@ -445,6 +445,24 @@ test('C (audit repro): run --selection on a selection made for other code resele
   assert.match(again.stdout, new RegExp(`^selection ${old.id} was for other code — reselected as sel-`, 'm'));
 }));
 
+test('G2 (review repro): select --add after a run amends the selection in place; the earlier run no longer verifies it, a run of the amended list does', () => withRepo(({ root, run, at }) => {
+  writeFileSync(at('e2e/orders.spec.ts'), '// touched\n', { flag: 'a' });
+  assert.equal(run(['select', '--base', 'HEAD']).code, 0);
+  assert.equal(run(['run', '--selection', '--no-lock']).code, 0);
+  assert.equal(run(['verify', '--require', 'selected']).code, 0);
+  const add = run(['select', '--add', 'e2e/order-detail.spec.ts', '--reason', 'opens the detail modal by string']);
+  assert.equal(add.code, 0, add.out);
+  const v = run(['verify', '--require', 'selected']);
+  assert.equal(v.code, 21, v.out);
+  assert.match(v.stdout, /^insufficient: /);
+  const again = run(['run', '--selection', '--no-lock'], { STUB_PW_ARGV_FILE: at('argv.json') });
+  assert.equal(again.code, 0, again.out);
+  assert.doesNotMatch(again.stdout, /reselected/, 'same code: the amended selection itself ran');
+  const ok = run(['verify', '--require', 'selected']);
+  assert.equal(ok.code, 0, ok.out);
+  assert.match(ok.stdout, new RegExp(`^verified: selected@${ledgerLines(root).at(-1).id} `));
+}));
+
 test('C: reselecting keeps the additions recorded with --add (they only widen), not the removals', () => withRepo(({ root, run, at }) => {
   writeFileSync(at('e2e/orders.spec.ts'), '// touched\n', { flag: 'a' });
   assert.equal(run(['select', '--base', 'HEAD']).code, 0);
