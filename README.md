@@ -84,6 +84,7 @@ About 30 minutes per repository.
 | 7 | any other file of the app | that app full (`app-other:<file>`) |
 | – | no base, or git cannot diff | every app full (`no-base`) |
 | – | `--head <ref>` names a commit other than HEAD | every app full (`head-not-HEAD:<ref>`): a run tests the work tree, commits after `<ref>` included |
+| – | uncommitted work left out (`--no-uncommitted`, or under `CI`) of a tree that has some | every app full (`uncommitted-excluded`): the run tests it anyway |
 
 For row 6 the import graph climbs from the changed files to the route entries they reach. A spec is selected when its
 routes match a reached route (`route:<route> ← <file>`), its `page.route()` mocks match an API literal in the changed

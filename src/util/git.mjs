@@ -57,6 +57,12 @@ export function gitTracked(root) {
   return splitZ(git(loc.top, ['ls-files', '-z']).stdout).sort();
 }
 
+// B, H1: the work tree is HEAD itself — git could diff against HEAD and found nothing, and no untracked, non-ignored
+// file lies outside `excludePrefixes` (the ledger dir). The fingerprint's `clean`, and what select checks before it
+// leaves uncommitted work out.
+export const treeIsClean = (diffHead, untrackedFiles) => diffHead.ok && diffHead.text === '' && untrackedFiles.length === 0;
+export const gitTreeClean = (root, excludePrefixes = []) => treeIsClean(gitDiffHead(root), gitUntracked(root, excludePrefixes));
+
 export function gitUntrackedHash(root, excludePrefixes = []) {
   const loc = gitLocation(root);
   return hashFiles(loc ? loc.top : root, gitUntracked(root, excludePrefixes));

@@ -46,6 +46,10 @@ never presented as a verification it is not, and nothing narrows by guessing.
   work tree, so the commits between that head and HEAD were run but never selected for. `select --head <ref>` with a
   `<ref>` that resolves to a commit other than HEAD now runs every app in full (`head-not-HEAD:<ref>`), and a
   reselection always diffs up to HEAD.
+- **Uncommitted work left out of a selection still ran and verified (H1).** With `--no-uncommitted`, or under `CI`
+  where it is the default, the selection ignored the uncommitted diff while its codeId, and the run, included it.
+  On a tree with uncommitted or untracked (non-ignored, outside the ledger dir) changes such a selection now runs
+  every app in full (`uncommitted-excluded`); a clean tree narrows as before.
 - **`select --add` after a run verified the amended selection with the earlier run (G2).** `select --add` rewrites
   the selection under the same id and code, so a run that never ran the added spec counted. Each run from a test list
   now records `testListSha` (the sha256 of the list as read under the lock, before any 1.56–1.57 spelling-out), and

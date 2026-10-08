@@ -385,13 +385,14 @@ test('run --selection: test list rebuilt from the selection it reads ([id]); ful
   const sel1 = JSON.parse(run(['select', '--base', 'HEAD', '--json']).stdout);
   const lines1 = testListLines(sel1.apps.web);
   assert.ok(lines1.length > 0);
-  assert.equal(run(['select', '--base', 'HEAD', '--no-uncommitted']).code, 0); // replaces selection.json and the list
-  assert.equal(readFileSync(at('.e2e-rail/test-list.web.txt'), 'utf8'), '');
+  // replaces selection.json; leaving the uncommitted edit out of a dirty tree runs the app full (H1), so no list
+  assert.equal(run(['select', '--base', 'HEAD', '--no-uncommitted']).code, 10);
+  assert.equal(existsSync(at('.e2e-rail/test-list.web.txt')), false);
 
   const r = run(['run', '--selection', sel1.id, '--no-lock'], { STUB_PW_ARGV_FILE: argvFile });
   assert.equal(r.code, 0, r.out);
   // G4: the run's own list file (never the shared test-list.<app>.txt another `select` may rewrite), gone afterwards
-  assert.equal(readFileSync(at('.e2e-rail/test-list.web.txt'), 'utf8'), '', 'the current selection\'s list is untouched');
+  assert.equal(existsSync(at('.e2e-rail/test-list.web.txt')), false, 'the current selection (full) still has no list');
   const argv = JSON.parse(readFileSync(argvFile, 'utf8'));
   const handed = argv[argv.indexOf('--test-list') + 1];
   assert.match(handed, new RegExp(`^${at('.e2e-rail/reports').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/${sel1.id}\\.web\\.\\d+\\.test-list\\.txt$`));
@@ -505,6 +506,28 @@ test('C: reselecting keeps the additions recorded with --add (they only widen), 
   assert.ok(fresh.apps.web.specs.some((x) => x.file === 'e2e/order-detail.spec.ts'));
   assert.match(readFileSync(at('.e2e-rail/test-list.web.txt'), 'utf8'), /order-detail\.spec\.ts/);
   assert.equal(ledgerLines(root).at(-1).selectionId, fresh.id);
+}));
+
+test('H1 (review repro): select --no-uncommitted, or select under CI, on a dirty tree runs full, so the uncommitted breakage is run', () => withRepo(({ root, run, at }) => {
+  const head = () => execCapture('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim();
+  const x = head();
+  writeFileSync(at('e2e/orders.spec.ts'), '// Y: orders changed\n', { flag: 'a' });
+  commit(root, ['e2e/orders.spec.ts']);
+  writeFileSync(at('src/features/cart/services/cart.ts'), 'export const addToCart = () => 2;\n'); // b broken, not committed
+  for (const [args, env] of [[['--no-uncommitted'], {}], [[], { CI: 'true' }]]) {
+    const s = run(['select', '--base', x, ...args], env);
+    assert.equal(s.code, 10, s.out);
+    assert.match(s.stdout, /uncommitted-excluded/);
+    const r = run(['run', '--selection', '--no-lock'], { STUB_PW_RC: '1', STUB_PW_REPORT: at('stub/report-fail.json') });
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.stdout, /kind full/);
+    assert.notEqual(run(['verify', '--require', 'selected']).code, 0);
+  }
+  // committed, the same selection narrows
+  commit(root, ['src/features/cart/services/cart.ts']);
+  const s = run(['select', '--base', x, '--no-uncommitted']);
+  assert.equal(s.code, 0, s.out);
+  assert.match(s.stdout, /web\s+partial/);
 }));
 
 test('G1 (review repro): select --head <older commit> runs full, so a later breakage between it and HEAD is run; a reselection diffs to HEAD', () => withRepo(({ root, run, at }) => {

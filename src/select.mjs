@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import path from 'node:path';
 import { appDir, findApp, ledgerDir } from './config.mjs';
 import { matchAny, matchGlob, walk } from './util/glob.mjs';
-import { gitChangedFiles, gitDiffHash, gitHead, gitLocation, gitResolveCommit, gitUncommittedFiles, gitUntrackedHash } from './util/git.mjs';
+import { gitChangedFiles, gitDiffHash, gitHead, gitLocation, gitResolveCommit, gitTreeClean, gitUncommittedFiles, gitUntrackedHash } from './util/git.mjs';
 import { sha256 } from './util/hash.mjs';
 import { newId } from './util/id.mjs';
 import { loadTypeScript } from './util/ts.mjs';
@@ -162,8 +162,8 @@ function narrow(config, app, p, c) {
 // `changedFiles`: paths relative to config.root, or null when the change is unknown (every app runs in full).
 // `ctx.forApp(app)` → { index, graph, entries, unresolvedEntries, main }, called only for apps that need narrowing.
 // `app`: compute that app only (other apps' files are not its business; shared/unknown-root still widen it).
-// `full`: a reason that runs every app in full whatever changed (select's `head-not-HEAD:<ref>`).
-export async function computeSelection({ config, changedFiles, base = null, head = 'HEAD', includeUncommitted = true, ctx, app = null, full = null }) {
+// `full`: reasons that run every app in full whatever changed (select's `head-not-HEAD:<ref>`, `uncommitted-excluded`).
+export async function computeSelection({ config, changedFiles, base = null, head = 'HEAD', includeUncommitted = true, ctx, app = null, full = [] }) {
   const targets = app ? [findApp(config, app)] : config.apps;
   const sel = { id: newId('sel'), createdAt: new Date().toISOString(), base, head, includeUncommitted, changedFiles, codeId: codeIdOf(config), apps: {} };
   const per = new Map(targets.map((a) => [a.name, { mode: 'partial', reasons: [], rootDir: null, specs: new Map(), unmappedIncluded: 0, changedFiles: [], spec: [], src: [] }]));
@@ -173,7 +173,7 @@ export async function computeSelection({ config, changedFiles, base = null, head
   };
   const widenAll = (reason) => { for (const name of per.keys()) widen(name, reason); };
 
-  if (full) widenAll(full);
+  for (const reason of full) widenAll(reason);
   if (changedFiles === null) widenAll('no-base');
   for (const file of new Set(changedFiles ?? [])) {
     const c = classifyFile(config, file);
@@ -226,12 +226,18 @@ function appContext({ config, ts }) {
 // file outside the config root becomes `../…` and classifies as unknown-root (R39). A selection runs as a --test-list,
 // so an app whose Playwright has none is refused first (D). G1: a run always tests the work tree, and the commits
 // between a `head` other than HEAD and HEAD are part of it, so such a selection runs every app in full
-// (`head-not-HEAD:<ref>`); only a HEAD-based selection can narrow.
+// (`head-not-HEAD:<ref>`); only a HEAD-based selection can narrow. H1: for the same reason, uncommitted work left out
+// (`--no-uncommitted`, or under CI by default) of a tree that has some still runs, so every app runs in full
+// (`uncommitted-excluded`); a clean tree loses nothing by leaving it out.
 export async function select({ config, ts, base, head = 'HEAD', includeUncommitted = !inCI(), app }) {
   for (const a of app ? [findApp(config, app)] : config.apps) assertPlaywrightSupported(appDir(config, a));
   const loc = gitLocation(config.root);
   const headCommit = loc ? gitResolveCommit(config.root, head) : null;
-  const full = headCommit && headCommit !== gitHead(config.root) ? `head-not-HEAD:${head}` : null;
+  const ledger = ledgerRel(config);
+  const full = [
+    ...(headCommit && headCommit !== gitHead(config.root) ? [`head-not-HEAD:${head}`] : []),
+    ...(loc && !includeUncommitted && !gitTreeClean(config.root, ledger ? [`${ledger}/`] : []) ? ['uncommitted-excluded'] : []),
+  ];
   let changed = loc ? gitChangedFiles(config.root, base, head) : null;
   if (changed !== null && includeUncommitted) {
     const uncommitted = gitUncommittedFiles(config.root);

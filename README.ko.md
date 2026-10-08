@@ -84,6 +84,7 @@ codex plugin add e2e-rail@e2e-rail-codex
 | 7 | 그 밖의 앱 파일 | 그 앱 전수(`app-other:<file>`) |
 | – | base 없음, 또는 git 이 diff 를 못 냄 | 전 앱 전수(`no-base`) |
 | – | `--head <ref>` 가 HEAD 가 아닌 커밋 | 전 앱 전수(`head-not-HEAD:<ref>`): 실행은 작업 트리를 시험하므로 `<ref>` 뒤의 커밋도 포함된다 |
+| – | 미커밋 변경이 있는 트리에서 그것을 뺀 경우(`--no-uncommitted`, 또는 `CI` 아래) | 전 앱 전수(`uncommitted-excluded`): 실행은 그 변경도 시험한다 |
 
 6행에서는 import 그래프가 변경 파일에서 위로 올라가 닿는 라우트 엔트리를 찾는다. spec 은 그 라우트가 닿은 라우트와
 맞거나(`route:<route> ← <file>`), `page.route()` 목이 변경 파일의 API 리터럴과 맞거나(`api:<glob> ← <literal>`),

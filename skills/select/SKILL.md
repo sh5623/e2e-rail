@@ -26,7 +26,7 @@ pnpm exec e2e-rail select --app <app> --base <sha>
 ```
 Exit 0 = every covered app is partial · 10 = some app runs in full · 1 error · 2 usage. Locally, uncommitted and
 untracked files are included (`+ uncommitted` in the header line); `--no-uncommitted` leaves them out; under `CI` they
-are out by default. Output: the table `app  mode  specs  unmapped  reasons`, then `.e2e-rail/selection.json` (per app:
+are out by default — on a tree that has any, every app then runs full (`uncommitted-excluded`). Output: the table `app  mode  specs  unmapped  reasons`, then `.e2e-rail/selection.json` (per app:
 `mode`, `specs[].file`, `specs[].projects`, `specs[].reasons`, `changedFiles`) and, for a partial app,
 `.e2e-rail/test-list.<app>.txt` (lines `[<project>] › <spec path from Playwright's rootDir>`).
 
@@ -35,7 +35,8 @@ Reasons on a selected spec: `spec-self:<file>` · `route:<route> ← <file>` · 
 `added: <reason>`.
 
 A full app names why. Whatever the script cannot attribute widens, never narrows: `no-base` ·
-`head-not-HEAD:<ref>` (`--head` other than HEAD: a run tests the work tree) · `shared:<file>` ·
+`head-not-HEAD:<ref>` (`--head` other than HEAD: a run tests the work tree) · `uncommitted-excluded` (uncommitted work
+left out, yet the run tests it) · `shared:<file>` ·
 `unknown-root:<file>` (outside every app root or outside the config root: every app runs in full) ·
 `tier-full:<glob>` · `support:<file>` · `app-other:<file>` · `spec-unindexed:<file>` · `adapter-unresolved:<…>` ·
 `graph-unresolved:<file>` (also when any internal import does not resolve) · `graph-shell:<file>` (the change

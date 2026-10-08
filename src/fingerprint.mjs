@@ -5,7 +5,7 @@ import { codeIdOf, ledgerRel } from './select.mjs';
 import { sha256, hashFiles } from './util/hash.mjs';
 import { DEFAULT_SKIP, walk } from './util/glob.mjs';
 import { execCapture } from './util/exec.mjs';
-import { gitDiffHead, gitHead, gitLocation, gitTracked, gitUncommittedFiles, gitUntracked } from './util/git.mjs';
+import { gitDiffHead, gitHead, gitLocation, gitTracked, gitUncommittedFiles, gitUntracked, treeIsClean } from './util/git.mjs';
 import { playwrightVersion, toAppRel } from './util/playwright.mjs';
 
 // The fingerprint (spec §7) names exactly what a run tested: commit + uncommitted diff + untracked files + config +
@@ -113,6 +113,6 @@ export function computeFingerprint({ config, app, mode }) {
   const id = sha256(JSON.stringify({ head, diff, untracked, cfg, playwright, dist }));
   // B: the tree is exactly HEAD (no tracked change, no untracked non-ignored file outside the ledger dir). Derived from
   // diff and untracked, so not part of `id`. Only a clean pass may name HEAD as verified (last-green, verify's base).
-  const clean = tracked.ok && tracked.text === '' && untrackedFiles.length === 0;
+  const clean = treeIsClean(tracked, untrackedFiles);
   return { id, codeId, head, diff, untracked, config: cfg, playwright, dist, clean };
 }

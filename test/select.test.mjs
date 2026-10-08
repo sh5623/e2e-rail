@@ -450,9 +450,38 @@ test('select: base..head plus uncommitted work, TypeScript loaded per app, codeI
     assert.equal(sel.apps.web.mode, 'partial');
     assert.deepEqual(files(sel), ['e2e/cart.spec.ts', 'e2e/orders.spec.ts', 'e2e/smoke.spec.ts']);
     assert.equal(sel.codeId, codeIdOf(config));
+    // H1: the uncommitted edit is left out of the diff but would run: the app runs full
     const committed = await select({ config, base: 'HEAD', includeUncommitted: false });
     assert.deepEqual(committed.changedFiles, []);
-    assert.deepEqual(files(committed), []);
+    assert.deepEqual([committed.apps.web.mode, committed.apps.web.reasons], ['full', ['uncommitted-excluded']]);
+  } finally { cleanup(); }
+});
+
+test('H1: leaving uncommitted work out of a dirty tree runs every app full (uncommitted-excluded); a clean tree still narrows', async () => {
+  const { root, config, cleanup } = await setup();
+  try {
+    const git = (...args) => { const r = execCapture('git', args, { cwd: root }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+    const x = git('rev-parse', 'HEAD');
+    write(root, 'src/components/Table.ts', 'export const Table = (rows: unknown[]) => rows.length + 1;\n'); // Y: a changed
+    git('add', '--', 'src/components/Table.ts'); git('commit', '-qm', 'Y');
+    // clean tree: the commit alone, narrowed
+    const clean = await select({ config, base: x, includeUncommitted: false });
+    assert.equal(clean.apps.web.mode, 'partial');
+    assert.deepEqual(clean.changedFiles, ['src/components/Table.ts']);
+    // e2e-rail's own ledger and ignored files keep it clean
+    write(root, '.e2e-rail/ledger.jsonl', '{}\n'); write(root, 'test-results/x.txt', 'x');
+    assert.equal((await select({ config, base: x, includeUncommitted: false })).apps.web.mode, 'partial');
+    // b broken without committing (tracked edit), or a new untracked file: left out of the diff, yet in the run
+    for (const [rel, text] of [['src/features/cart/services/cart.ts', 'export const addToCart = () => 2;\n'], ['src/features/cart/extra.ts', 'export {};\n']]) {
+      write(root, rel, text);
+      const sel = await select({ config, base: x, includeUncommitted: false });
+      assert.deepEqual([sel.apps.web.mode, sel.apps.web.reasons], ['full', ['uncommitted-excluded']], rel);
+      assert.deepEqual(sel.changedFiles, ['src/components/Table.ts'], 'the diff itself still leaves it out');
+      git('checkout', '--', '.'); git('clean', '-fdq', '--', 'src');
+    }
+    // with uncommitted work included, the same dirty tree narrows as before
+    write(root, 'src/features/cart/services/cart.ts', 'export const addToCart = () => 2;\n');
+    assert.equal((await select({ config, base: x, includeUncommitted: true })).apps.web.mode, 'partial');
   } finally { cleanup(); }
 });
 
