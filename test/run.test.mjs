@@ -650,11 +650,14 @@ test('D: Playwright 1.56–1.57 match a test-list line only on a whole title pat
       const list = path.join(root, 'mine.txt');
       const text = '# a file, a file in one project, a title path in every project, a file that is gone\n[chromium] › orders.spec.ts\n[mobile-chrome] › cart.spec.ts\ncart.spec.ts › adds to cart\n[chromium] › gone.spec.ts\n';
       writeFileSync(list, text);
+      const copy = path.join(root, 'handed.txt');
+      process.env.STUB_PW_LIST_COPY = copy; // the spelled-out list is deleted after the run (H4); the stub keeps a copy
       const { rc, entry } = await runTests({ config, app, testList: list, workers: 1, lock: false, selectionId: 'sel-d' });
       const given = handedList(argvFile);
       assert.notEqual(given, list);
       assert.equal(given, path.join(root, '.e2e-rail/reports', `${entry.id}.test-list.txt`));
-      assert.equal(readFileSync(given, 'utf8'), [
+      assert.equal(existsSync(given), false, 'H4: deleted after the run');
+      assert.equal(readFileSync(copy, 'utf8'), [
         '[chromium] › orders.spec.ts › lists orders', '[mobile-chrome] › cart.spec.ts › adds to cart',
         '[chromium] › cart.spec.ts › adds to cart', '[chromium] › gone.spec.ts', '',
       ].join('\n'));
@@ -669,18 +672,20 @@ test('D: Playwright 1.56–1.57 match a test-list line only on a whole title pat
       const { files } = planShards({ config, app, count: 1 });
       const shard = await runTests({ config, app, shard: { index: 1, count: 1 }, testList: files[0], workers: 1, lock: false });
       assert.equal(shard.rc, 0);
-      assert.equal(readFileSync(handedList(argvFile), 'utf8'), [
+      assert.equal(existsSync(handedList(argvFile)), false);
+      assert.equal(readFileSync(copy, 'utf8'), [
         '[chromium] › cart.spec.ts › adds to cart', '[mobile-chrome] › cart.spec.ts › adds to cart', '[chromium] › order-detail.spec.ts › shows one order',
         '[chromium] › orders.spec.ts › lists orders', '[chromium] › smoke.spec.ts › boots', '',
       ].join('\n'));
     });
+    delete process.env.STUB_PW_LIST_COPY;
     await withRepo(async ({ root, config, app, argvFile }) => {
       setStubVersion(root, '1.58.0'); // from 1.58.0 a line may name a file or a describe: the list goes as written
       const list = writeList(root);
       assert.equal((await runTests({ config, app, testList: list, workers: 1, lock: false })).rc, 0);
       assert.equal(handedList(argvFile), list);
     });
-  } finally { error.mock.restore(); }
+  } finally { error.mock.restore(); delete process.env.STUB_PW_LIST_COPY; }
 });
 
 test('R50: lockClass overrides the derived lock class; an explicit heavy waits for a running light to finish', async () => {

@@ -164,7 +164,7 @@ selection, a shard plan or `--test-list <file>`) whose list matches no test is r
 `failed: test list matched no tests`) although Playwright exits 0 there; so is one with a line that matches nothing
 (`failed: test list line matched no tests: <line>`), unless the run is filtered (narrowed on purpose).
 On Playwright 1.56–1.57, whose `--test-list` matches a line only on a whole title path, e2e-rail lists the tests
-first and hands Playwright one such line per test the list covers (`.e2e-rail/reports/<run-id>.test-list.txt`); the
+first and hands Playwright one such line per test the list covers (`.e2e-rail/reports/<run-id>.test-list.txt`, deleted after the run); the
 list itself, and the check above, stay as written.
 `run --selection` on a selection computed for other code (files changed since `select`), or made up to a head that is
 not HEAD (`selection <old> was made up to <head>, not HEAD — …`), computes it again from the

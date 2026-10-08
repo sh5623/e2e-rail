@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { constants } from 'node:os';
 import path from 'node:path';
 import { appDir, ledgerDir, runEnv } from './config.mjs';
@@ -351,6 +351,8 @@ export async function runTests({
   };
   for (const s of SIGNALS) process.on(s, onSignal);
   let held = null;
+  let handed = testList; // what Playwright gets in place of the test list (D)
+  let spelled = null; // the spelled-out copy runTests wrote, deleted after the run (H4)
   try {
     if (lock) {
       held = await acquire({
@@ -383,9 +385,11 @@ export async function runTests({
     const listAbs = testList ? path.resolve(dirAbs, testList) : null;
     const listText = listAbs ? readListText(listAbs) : null;
     const testListSha = listText === null ? null : sha256(listText);
-    const handed = testList && !testListTakesPrefixes(fingerprint.playwright)
-      ? wholeTitleList({ dirAbs, app, mode, listAbs, listText, outAbs: path.join(ledgerDir(config), 'reports', `${id}.test-list.txt`) })
-      : testList;
+    if (testList && !testListTakesPrefixes(fingerprint.playwright)) {
+      const outAbs = path.join(ledgerDir(config), 'reports', `${id}.test-list.txt`);
+      handed = wholeTitleList({ dirAbs, app, mode, listAbs, listText, outAbs });
+      if (handed === outAbs) spelled = outAbs;
+    }
     const spawnArgs = args.map((a, i) => (i > 0 && args[i - 1] === '--test-list' ? handed : a));
     const t0 = Date.now();
     const { status } = await execInherit(process.execPath, [cli, ...spawnArgs, ...forwarded], { cwd: dirAbs, env, onSpawn: track });
@@ -419,6 +423,7 @@ export async function runTests({
     const lastGreen = rc === 0 && kind === 'full' && !filtered ? passGreen(config, app.name, fingerprint) : null;
     return { rc, entry, lastGreen };
   } finally {
+    if (spelled) rmSync(spelled, { force: true });
     held?.release();
     for (const s of SIGNALS) process.removeListener(s, onSignal);
   }

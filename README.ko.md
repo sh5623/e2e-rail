@@ -161,7 +161,7 @@ rc, spec 별 결과, 실패, flaky. 깨끗한 트리에서 필터 없이 통과�
 테스트가 없는 줄이 하나라도 있어도 그렇다(`failed: test list line matched no tests: <line>`). 단 일부러 좁힌(filtered)
 실행은 줄 검사를 하지 않는다. `--test-list` 의 줄을 테스트의 제목 경로 전체로만 맞추는 Playwright 1.56–1.57 에서는
 e2e-rail 이 먼저 테스트를 나열해, 목록이 덮는 테스트마다 그런 줄 하나씩을 Playwright 에 넘긴다
-(`.e2e-rail/reports/<run-id>.test-list.txt`). 목록 자체와 위의 검사는 쓰인 그대로다. 다른 코드에 대해 계산된 선택(`select` 뒤에 파일이 바뀜)이나 HEAD 가 아닌
+(`.e2e-rail/reports/<run-id>.test-list.txt`, 실행 뒤 삭제). 목록 자체와 위의 검사는 쓰인 그대로다. 다른 코드에 대해 계산된 선택(`select` 뒤에 파일이 바뀜)이나 HEAD 가 아닌
 head 까지로 만든 선택(`selection <old> was made up to <head>, not HEAD — …`)으로 `run --selection` 을 하면
 같은 base · 미커밋 포함 여부로 HEAD 까지 선택을 다시 계산하고 `selection <old> was for other code — reselected as <new>` 를
 찍은 뒤(`--add` 는 옮겨 오고 `--remove` 는 옮겨 오지 않는다) 새 선택을 돌린다. 새 선택은 실행이 현재 선택을 썼을 때만

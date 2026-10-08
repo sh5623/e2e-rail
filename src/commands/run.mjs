@@ -127,6 +127,10 @@ export default async function run(argv) {
     ({ testList, selectionId, codeId: expectCodeId, own = false } = picked);
   }
 
+  // H3: a signal while waiting for the lock ends the process with process.exit(), past every `finally`: the exit hook
+  // deletes the run's own list then too.
+  const removeOwn = () => { if (own) rmSync(testList, { force: true }); };
+  process.once('exit', removeOwn);
   let result;
   try {
     result = await runTests({
@@ -134,7 +138,8 @@ export default async function run(argv) {
       blob: Boolean(values.blob), lock: !values['no-lock'], build: !values['no-build'], selectionId, expectCodeId, passthrough,
     });
   } finally {
-    if (own) rmSync(testList, { force: true });
+    removeOwn();
+    process.removeListener('exit', removeOwn);
   }
   const { rc, entry, lastGreen } = result;
   if (!entry) return rc; // refused or the preview build failed: runTests said why, no ledger line

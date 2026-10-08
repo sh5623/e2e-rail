@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ConfigError } from '../src/config.mjs';
+import { acquire } from '../src/lock.mjs';
 import { testListLines } from '../src/select.mjs';
 import { sha256 } from '../src/util/hash.mjs';
 import { execCapture } from '../src/util/exec.mjs';
@@ -479,6 +480,37 @@ test('H2: run --selection reselects up to HEAD when the stored head is not HEAD,
   assert.doesNotMatch(same.stdout, /reselected/);
   assert.equal(run(['verify', '--require', 'selected']).code, 0);
 }));
+
+test('H3: a signal while run --selection waits for the lock still deletes the run\'s own list file', { skip: process.platform === 'win32' }, async () => {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  const lockRoot = mkdtempSync(path.join(tmpdir(), 'e2e-rail-cli-lock-'));
+  const held = await acquire({ dir: lockRoot, cls: 'heavy', pollMs: 20, purpose: 'test' }); // the run waits behind it
+  const lists = () => { try { return readdirSync(path.join(root, '.e2e-rail/reports')).filter((f) => f.endsWith('.test-list.txt')); } catch { return []; } };
+  let child;
+  try {
+    writeFileSync(path.join(root, 'e2e/orders.spec.ts'), '// touched\n', { flag: 'a' });
+    assert.equal(cli(root, ['select', '--base', 'HEAD'], { E2E_RAIL_LOCK_DIR: lockRoot }).code, 0);
+    const { CI: _ci, ...base } = process.env;
+    child = spawn(process.execPath, [bin, 'run', '--selection'], { cwd: root, env: { ...base, E2E_RAIL_LOCK_DIR: lockRoot }, stdio: ['ignore', 'ignore', 'pipe'] });
+    let err = '';
+    child.stderr.on('data', (d) => { err += d; });
+    const exited = new Promise((resolve) => child.on('exit', (code) => resolve(code)));
+    for (const t0 = Date.now(); !/waiting for the light lock/.test(err);) {
+      if (Date.now() - t0 > 15_000) throw new Error(`never waited for the lock:\n${err}`);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.equal(lists().length, 1, 'its list file exists while it waits');
+    child.kill('SIGINT');
+    assert.equal(await exited, 130, err);
+    assert.deepEqual(lists(), [], 'deleted on the way out');
+    assert.deepEqual(ledgerLines(root), [], 'nothing ran');
+  } finally {
+    child?.kill('SIGKILL');
+    held.release();
+    rmSync(lockRoot, { recursive: true, force: true });
+    cleanup();
+  }
+});
 
 test('G3: run --selection <older id> reselects into selections/<new>.json only; the current selection and its decisions stay', () => withRepo(({ root, run, at }) => {
   writeFileSync(at('e2e/orders.spec.ts'), '// touched\n', { flag: 'a' });

@@ -15,7 +15,7 @@ import { readRuns } from '../../src/ledger.mjs';
 import { codeIdOf } from '../../src/select.mjs';
 import { verify } from '../../src/verify.mjs';
 import { execCapture } from '../../src/util/exec.mjs';
-import { flattenSuites, listTests, playwrightVersion, testListTakesPrefixes } from '../../src/util/playwright.mjs';
+import { flattenSuites, listTests, playwrightVersion } from '../../src/util/playwright.mjs';
 
 const skip = process.env.E2E_RAIL_CONTRACT ? false : 'set E2E_RAIL_CONTRACT=1 (npm run test:contract) to run the real-Playwright contract test';
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -82,9 +82,8 @@ test('real playwright: --list paths and rootDir, --test-list line format, JSON r
     assert.deepEqual(rows(entry), [['e2e/a.spec.ts', 'chromium', 'passed']]);
     assert.deepEqual(entry.failures, []);
     // D: Playwright 1.56–1.57 match a line only on a whole title path; there the run is handed the list spelled out
-    const handed = path.join(root, '.e2e-rail/reports', `${entry.id}.test-list.txt`);
-    if (testListTakesPrefixes(playwrightVersion(root))) assert.equal(existsSync(handed), false);
-    else assert.equal(readFileSync(handed, 'utf8'), '[chromium] › a.spec.ts › a runs\n');
+    // (the file-level line above ran there too) and the spelled-out file is gone after the run (H4)
+    assert.equal(existsSync(path.join(root, '.e2e-rail/reports', `${entry.id}.test-list.txt`)), false);
 
     // The JSON report the ledger line was parsed from: config.rootDir and suites[].file are what flattenSuites expects.
     const report = reportOf(root, entry);
