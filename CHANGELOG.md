@@ -55,7 +55,9 @@ never presented as a verification it is not, and nothing narrows by guessing.
   (1.58.0 made it a prefix), so the file-level lines e2e-rail writes matched nothing there. On those versions a run
   lists the tests under the lock and hands Playwright one whole-title line per test the list covers
   (`.e2e-rail/reports/<run-id>.test-list.txt`); the list, the ledger's `command` and the empty-list check stay as
-  written. CI runs the contract suite on 1.56.0 too.
+  written. CI runs the contract suite on 1.56.0 too. Limit: there a title that holds `›` or starts or ends with a
+  space cannot be spelled as a line, so a spec with such a test fails every list run and a shard plan holding it
+  never completes; Playwright ≥ 1.58 is recommended.
 
 ### Docs
 
