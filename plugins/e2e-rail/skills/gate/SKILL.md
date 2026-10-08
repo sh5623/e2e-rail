@@ -40,8 +40,8 @@ The exit code is Playwright's. The summary line is the record:
 - `failed: test list matched no tests` or `failed: test list line matched no tests: <line>` (stderr:
   `e2e-rail: test list matched no tests — check paths are relative to Playwright rootDir`) — the list ran nothing, or
   some of it did not run (a renamed or deleted spec): rc 1, `FAILED`. Select again before you run again. On
-  Playwright 1.56–1.57 a test whose title holds `›` or starts or ends with a space fails this way every time (a list
-  line cannot spell it): report it and recommend Playwright ≥ 1.58.
+  Playwright 1.56–1.57 a test whose title holds `›` or a line break, starts or ends with a space, or is empty fails
+  this way every time (a list line cannot spell it): report it and recommend Playwright ≥ 1.58.
 - `<app>: selection <id> runs this app in full (…); running the full suite` — the run is `kind full`.
 - `selection <old> was for other code — reselected as <new>` (or `… was made up to <head>, not HEAD — …`) — files
   changed after `select`, or it was made up to another head; the run used the new selection (its `--add`s carried

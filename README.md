@@ -328,8 +328,8 @@ modules `playwright.config.ts` imports. An edit to such a module still moves `he
 `verify` is stale, and `differing` names those, not `config`). A gitignored file it reads (an env file, for example) is not covered at all:
 run the suite again after changing one, since `verify` cannot see it.
 
-On Playwright 1.56–1.57 a `--test-list` line has to spell a test's whole title path, and a title that holds `›` or
-starts or ends with a space cannot be spelled. A spec with such a test never runs from a list: every selected run of
+On Playwright 1.56–1.57 a `--test-list` line has to spell a test's whole title path, and a title that holds `›` or a
+line break, starts or ends with a space, or is empty cannot be spelled. A spec with such a test never runs from a list: every selected run of
 it fails (`failed: test list line matched no tests: <line>`), and a shard plan that holds it never completes. Use
 Playwright ≥ 1.58, where a line names the file, or rename the test.
 

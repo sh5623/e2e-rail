@@ -170,6 +170,11 @@ test('G5: on Playwright 1.56–1.57 a title a list line cannot spell is a docume
     assert.match(text, /1\.56–1\.57/, where);
     assert.match(text, /`›`/, where);
     assert.match(text, /≥ 1\.58/, where);
+    // H6: every title `spellable` rejects: `›`, leading or trailing spaces, empty, a line break
+    if (where.startsWith('README.ko')) { assert.match(text, /빈 제목/, where); assert.match(text, /줄바꿈/, where); } else {
+      assert.match(text, /empty/, where);
+      assert.match(text, /line break/, where);
+    }
   }
 });
 
