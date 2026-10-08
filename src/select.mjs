@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { appDir, findApp, ledgerDir } from './config.mjs';
-import { LAST_GREEN, lastGreenHead } from './ledger.mjs';
+import { LAST_GREEN, lastGreenRun } from './ledger.mjs';
 import { matchAny, matchGlob, walk } from './util/glob.mjs';
 import { gitChangedFiles, gitDiffHash, gitHead, gitLocation, gitResolveCommit, gitTreeClean, gitUncommittedFiles, gitUntrackedHash } from './util/git.mjs';
 import { sha256 } from './util/hash.mjs';
@@ -164,10 +164,14 @@ function narrow(config, app, p, c) {
 // `ctx.forApp(app)` → { index, graph, entries, unresolvedEntries, main }, called only for apps that need narrowing.
 // `app`: compute that app only (other apps' files are not its business; shared/unknown-root still widen it).
 // `full`: reasons that run every app in full whatever changed (select's `head-not-HEAD:<ref>`, `uncommitted-excluded`).
-// `base`: the commit the change was diffed from (select stores its full id); `baseRef`: the base as it was given.
-export async function computeSelection({ config, changedFiles, base = null, baseRef = base, head = 'HEAD', includeUncommitted = true, ctx, app = null, full = [] }) {
+// `base`: the commit the change was diffed from (select stores its full id); `baseRef`: the base as it was given;
+// `baseRun`: for `last-green`, the ledger run the base came from ({ id, mode }).
+export async function computeSelection({ config, changedFiles, base = null, baseRef = base, baseRun = null, head = 'HEAD', includeUncommitted = true, ctx, app = null, full = [] }) {
   const targets = app ? [findApp(config, app)] : config.apps;
-  const sel = { id: newId('sel'), createdAt: new Date().toISOString(), base, baseRef, head, includeUncommitted, changedFiles, codeId: codeIdOf(config), apps: {} };
+  const sel = {
+    id: newId('sel'), createdAt: new Date().toISOString(), base, baseRef, ...(baseRun && { baseRun }), head, includeUncommitted, changedFiles,
+    codeId: codeIdOf(config), apps: {},
+  };
   const per = new Map(targets.map((a) => [a.name, { mode: 'partial', reasons: [], rootDir: null, specs: new Map(), unmappedIncluded: 0, changedFiles: [], spec: [], src: [] }]));
   const widen = (name, reason) => {
     const p = per.get(name);
@@ -233,9 +237,9 @@ function appContext({ config, ts }) {
 // (`uncommitted-excluded`); a clean tree loses nothing by leaving it out. J1: the base is stored as the commit it
 // resolved to (`base`, a full object id) beside the ref as given (`baseRef`): a reselection diffs from that commit, never
 // from wherever a name such as HEAD or a branch points by then. A ref that names no commit is no base. J2: `last-green`
-// is a keyword, not a ref: the head of the app's last clean full pass under the current verification policy, read from
-// the ledger (lastGreenHead; one app's, so it needs `app` where several are configured). None, or a commit this clone
-// does not have, is no base.
+// is a keyword, not a ref: the head of the app's last clean full pass, in any mode, under the current verification
+// policy, read from the ledger (lastGreenRun; one app's, so it needs `app` where several are configured), and the
+// selection names that run (`baseRun`). None, or a commit this clone does not have, is no base.
 export async function select({ config, ts, base, head = 'HEAD', includeUncommitted = !inCI(), app }) {
   for (const a of app ? [findApp(config, app)] : config.apps) assertPlaywrightSupported(appDir(config, a));
   const loc = gitLocation(config.root);
@@ -246,8 +250,10 @@ export async function select({ config, ts, base, head = 'HEAD', includeUncommitt
     ...(loc && !includeUncommitted && !gitTreeClean(config.root, ledger ? [`${ledger}/`] : []) ? ['uncommitted-excluded'] : []),
   ];
   const baseRef = base || null;
-  const named = baseRef === LAST_GREEN ? lastGreenHead(config, findApp(config, app).name) : baseRef;
+  const green = baseRef === LAST_GREEN ? lastGreenRun(config, findApp(config, app).name) : null;
+  const named = baseRef === LAST_GREEN ? green?.fingerprint.head : baseRef;
   const baseCommit = loc && named ? gitResolveCommit(config.root, named) : null;
+  const baseRun = green && baseCommit ? { id: green.id, mode: green.mode } : null;
   let changed = loc ? gitChangedFiles(config.root, baseCommit, head) : null;
   if (changed !== null && includeUncommitted) {
     const uncommitted = gitUncommittedFiles(config.root);
@@ -257,7 +263,7 @@ export async function select({ config, ts, base, head = 'HEAD', includeUncommitt
     const here = `/${loc.prefix.replace(/\/$/, '')}`;
     changed = [...new Set(changed.map((p) => path.posix.relative(here, `/${p}`)))].sort();
   }
-  return computeSelection({ config, changedFiles: changed, base: baseCommit, baseRef, head, includeUncommitted, ctx: appContext({ config, ts }), app, full });
+  return computeSelection({ config, changedFiles: changed, base: baseCommit, baseRef, baseRun, head, includeUncommitted, ctx: appContext({ config, ts }), app, full });
 }
 
 // J1: a full commit id (SHA-1 or SHA-256 object name), the only base a stored selection can be trusted to reproduce.

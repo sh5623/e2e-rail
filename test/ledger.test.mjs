@@ -1,7 +1,7 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { appendRun, readRuns, ledgerPath, latestFull, completeShardSet, writeLastGreen, readLastGreen, lastGreenHead, VERIFY_POLICY } from '../src/ledger.mjs';
+import { appendRun, readRuns, ledgerPath, latestFull, completeShardSet, writeLastGreen, readLastGreen, lastGreenRun, VERIFY_POLICY } from '../src/ledger.mjs';
 import { ledgerDir, loadConfig } from '../src/config.mjs';
 import { makeTempRepo } from './helpers.mjs';
 
@@ -238,9 +238,12 @@ test('last-green marker is per app, overwritten in place, and empty/missing read
   });
 });
 
-test('J2: lastGreenHead is the head of the newest policy-current, unfiltered, passing full run or complete shard set of a clean tree', async () => {
+test('J2: lastGreenRun is the newest policy-current, unfiltered, passing full run or complete shard set of a clean tree', async () => {
   await withLedger(async (config) => {
     const at = (head, clean = true) => ({ ...fp(`F-${head}`), head, clean });
+    const lastGreenHead = (c, app) => lastGreenRun(c, app)?.fingerprint.head ?? null;
+    const first = appendRun(config, run({ app: 'other', mode: 'preview', fingerprint: at('h0') }));
+    assert.deepEqual(lastGreenRun(config, 'other'), first, 'the run itself, in whatever mode it ran');
     assert.equal(lastGreenHead(config, 'web'), null);
     writeLastGreen(config, 'web', 'marker'); // the file alone names nothing
     assert.equal(lastGreenHead(config, 'web'), null);

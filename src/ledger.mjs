@@ -113,15 +113,16 @@ export function lastFullPass(runs, appName) {
   return best?.run ?? null;
 }
 
-// J2: the commit `select --base last-green` diffs from: the head of the newest passing, unfiltered full run or complete
-// shard set of a clean tree for this app (any mode), recorded under the current verification policy (the rule verify
-// applies to lastVerifiedHead). null when there is none. Read from the ledger, never from the `last-green.<app>` file:
-// 0.1.0 wrote that bare sha for dirty and relaxed passes too, and nothing tells an old one from a current one.
+// J2: the run whose head `select --base last-green` diffs from: the newest passing, unfiltered full run (or the run
+// that completed a shard set) of a clean tree for this app, recorded under the current verification policy (the rule
+// verify applies to lastVerifiedHead), in ANY mode: a selection is not tied to a mode. null when there is none. Read
+// from the ledger, never from the `last-green.<app>` file: 0.1.0 wrote that bare sha for dirty and relaxed passes too,
+// and nothing tells an old one from a current one. `last-green` is a keyword: a ref of that name is passed as its sha.
 export const LAST_GREEN = 'last-green';
-export function lastGreenHead(config, appName) {
+export function lastGreenRun(config, appName) {
   const runs = readRuns(config, { app: appName })
     .filter((r) => passed(r) && !r.filtered && r.fingerprint?.id && r.fingerprint.clean === true && currentPolicy(r));
-  return lastFullPass(runs, appName)?.fingerprint.head ?? null;
+  return lastFullPass(runs, appName);
 }
 
 // Marker of the last head that passed a full verification of a clean tree. Informational since 0.2.1: nothing e2e-rail

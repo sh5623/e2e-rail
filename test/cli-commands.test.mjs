@@ -849,15 +849,24 @@ test('J2: select --base last-green takes the base from the ledger (last clean fu
   assert.equal(current().base, null);
   // the same pass recorded now is the base; a later pass of a newer commit with uncommitted changes does not move it
   assert.equal(run(['run', '--full', '--no-lock']).code, 0);
+  const green = ledgerLines(root).at(-1).id;
   writeFileSync(at('e2e/cart.spec.ts'), '// b changed\n', { flag: 'a' });
   commit(root, ['e2e/cart.spec.ts']);
   writeFileSync(at('e2e/orders.spec.ts'), '// a changed\n', { flag: 'a' });
   assert.equal(run(['run', '--full', '--no-lock']).code, 0);
   const s = run(['select', '--base', 'last-green']);
   assert.equal(s.code, 0, s.out);
-  assert.ok(s.stdout.split('\n').includes(`selection ${current().id} · base ${h0.slice(0, 7)} (last-green)..HEAD + uncommitted · apps: web`), s.stdout);
-  assert.deepEqual([current().base, current().baseRef], [h0, 'last-green']);
+  // the header names the run the base came from, and its mode
+  assert.ok(s.stdout.split('\n').includes(`selection ${current().id} · base ${h0.slice(0, 7)} (last-green: run ${green}, dev)..HEAD + uncommitted · apps: web`), s.stdout);
+  assert.deepEqual([current().base, current().baseRef, current().baseRun], [h0, 'last-green', { id: green, mode: 'dev' }]);
   assert.deepEqual(current().apps.web.specs.map((x) => x.file), ['e2e/cart.spec.ts', 'e2e/orders.spec.ts']);
+  // any mode: a clean preview pass of a newer commit becomes the base, and the header says preview
+  commit(root, ['e2e/orders.spec.ts']);
+  const h1 = execCapture('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim();
+  assert.equal(run(['run', '--full', '--mode', 'preview', '--no-lock']).code, 0);
+  const previewRun = ledgerLines(root).at(-1).id;
+  const p = run(['select', '--base', 'last-green']);
+  assert.ok(p.stdout.split('\n').includes(`selection ${current().id} · base ${h1.slice(0, 7)} (last-green: run ${previewRun}, preview)..HEAD + uncommitted · apps: web`), p.stdout);
 }));
 
 test('B: a full pass or a complete shard merge on a dirty tree says last-green did not move; on a clean tree it moves', () => withRepo(({ root, run, at }) => {
