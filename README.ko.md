@@ -71,7 +71,10 @@ codex plugin add e2e-rail@e2e-rail-codex
 ### 선택 규칙
 
 `pnpm exec e2e-rail select --base <ref>` 는 `<ref>..HEAD` 를 diff 하고(로컬에선 미커밋·untracked 파일 포함,
-`CI` 아래나 `--no-uncommitted` 면 제외) 변경 파일마다 처음 맞는 행으로 분류한다.
+`CI` 아래나 `--no-uncommitted` 면 제외) 변경 파일마다 처음 맞는 행으로 분류한다. 선택은 이름이 아니라 `<ref>` 가
+가리킨 커밋을 저장하므로(머리 줄: `base <sha7> (<ref>)..HEAD`), 나중의 재선택은 HEAD 나 브랜치가 움직인 뒤에도 그
+커밋에서 diff 한다. `--base last-green` 은 base 를 원장에서 가져온다: 현재 검증 정책(아래)으로 기록된, 깨끗한 트리에서
+필터 없이 통과한 그 앱의 마지막 전수 실행(또는 완성된 샤드 세트)의 head. 그런 실행이 없으면 base 도 없다.
 
 | # | 변경 파일 | 결과(이유) |
 | --- | --- | --- |
@@ -82,7 +85,7 @@ codex plugin add e2e-rail@e2e-rail-codex
 | 5 | `specDir` 의 테스트 파일(`*.spec.*` 또는 `*.test.*`) | 그 spec(`spec-self:<file>`). Playwright 가 나열하지 않아 인덱스가 모르는 파일이면 앱 전수(`spec-unindexed:<file>`) |
 | 6 | `srcDir` 아래 | 닿는 spec(아래). 사각지대가 있으면 앱 전수 |
 | 7 | 그 밖의 앱 파일 | 그 앱 전수(`app-other:<file>`) |
-| – | base 없음, 또는 git 이 diff 를 못 냄 | 전 앱 전수(`no-base`) |
+| – | base 없음(주지 않음, 커밋을 가리키지 않는 ref, 그런 통과가 없는 `last-green`), 또는 git 이 diff 를 못 냄 | 전 앱 전수(`no-base`) |
 | – | `--head <ref>` 가 HEAD 가 아닌 커밋 | 전 앱 전수(`head-not-HEAD:<ref>`): 실행은 작업 트리를 시험하므로 `<ref>` 뒤의 커밋도 포함된다 |
 | – | 미커밋 변경이 있는 트리에서 그것을 뺀 경우(`--no-uncommitted`, 또는 `CI` 아래) | 전 앱 전수(`uncommitted-excluded`): 실행은 그 변경도 시험한다 |
 
@@ -114,12 +117,22 @@ API 글롭(`route()` 목), import 하는 소스 파일, support 헬퍼, Playwrig
 Playwright 버전, preview 모드면 빌드된 `dist` 해시. `id` 는 그 전부이고, `codeId` 는 head·diff·untracked 로 선택과
 실행을 짝짓는다. `clean`(`id` 에는 들어가지 않는다)은 작업 트리가 HEAD 그 자체였는지, 즉 추적 파일 변경도 원장 디렉터리
 밖의 untracked(무시되지 않은) 파일도 없었는지를 말한다. `.e2e-rail/ledger.jsonl` 에는 실행 1회가 append-only 한 줄로
-남는다: `kind`(`full` · `selected` · `rerun` · `shard`), `mode`, 지문, `testListSha`(읽은 test list 의 sha256), shard,
-workers, `filtered`, `shadowed`, 락 시각,
-rc, spec 별 결과, 실패, flaky. 깨끗한 트리에서 필터 없이 통과한 전수 실행은 자기 head 를
-`.e2e-rail/last-green.<app>` 에 쓰고, 이것이 다음 선택의 base 가 된다. 깨끗한 트리에서 돈 샤드로 `complete: yes` 를
-찍은 `shard merge` 도 그렇게 쓴다. 미커밋 변경이 있는 상태의 통과는 정확히 그 코드만 검증할 뿐 HEAD 를 검증하지 않는다:
-`last-green not moved: the working tree had uncommitted changes` 를 찍고, `verify` 도 그 head 를 base 로 내놓지 않는다.
+남는다: `policy`, `kind`(`full` · `selected` · `rerun` · `shard`), `mode`, 지문, `testListSha`(읽은 test list 의
+sha256), shard, workers, `filtered`, `shadowed`, 락 시각, rc, spec 별 결과, 실패, flaky. 깨끗한 트리에서 필터 없이
+통과한 전수 실행(또는 깨끗한 트리에서 돈 샤드로 `complete: yes` 를 찍은 `shard merge`)이 `select --base last-green` 이
+diff 하는 출발점이다. 그 실행은 자기 head 를 `.e2e-rail/last-green.<app>` 에도 쓰지만 참고용일 뿐이다: e2e-rail 이
+안내하는 어떤 것도 더는 그 파일을 읽지 않는다(0.1.0 은 미커밋·완화 통과에도 그 파일을 썼고, 맨 sha 한 줄로는 어느 것인지
+알 수 없다). 미커밋 변경이 있는 상태의 통과는 정확히 그 코드만 검증할 뿐 HEAD 를 검증하지 않는다:
+`last-green not moved: the working tree had uncommitted changes` 를 찍고, `verify` 도 `--base last-green` 도 그 head 를
+base 로 내놓지 않는다.
+
+`policy` 는 그 줄이 기록된 검증 정책이다(0.2.1 부터 2. 무엇을 검증으로 치는지가 바뀔 때만 오른다). `verify`,
+`shadow record`, `shard merge`, `select --base last-green` 은 현재 정책의 줄만 센다. 지문은 e2e-rail 자신의 규칙을
+담지 않기 때문이다: `--ignore-snapshots` 통과를 필터 없음으로 기록한 0.1.0 줄도 자기 코드와는 여전히 맞는다. 이 코드와
+맞는 것이 그런 줄뿐이면 `verify` 는
+`stale: run <id> was recorded under an older e2e-rail verification policy (<n|none> < 2); run it again` 을 찍는다
+(`--json`: `rejected: { runId, why: 'policy' }`). 그래서 e2e-rail 을 올리면 이전 줄은 한 번 무효가 된다: 전수를 다시
+돌려라. `measure` 와 `shard plan` 은 그 줄의 소요 시간을 계속 쓴다.
 
 `verify` 는 원장으로 «정확히 이 코드가 통과했는가» 에 답한다. 이 앱 · 이 모드 · 이 지문 · 통과 · 필터 없음인 실행만
 센다. `--require full` 은 전수 실행이나 완성된 샤드 세트를, `--require selected` 는 `run --selection` 으로 만든 선택
@@ -136,7 +149,7 @@ rc, spec 별 결과, 실패, flaky. 깨끗한 트리에서 필터 없이 통과�
 | --- | --- | --- |
 | `init` | `--force` | `e2e-rail.config.mjs` 작성 · `.gitignore` 줄 · 제안 스크립트 · 0 |
 | `map` | `--app <name>` · `--check` · `--explain <spec>` | `app <name>: <n> specs indexed · …` · `--check` 면 `graph:`, `verdict:`, `unmapped: <u>/<n> (<p>%)` · 0 |
-| `select` | `--app <name>` · `--base <ref>` · `--head <ref>` · `--no-uncommitted` · `--json` · `--add <spec>` · `--remove <spec>` · `--reason <text>` | 표 `app  mode  specs  unmapped  reasons` · `selection.json` · `test-list.<app>.txt` · 0 partial · 10 full |
+| `select` | `--app <name>` · `--base <ref>`(또는 `last-green`) · `--head <ref>` · `--no-uncommitted` · `--json` · `--add <spec>` · `--remove <spec>` · `--reason <text>` | 표 `app  mode  specs  unmapped  reasons` · `selection.json` · `test-list.<app>.txt` · 0 partial · 10 full |
 | `run` | `--app <name>` · `--full` · `--selection [id]` · `--test-list <file>` · `--last-failed` · `--mode dev\|preview` · `--workers N` · `--project <name>` · `--shard i/n` · `--blob` · `--no-lock` · `--no-build` · `-- <playwright args>` | `run-id <id> · kind <kind> · rc <rc> · <ms>ms · failures <n>` · `failed:` 줄 · `filtered: …` · `shadowed: …` · Playwright 종료 코드(test list 가 아무것도 맞히지 못하면 1) |
 | `verify` | `--app <name>` · `--mode dev\|preview` · `--require full\|selected` · `--max-age <min>` · `--json` | `verified: …` 0 · `stale: …` 20 · `insufficient: …` 21 |
 | `shadow` | `record --run <run-id> [--app <name>]` · `status` · `promote` · `demote` | `shadow: <run-id> hit\|miss\|trivial\|unpaired · streak <s>/<n>` · `trust <t> · streak <s>/<n> · promotable <yes\|no>` · 0 |
@@ -166,7 +179,10 @@ e2e-rail 이 먼저 테스트를 나열해, 목록이 덮는 테스트마다 그
 HEAD 가 아닌 head 까지로 만들어졌거나(`selection <old> was made up to <head>, not HEAD — reselected as <new>`), 미커밋
 변경이 있는 트리에서 그것을 뺐으면(`selection <old> left out uncommitted work in a tree that is not clean — reselected as <new>`)
 같은 base · 미커밋 포함 여부로 HEAD 까지 선택을 다시 계산해(`--add` 는 옮겨 오고 `--remove` 는 옮겨 오지 않는다) 새 선택을 돌린다. 새 선택은 실행이 현재 선택을 썼을 때만
-현재 선택이 된다(다른 선택을 `run --selection <id>` 로 돌리면 `selections/<new>.json` 만 쓴다). 선택 실행은 자기만의 목록
+현재 선택이 된다(다른 선택을 `run --selection <id>` 로 돌리면 `selections/<new>.json` 만 쓴다). 같은 base 란 선택이
+저장한 커밋이다. 0.2.0 이하가 쓴 선택은 받은 이름(`HEAD`, 브랜치)을 그대로 저장했고 그 이름은 지금쯤 더 새 커밋을
+가리킬 수 있으므로, base 없이 전수로 다시 선택한다
+(`selection <old> stored its base by name ("<ref>"), which may have moved — reselected in full`). 선택 실행은 자기만의 목록
 파일(`.e2e-rail/reports/<selection>.<app>.<pid>.test-list.txt`, 실행 뒤 삭제)을 Playwright 에 넘긴다. 락을 기다리는 동안 코드가 바뀌면
 `the code changed while waiting for the lock (selection <id> no longer matches); run it again` 으로 멈추고 아무것도
 기록하지 않는다.
@@ -180,7 +196,8 @@ HEAD 가 아닌 head 까지로 만들어졌거나(`selection <old> was made up t
 `pnpm exec e2e-rail shadow record --app <app> --run <run-id>` 를 실행한다. 실행은 같은 `codeId` 의 선택과 짝지어진다.
 `hit`(실패한 spec 이 모두 선택 안에 있음 · 통과한 실행도 hit)은 streak 를 1 올리고, `miss` 는 0 으로 되돌리며 놓친
 spec 을 적는다. `trivial`(선택이 전수)과 `unpaired`(이 코드의 선택 없음)는 streak 를 건드리지 않는다. 필터·재실행·선택·
-샤드 실행, 그리고 실패했는데 기록된 실패가 없는 실행은 거부된다. `shadow status` 가 `promotable yes` 를 찍으면 사람이
+샤드 실행, 실패했는데 기록된 실패가 없는 실행, 그리고 이전 검증 정책으로 기록된 실행
+(`… was recorded under an older e2e-rail verification policy …`)은 거부된다. `shadow status` 가 `promotable yes` 를 찍으면 사람이
 `shadow promote` 를 실행할 수 있다. 자동 승격은 없다. `shadow demote` 는 streak 0 으로 섀도에 되돌린다. 섀도 비용은
 0 이다. 전수는 어차피 돈다.
 
@@ -222,8 +239,9 @@ light 두 자리를 나눠 쓴다. 기다리는 heavy 가 있으면 새 light �
   원장 줄을 이어 붙여 `shard merge` 와 `verify --require full` 을 돌리는 merge 잡. 주석으로 된 변형은 별도 잡에서 샤드를
   계획하고 `.e2e-rail/shards/<app>/` 를 matrix 에 넘긴다.
 - `codebuild-batch.yml` — 같은 모양의 CodeBuild batch `build-graph`. dist · blob 리포트 · 원장 줄을 S3 로 넘긴다.
-- `buildspec-snippet.yml` — 섀도 기간 게이트: `select`, 이어서 `run --full --mode preview`, 이어서 요약 줄에서 뽑은
-  run id 로 `shadow record --run <run-id>`. `.e2e-rail/` 는 빌드 캐시에 남긴다.
+- `buildspec-snippet.yml` — 섀도 기간 게이트: `select --base last-green`(또는 `$E2E_BASE`), 이어서
+  `run --full --mode preview`, 이어서 요약 줄에서 뽑은 run id 로 `shadow record --run <run-id>`. `.e2e-rail/` 는 빌드
+  캐시에 남긴다.
 
 작업 트리에 내려받은 파일은 지문을 바꾸므로, 템플릿은 내려받기를 `$RUNNER_TEMP` 나 임시 디렉터리에, 원장 줄은 지문이
 무시하는 `.e2e-rail/` 에 둔다.

@@ -29,7 +29,8 @@ Prints `shadow: <run-id> <outcome> · streak <s>/<n>`, plus `missed: <spec>` lin
   unchanged. Select on the run's code next time.
 
 Refused with exit 1 and nothing recorded: a run that is not an unfiltered `kind full` (selected, rerun, shard,
-`kind full (filtered)`), or a failed run that recorded no failure (Playwright crashed or a setup step failed).
+`kind full (filtered)`), a failed run that recorded no failure (Playwright crashed or a setup step failed), or a run
+an older e2e-rail recorded (`… was recorded under an older e2e-rail verification policy …`: run it again).
 Recording the same run again changes nothing.
 
 ## 3. Status

@@ -71,7 +71,11 @@ About 30 minutes per repository.
 ### Selection rules
 
 `pnpm exec e2e-rail select --base <ref>` diffs `<ref>..HEAD` (plus uncommitted and untracked files locally; not under
-`CI`, and not with `--no-uncommitted`) and classifies each changed file by the first matching row:
+`CI`, and not with `--no-uncommitted`) and classifies each changed file by the first matching row. The selection
+stores the commit `<ref>` named, not the name (its header reads `base <sha7> (<ref>)..HEAD`), so a later reselection
+diffs from that commit even after HEAD or a branch has moved. `--base last-green` takes the base from the ledger: the
+head of the app's last unfiltered passing full run, or complete shard set, of a clean tree recorded under the current
+verification policy (below); with none, there is no base.
 
 | # | Changed file | Result (reason) |
 | --- | --- | --- |
@@ -82,7 +86,7 @@ About 30 minutes per repository.
 | 5 | a test file (`*.spec.*` or `*.test.*`) in `specDir` | that spec (`spec-self:<file>`); one Playwright does not list (so the index does not know it): app full (`spec-unindexed:<file>`) |
 | 6 | under `srcDir` | the specs it reaches (below); a blind spot runs the app full |
 | 7 | any other file of the app | that app full (`app-other:<file>`) |
-| – | no base, or git cannot diff | every app full (`no-base`) |
+| – | no base (none given, a ref that names no commit, `last-green` with no such pass), or git cannot diff | every app full (`no-base`) |
 | – | `--head <ref>` names a commit other than HEAD | every app full (`head-not-HEAD:<ref>`): a run tests the work tree, commits after `<ref>` included |
 | – | uncommitted work left out (`--no-uncommitted`, or under `CI`) of a tree that has some | every app full (`uncommitted-excluded`): the run tests it anyway |
 
@@ -116,13 +120,23 @@ Each run records a fingerprint: `head`, a hash of the uncommitted `diff`, a hash
 ledger dir), a hash of both configs, the Playwright version and, in preview mode, a hash of the built `dist`. `id`
 covers all of it; `codeId` covers head, diff and untracked files and pairs selections with runs; `clean` (not part of
 `id`) says the tree was HEAD itself: no tracked change and no untracked, non-ignored file outside the ledger dir.
-`.e2e-rail/ledger.jsonl` gets one append-only line per run: `kind` (`full` · `selected` · `rerun` · `shard`), `mode`,
-fingerprint, `testListSha` (the sha256 of the test list it read), shard, workers, `filtered`, `shadowed`, lock times,
-rc, per-spec results, failures and flaky tests. An
-unfiltered passing full run of a clean tree writes its head to `.e2e-rail/last-green.<app>`, the next selection's
-base; so does `shard merge` when it prints `complete: yes` for shards that ran on a clean tree. A pass with
-uncommitted changes verifies that exact code but never its HEAD: it prints
-`last-green not moved: the working tree had uncommitted changes`, and `verify` never offers its head as a base.
+`.e2e-rail/ledger.jsonl` gets one append-only line per run: `policy`, `kind` (`full` · `selected` · `rerun` ·
+`shard`), `mode`, fingerprint, `testListSha` (the sha256 of the test list it read), shard, workers, `filtered`,
+`shadowed`, lock times, rc, per-spec results, failures and flaky tests. An unfiltered passing full run of a clean tree
+(or a `shard merge` that prints `complete: yes` for shards that ran on a clean tree) is what `select --base last-green`
+diffs from. It also writes its head to `.e2e-rail/last-green.<app>`, for information only: nothing e2e-rail documents
+reads that file any more (0.1.0 wrote it for dirty and relaxed passes too, and a bare sha cannot say which). A pass
+with uncommitted changes verifies that exact code but never its HEAD: it prints
+`last-green not moved: the working tree had uncommitted changes`, and neither `verify` nor `--base last-green` ever
+offers its head as a base.
+
+`policy` is the verification policy the line was recorded under (2 since 0.2.1; it changes only when what counts as a
+verification changes). `verify`, `shadow record`, `shard merge` and `select --base last-green` count only lines of the
+current policy, because the fingerprint does not cover e2e-rail's own rules: a 0.1.0 line that recorded an
+`--ignore-snapshots` pass as unfiltered still matches its code. When this code's only match is such a line, `verify`
+prints `stale: run <id> was recorded under an older e2e-rail verification policy (<n|none> < 2); run it again`
+(`--json`: `rejected: { runId, why: 'policy' }`). Upgrading e2e-rail invalidates earlier lines once: run a full pass
+again. `measure` and `shard plan` still read durations from them.
 
 `verify` answers "has exactly this code passed?" from the ledger: only runs of this app, in this mode, with this
 fingerprint, that passed and were not filtered count. `--require full` wants a full run or a complete shard set;
@@ -139,7 +153,7 @@ new run); an ad-hoc `--test-list` run or a `measure workers` run does not count.
 | --- | --- | --- |
 | `init` | `--force` | writes `e2e-rail.config.mjs` · `.gitignore` lines · suggested scripts · 0 |
 | `map` | `--app <name>` · `--check` · `--explain <spec>` | `app <name>: <n> specs indexed · …` · with `--check`: `graph:`, `verdict:`, `unmapped: <u>/<n> (<p>%)` · 0 |
-| `select` | `--app <name>` · `--base <ref>` · `--head <ref>` · `--no-uncommitted` · `--json` · `--add <spec>` · `--remove <spec>` · `--reason <text>` | the table `app  mode  specs  unmapped  reasons` · `selection.json` · `test-list.<app>.txt` · 0 partial · 10 full |
+| `select` | `--app <name>` · `--base <ref>` (or `last-green`) · `--head <ref>` · `--no-uncommitted` · `--json` · `--add <spec>` · `--remove <spec>` · `--reason <text>` | the table `app  mode  specs  unmapped  reasons` · `selection.json` · `test-list.<app>.txt` · 0 partial · 10 full |
 | `run` | `--app <name>` · `--full` · `--selection [id]` · `--test-list <file>` · `--last-failed` · `--mode dev\|preview` · `--workers N` · `--project <name>` · `--shard i/n` · `--blob` · `--no-lock` · `--no-build` · `-- <playwright args>` | `run-id <id> · kind <kind> · rc <rc> · <ms>ms · failures <n>` · `failed:` lines · `filtered: …` · `shadowed: …` · Playwright's exit code (1 when a test list matched nothing) |
 | `verify` | `--app <name>` · `--mode dev\|preview` · `--require full\|selected` · `--max-age <min>` · `--json` | `verified: …` 0 · `stale: …` 20 · `insufficient: …` 21 |
 | `shadow` | `record --run <run-id> [--app <name>]` · `status` · `promote` · `demote` | `shadow: <run-id> hit\|miss\|trivial\|unpaired · streak <s>/<n>` · `trust <t> · streak <s>/<n> · promotable <yes\|no>` · 0 |
@@ -172,7 +186,10 @@ one, when it was computed for other code (files changed since `select`:
 (`selection <old> was made up to <head>, not HEAD — reselected as <new>`), or left uncommitted work out of a tree that
 has some (`selection <old> left out uncommitted work in a tree that is not clean — reselected as <new>`); it carries
 over the `--add`s, not the `--remove`s, and the new selection runs; it becomes the current selection only when the run used
-the current one (`run --selection <id>` of another selection writes `selections/<new>.json` alone). Each selection
+the current one (`run --selection <id>` of another selection writes `selections/<new>.json` alone). The same base is
+the commit the selection stored; a selection written by 0.2.0 or earlier stored the name it was given (`HEAD`, a
+branch), which may name a newer commit by now, so it is reselected with no base, in full
+(`selection <old> stored its base by name ("<ref>"), which may have moved — reselected in full`). Each selection
 run hands Playwright a list file of its own (`.e2e-rail/reports/<selection>.<app>.<pid>.test-list.txt`, deleted
 afterwards). If the code changes while the run waits for the lock,
 it stops with `the code changed while waiting for the lock (selection <id> no longer matches); run it again` and
@@ -187,7 +204,8 @@ At the end of a round: compute `select` on the exact code the integration full r
 `pnpm exec e2e-rail shadow record --app <app> --run <run-id>`. The run is paired with the selection made for the same
 `codeId`: `hit` (every failed spec was selected, so a passing run is a hit) adds one to the streak; `miss` resets it
 and names the missed specs; `trivial` (the selection was full) and `unpaired` (no selection for this code) leave it
-alone. Filtered, rerun, selected and shard runs are refused, and so is a failed run with no recorded failure. When
+alone. Filtered, rerun, selected and shard runs are refused, and so are a failed run with no recorded failure and a
+run recorded under an older verification policy (`… was recorded under an older e2e-rail verification policy …`). When
 `shadow status` prints `promotable yes`, a human may run `shadow promote`; nothing promotes automatically.
 `shadow demote` returns to shadow with streak 0. Shadow mode costs nothing: the full run happens anyway.
 
@@ -232,8 +250,9 @@ In `templates/ci/` (copy them; e2e-rail does not install them):
   variant plans the shards in a job of its own and hands `.e2e-rail/shards/<app>/` to the matrix.
 - `codebuild-batch.yml` — the same shape as a CodeBuild batch `build-graph`, handing dist, blob reports and ledger
   lines over through S3.
-- `buildspec-snippet.yml` — the shadow-period gate: `select`, then `run --full --mode preview`, then
-  `shadow record --run <run-id>` with the run id taken from the summary line; `.e2e-rail/` stays in the build cache.
+- `buildspec-snippet.yml` — the shadow-period gate: `select --base last-green` (or `$E2E_BASE`), then
+  `run --full --mode preview`, then `shadow record --run <run-id>` with the run id taken from the summary line;
+  `.e2e-rail/` stays in the build cache.
 
 A file downloaded into the work tree changes the fingerprint, so the templates put downloads under `$RUNNER_TEMP` or a
 temp dir and ledger lines into `.e2e-rail/`, which the fingerprint ignores.

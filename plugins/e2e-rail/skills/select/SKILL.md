@@ -13,17 +13,23 @@ instead of `pnpm exec e2e-rail`. Without `--app`, `select` covers every app of t
 The base is the last commit that passed a full verification on a clean tree. In this order:
 1. `pnpm exec e2e-rail verify --app <app> --mode <mode>` — `verified:` means this exact code already passed in full:
    nothing to select, report it through `e2e-rail:gate`. A `stale:` line that ends with `last verified head <sha>`:
-   use it. `no full pass of a committed tree yet` (every pass had uncommitted changes): go on to 2.
-2. `cat .e2e-rail/last-green.<app>` — written by every unfiltered passing `run --full` of a clean tree, and by a
-   `shard merge` that printed `complete: yes` for shards run on a clean tree; never by a pass with uncommitted changes.
+   use it. `no full pass of a committed tree yet` (every pass had uncommitted changes), or
+   `run <id> was recorded under an older e2e-rail verification policy` (only an older e2e-rail passed it): go on to 2.
+2. `--base last-green` — e2e-rail reads it from the ledger: the head of the app's last unfiltered passing full run, or
+   `shard merge` set that printed `complete: yes`, of a clean tree, recorded under the current verification policy;
+   never a pass with uncommitted changes. With none it is no base (`no base (last-green: …)`, full). Do not read
+   `.e2e-rail/last-green.<app>` yourself: that file is informational, and one an older e2e-rail wrote may name a
+   dirty or relaxed pass.
 3. The merge-base with the target branch: `git merge-base HEAD origin/main`.
 
 No base → leave `--base` out and accept a full selection. Never pick a base to get a smaller selection.
 
 ## 2. Compute
 ```sh
-pnpm exec e2e-rail select --app <app> --base <sha>
+pnpm exec e2e-rail select --app <app> --base <sha>   # or --base last-green
 ```
+The selection stores the commit the base named (header line `base <sha7> (<ref>)..HEAD`), never the name: later
+commits on HEAD or the branch cannot move it.
 Exit 0 = every covered app is partial · 10 = some app runs in full · 1 error · 2 usage. Locally, uncommitted and
 untracked files are included (`+ uncommitted` in the header line); `--no-uncommitted` leaves them out; under `CI` they
 are out by default — on a tree that has any, every app then runs full (`uncommitted-excluded`). Output: the table `app  mode  specs  unmapped  reasons`, then `.e2e-rail/selection.json` (per app:
@@ -73,5 +79,7 @@ One block per app.
 
 ## 5. Hand off
 `e2e-rail:gate` runs it (`run --selection`). Do not run `playwright test` yourself. If files change after this step,
-`run --selection` selects again from the same base (`selection <old> was for other code — reselected as <new>`) and
-keeps your `--add`s, not your `--remove`s: update the block from the new selection.
+`run --selection` selects again from the same base commit (`selection <old> was for other code — reselected as <new>`)
+and keeps your `--add`s, not your `--remove`s: update the block from the new selection. A selection an older e2e-rail
+wrote kept its base by name; it is reselected in full
+(`selection <old> stored its base by name ("<ref>"), which may have moved — reselected in full`).

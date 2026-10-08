@@ -30,8 +30,9 @@ that has `paths`), keeps only the `adapter.routeFiles` globs that match a file, 
 `test-results/`, `playwright-report/` and `blob-report/` to `.gitignore` where git does not ignore them yet.
 Quote its notes (lines about `tsconfig.json is solution-style …` or `adapter.routeFiles: …`) in your report.
 An existing config is left alone (`e2e-rail.config.mjs exists; left unchanged`). `init --force` overwrites it: only
-when a human asks. It then prints three `package.json` scripts; when the app's config declares `run.preview`, the
-`e2e:run` and `e2e:verify` scripts carry `--mode preview` (verify only matches runs of its own mode).
+when a human asks. It then prints three `package.json` scripts; `e2e:select` takes its base from the ledger
+(`--base last-green`), and when the app's config declares `run.preview`, the `e2e:run` and `e2e:verify` scripts carry
+`--mode preview` (verify only matches runs of its own mode).
 
 ## 3. Review the config with a human
 - `adapter.routeFiles` — the files that hold the route tables. Narrowing needs them with either adapter: without them

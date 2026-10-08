@@ -46,7 +46,8 @@ The exit code is Playwright's. The summary line is the record:
 - `selection <old> was for other code — reselected as <new>` (or `… was made up to <head>, not HEAD — …`, or
   `… left out uncommitted work in a tree that is not clean — …`) — files changed after `select`, it was made up to
   another head, or it left out uncommitted work; the run used the new selection (its `--add`s carried over, not its
-  `--remove`s). Put the new id and its specs in the selection block.
+  `--remove`s). Put the new id and its specs in the selection block. A following `selection <old> stored its base by
+  name ("<ref>"), which may have moved — reselected in full`: an older e2e-rail wrote it; the new one is full.
 - `e2e-rail: the code changed while waiting for the lock (selection <id> no longer matches); run it again` — nothing
   ran or was recorded.
 - `e2e-rail: <build command> failed (rc <n>); Playwright was not started.` — nothing ran or was recorded.
@@ -68,7 +69,8 @@ pnpm exec e2e-rail verify --app <app> --mode <mode> --require full
 - exit 0 `verified: full@<run-id> …` / `verified: shards×<n>@<run-id> …` — a full pass of this code.
 - exit 20 `stale: …` — no passing run for this code: `differing: <fields>` names what moved since the last full pass,
   `nothing verified yet` means nothing ever passed, `no full pass of a committed tree yet` means every pass had
-  uncommitted changes, `dist: not built` means the preview dist is missing. Not a pass.
+  uncommitted changes, `dist: not built` means the preview dist is missing, `run <id> was recorded under an older
+  e2e-rail verification policy (<n|none> < 2); run it again` means only an older e2e-rail passed it. Not a pass.
 - exit 21 `insufficient: this code has only <kinds> run(s); --require full needs …` — expected after a selected run.
   With `--require selected`, `insufficient: the selection's list changed since run <id> (select --add/--remove); run
   --selection again` (or `the selection run <id> was made up to a head other than the one it ran` / `… left out
