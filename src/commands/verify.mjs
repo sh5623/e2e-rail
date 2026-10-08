@@ -20,7 +20,10 @@ function line(res, { app, mode, require, maxAgeMin }) {
     return `verified: ${what}@${res.run.id}${selection} (${ago(res.run.ts)})`;
   }
   if (res.status === 'insufficient') {
-    if (res.listChanged) return `insufficient: the selection's list changed since run ${res.listChanged} (select --add/--remove); run --selection again`;
+    const { runId, why } = res.rejected ?? {};
+    if (why === 'list') return `insufficient: the selection's list changed since run ${runId} (select --add/--remove); run --selection again`;
+    if (why === 'head') return `insufficient: the selection run ${runId} was made up to a head other than the one it ran; run --selection again`;
+    if (why === 'uncommitted') return `insufficient: the selection run ${runId} left out uncommitted work the run included; run --selection again`;
     const wants = require === 'full' ? 'a full run or a complete shard set' : 'a full run, a complete shard set or a selected run from `run --selection`';
     return `insufficient: this code has only ${res.have.join('/')} run(s); --require ${require} needs ${wants}`;
   }
@@ -56,7 +59,7 @@ export default async function verifyCommand(argv) {
       runId: res.run?.id ?? null, kind: res.run?.kind ?? null, selectionId: res.run?.selectionId ?? null,
       shadowed: res.run ? Boolean(res.run.shadowed) : null, shards: res.shards?.map((r) => r.id) ?? null,
       differing: res.differing ?? null, lastVerifiedHead: res.lastVerifiedHead ?? null, have: res.have ?? null,
-      expired: res.expired ?? null, listChanged: res.listChanged ?? null, fingerprint: res.fingerprint,
+      expired: res.expired ?? null, listChanged: res.listChanged ?? null, rejected: res.rejected ?? null, fingerprint: res.fingerprint,
     }, null, 2));
   } else console.log(line(res, { app, mode, require, maxAgeMin }));
   return res.exitCode;

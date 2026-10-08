@@ -5,9 +5,9 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ConfigError } from '../src/config.mjs';
+import { ConfigError, loadConfig } from '../src/config.mjs';
 import { acquire } from '../src/lock.mjs';
-import { testListLines } from '../src/select.mjs';
+import { codeIdOf, testListLines } from '../src/select.mjs';
 import { sha256 } from '../src/util/hash.mjs';
 import { execCapture } from '../src/util/exec.mjs';
 import { makeTempRepo } from './helpers.mjs';
@@ -510,6 +510,63 @@ test('H3: a signal while run --selection waits for the lock still deletes the ru
     rmSync(lockRoot, { recursive: true, force: true });
     cleanup();
   }
+});
+
+test('I1 (review repro): a selection file that left uncommitted work out of a dirty tree is reselected by run --selection, never run as is', () => withRepo(({ root, run, at }) => {
+  writeFileSync(at('e2e/orders.spec.ts'), '// a changed\n', { flag: 'a' });
+  commit(root, ['e2e/orders.spec.ts']);
+  writeFileSync(at('src/features/cart/services/cart.ts'), 'export const addToCart = () => 2;\n'); // b broken, uncommitted
+  // what 0.1.0 `select --base HEAD~1 --no-uncommitted` wrote: the commit only, partial, and this very code's codeId
+  assert.equal(run(['select', '--base', 'HEAD~1']).code, 0);
+  const made = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  const legacy = { ...made, includeUncommitted: false, changedFiles: ['e2e/orders.spec.ts'] };
+  legacy.apps.web = { ...legacy.apps.web, mode: 'partial', specs: made.apps.web.specs.filter((x) => x.file === 'e2e/orders.spec.ts'), reasons: [] };
+  for (const f of ['.e2e-rail/selection.json', `.e2e-rail/selections/${made.id}.json`]) writeFileSync(at(f), JSON.stringify(legacy));
+  const r = run(['run', '--selection', '--no-lock'], { STUB_PW_RC: '1', STUB_PW_REPORT: at('stub/report-fail.json') });
+  assert.equal(r.code, 1, r.out);
+  const freshId = r.stdout.match(new RegExp(`^selection ${made.id} left out uncommitted work in a tree that is not clean — reselected as (sel-\\S+)$`, 'm'))?.[1];
+  assert.ok(freshId, r.stdout);
+  const fresh = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  assert.deepEqual([fresh.id, fresh.apps.web.mode, fresh.apps.web.reasons], [freshId, 'full', ['uncommitted-excluded']]);
+  assert.match(r.stdout, /kind full/);
+  assert.notEqual(run(['verify', '--require', 'selected']).code, 0);
+}));
+
+test('verify names why its own selection no longer vouches for a selection run: another head, or uncommitted work left out', () => withRepo(({ root, run, at }) => {
+  writeFileSync(at('e2e/orders.spec.ts'), '// touched\n', { flag: 'a' }); // dirty
+  assert.equal(run(['select', '--base', 'HEAD']).code, 0);
+  assert.equal(run(['run', '--selection', '--no-lock']).code, 0);
+  const id = ledgerLines(root).at(-1).id;
+  const sel = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  const rewrite = (over) => writeFileSync(at(`.e2e-rail/selections/${sel.id}.json`), JSON.stringify({ ...sel, ...over }));
+  rewrite({ includeUncommitted: false });
+  const u = run(['verify', '--require', 'selected']);
+  assert.equal(u.code, 21, u.out);
+  assert.equal(u.stdout, `insufficient: the selection run ${id} left out uncommitted work the run included; run --selection again\n`);
+  rewrite({ head: 'nope' });
+  const h = run(['verify', '--require', 'selected']);
+  assert.equal(h.stdout, `insufficient: the selection run ${id} was made up to a head other than the one it ran; run --selection again\n`);
+  assert.deepEqual(JSON.parse(run(['verify', '--require', 'selected', '--json']).stdout).rejected, { runId: id, why: 'head' });
+}));
+
+test('run --selection before the first commit: the readable repo error, not a head-mismatch reselection', async () => {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  const lockRoot = mkdtempSync(path.join(tmpdir(), 'e2e-rail-cli-lock-'));
+  try {
+    rmSync(path.join(root, '.git'), { recursive: true, force: true });
+    execCapture('git', ['init', '-q'], { cwd: root }); // HEAD is unborn
+    const config = await loadConfig(root);
+    const sel = {
+      id: 'sel-unborn', head: 'HEAD', base: null, includeUncommitted: true, codeId: codeIdOf(config), changedFiles: [],
+      apps: { web: { mode: 'partial', rootDir: 'e2e', specs: [{ file: 'e2e/orders.spec.ts', projects: ['chromium'], reasons: ['hand-made'] }], reasons: [], added: [], removed: [] } },
+    };
+    mkdirSync(path.join(root, '.e2e-rail/selections'), { recursive: true });
+    for (const f of ['.e2e-rail/selection.json', '.e2e-rail/selections/sel-unborn.json']) writeFileSync(path.join(root, f), JSON.stringify(sel));
+    const r = cli(root, ['run', '--selection', '--no-lock'], { E2E_RAIL_LOCK_DIR: lockRoot });
+    assert.equal(r.code, 1, r.out);
+    assert.doesNotMatch(r.out, /made up to|reselected/);
+    assert.match(r.stderr, /^e2e-rail: the git repository at .* has no commits yet \(HEAD is unborn\)/m);
+  } finally { rmSync(lockRoot, { recursive: true, force: true }); cleanup(); }
 });
 
 test('G3: run --selection <older id> reselects into selections/<new>.json only; the current selection and its decisions stay', () => withRepo(({ root, run, at }) => {

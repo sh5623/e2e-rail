@@ -52,13 +52,17 @@ export function verifiedShardSet({ config, app, mode = 'dev' }) {
 // read (`testListSha`): `select --add` rewrites a selection in place, and a run made before it never ran the addition.
 // H2: and only when the selection's head is the commit the run tested (a 0.1.0 `--head <sha>` selection is not).
 // A missing, unreadable or foreign selection, or a run that recorded no list hash, does not count.
-// Returns 'ok', 'list' (everything holds but the list: H5 says so) or null.
+// I1: and never when the selection left uncommitted work out (`includeUncommitted: false`) of a tree the run found
+// dirty: that work ran without being selected for (whoever wrote the file).
+// Returns 'ok', or why the run's own selection does not vouch for it — 'head', 'uncommitted', 'list' (verify names
+// it, H5) — or null (no selection of this code to speak of).
 function selectionMatches(config, r) {
   if (!/^[\w.-]+$/.test(r.selectionId) || typeof r.testListSha !== 'string') return null;
   try {
     const sel = JSON.parse(readFileSync(path.join(ledgerDir(config), 'selections', `${r.selectionId}.json`), 'utf8'));
     if (typeof sel?.codeId !== 'string' || sel.codeId !== r.fingerprint.codeId || !sel.apps?.[r.app]) return null;
-    if (gitResolveCommit(config.root, sel.head || 'HEAD') !== r.fingerprint.head) return null;
+    if (gitResolveCommit(config.root, sel.head || 'HEAD') !== r.fingerprint.head) return 'head';
+    if (sel.includeUncommitted === false && r.fingerprint.clean === false) return 'uncommitted';
     return sha256(testListText(sel.apps[r.app])) === r.testListSha ? 'ok' : 'list';
   } catch { return null; }
 }
@@ -101,9 +105,14 @@ export function verify({ config, app, mode = 'dev', require = 'full', maxAgeMin 
   const found = settle(recent);
   if (found) return { status: 'verified', exitCode: 0, run: found.run, ...(found.shards && { shards: found.shards }), fingerprint };
   if (recent.length) {
-    // H5: a run from the selection that only lacks the list the selection writes now (`select --add/--remove` since)
-    const moved = require === 'selected' ? [...recent].reverse().find((r) => selectionCheck(config, r) === 'list') : null;
-    return { status: 'insufficient', exitCode: 21, fingerprint, have: [...new Set(recent.map((r) => r.kind))], ...(moved && { listChanged: moved.id }) };
+    // H5, I1: the newest run from a selection of this code that its selection does not vouch for, and why
+    const rejected = require === 'selected'
+      ? [...recent].reverse().map((r) => ({ runId: r.id, why: selectionCheck(config, r) })).find((x) => x.why && x.why !== 'ok')
+      : null;
+    return {
+      status: 'insufficient', exitCode: 21, fingerprint, have: [...new Set(recent.map((r) => r.kind))],
+      ...(rejected && { rejected }), ...(rejected?.why === 'list' && { listChanged: rejected.runId }),
+    };
   }
 
   // `differing` is measured from the latest full pass of any tree; the head offered as a base to narrow from

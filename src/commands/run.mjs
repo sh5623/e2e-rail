@@ -3,8 +3,8 @@ import path from 'node:path';
 import { appDir, findApp, ledgerDir, loadConfig } from '../config.mjs';
 import { LAST_GREEN_DIRTY } from '../ledger.mjs';
 import { filteredBy, runTests } from '../run.mjs';
-import { amendSelection, codeIdOf, readSelection, select, testListLines, testListText, writeSelection } from '../select.mjs';
-import { gitHead, gitResolveCommit } from '../util/git.mjs';
+import { amendSelection, codeIdOf, ledgerRel, readSelection, select, testListLines, testListText, writeSelection } from '../select.mjs';
+import { gitResolveCommit, gitTreeClean } from '../util/git.mjs';
 import { oneOf, parse, positiveInt, printUsage, UsageError } from './_args.mjs';
 
 const OPTIONS = {
@@ -81,9 +81,15 @@ function currentSelectionId(config) {
 async function fromSelection(config, app, id) {
   let sel = readSelection(config, id || undefined);
   if (!sel.apps?.[app.name]) throw new Error(`selection ${sel.id} has no entry for app ${app.name}; run \`e2e-rail select --app ${app.name}\``);
-  // C: made for other code; H2: made up to a head that is not HEAD (a run tests the work tree, G1)
+  // C: made for other code; H2: made up to a head that is not HEAD (a run tests the work tree, G1); I1: it left
+  // uncommitted work out of a tree that has some (the run includes it). Outside git or before the first commit there
+  // is no HEAD to compare with: the run's fingerprint then refuses with a readable error.
+  const headNow = gitResolveCommit(config.root, 'HEAD');
+  const ledger = ledgerRel(config);
   const why = sel.codeId !== codeIdOf(config) ? 'was for other code'
-    : gitResolveCommit(config.root, sel.head || 'HEAD') !== gitHead(config.root) ? `was made up to ${sel.head}, not HEAD` : null;
+    : headNow && gitResolveCommit(config.root, sel.head || 'HEAD') !== headNow ? `was made up to ${sel.head}, not HEAD`
+      : headNow && sel.includeUncommitted === false && !gitTreeClean(config.root, ledger ? [`${ledger}/`] : [])
+        ? 'left out uncommitted work in a tree that is not clean' : null;
   if (why) sel = await reselect(config, sel, { current: !id || id === currentSelectionId(config), why });
   const a = sel.apps[app.name];
   if (a.mode === 'full') {

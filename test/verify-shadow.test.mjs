@@ -158,12 +158,39 @@ test('verify --require selected (H2): a run whose selection names a head other t
     const ran = synth(config, app, { kind: 'selected', selectionId: sel.id, testListSha: listSha(sel) });
     for (const head of [older, 'HEAD~1', 'nope']) {
       write(head);
-      assert.equal(verify({ config, app, require: 'selected' }).status, 'insufficient', head);
+      const v = verify({ config, app, require: 'selected' });
+      assert.equal(v.status, 'insufficient', head);
+      assert.deepEqual(v.rejected, { runId: ran.id, why: 'head' }, head);
     }
     for (const head of [now, 'HEAD']) {
       write(head);
       assert.equal(verify({ config, app, require: 'selected' }).run?.id, ran.id, head);
     }
+  });
+});
+
+test('verify --require selected (I1): a selection that left uncommitted work out never vouches for a run of a dirty tree', async () => {
+  await withRepo(async ({ root, config, app }) => {
+    const write = (sel, over) => writeFileSync(path.join(ledgerDir(config), 'selections', `${sel.id}.json`), JSON.stringify({ ...sel, ...over }));
+    touch(root, 'src/main.ts'); // dirty: the run includes this edit
+    const sel = select(config, app, { specs: [ORDERS] });
+    write(sel, { includeUncommitted: false }); // as `select --no-uncommitted` wrote it before 0.2.0
+    const ran = synth(config, app, { kind: 'selected', selectionId: sel.id, testListSha: listSha(sel) });
+    assert.equal(ran.fingerprint.clean, false);
+    const v = verify({ config, app, require: 'selected' });
+    assert.equal(v.status, 'insufficient');
+    assert.deepEqual(v.rejected, { runId: ran.id, why: 'uncommitted' });
+    for (const includeUncommitted of [true, undefined]) {
+      write(sel, { includeUncommitted });
+      assert.equal(verify({ config, app, require: 'selected' }).run?.id, ran.id, String(includeUncommitted));
+    }
+    // a clean tree loses nothing by leaving uncommitted work out
+    git(root, 'checkout', '--', 'src/main.ts');
+    const cleanSel = select(config, app, { specs: [ORDERS] });
+    write(cleanSel, { includeUncommitted: false });
+    const cleanRun = synth(config, app, { kind: 'selected', selectionId: cleanSel.id, testListSha: listSha(cleanSel) });
+    assert.equal(cleanRun.fingerprint.clean, true);
+    assert.equal(verify({ config, app, require: 'selected' }).run?.id, cleanRun.id);
   });
 });
 
