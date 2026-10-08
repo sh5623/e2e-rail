@@ -375,7 +375,7 @@ test('README.ko.md follows README.md section by section; Limits names the known 
 
 test('F: the release names one version: package, lockfile root, both plugins, the newest CHANGELOG entry, every install ref and the status lines', () => {
   const v = JSON.parse(read('package.json')).version;
-  assert.equal(v, '0.2.0');
+  assert.equal(v, '0.2.1');
   const lock = JSON.parse(read('package-lock.json'));
   assert.equal(lock.version, v);
   assert.equal(lock.packages[''].version, v);

@@ -1,7 +1,7 @@
 {
   "name": "e2e-rail",
   "description": "Change-aware Playwright E2E: select only the specs a change can reach, record every run against a code fingerprint so stale greens are never reused, and shard by measured durations. Skills call the e2e-rail CLI installed in the repo.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": { "name": "Seungho", "email": "seungho5623@gmail.com" },
   "homepage": "https://github.com/sh5623/e2e-rail",
   "repository": "https://github.com/sh5623/e2e-rail",

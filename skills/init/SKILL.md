@@ -11,10 +11,10 @@ From the repository root. npm or yarn repos: `npx e2e-rail` instead of `pnpm exe
 ```sh
 pnpm exec e2e-rail --version
 ```
-A version (`0.2.0`) → installed. Otherwise ask the human first: adding the devDependency edits `package.json` and the
+A version (`0.2.1`) → installed. Otherwise ask the human first: adding the devDependency edits `package.json` and the
 lockfile, and nothing edits `package.json` without a yes. On a yes:
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.2.0
+pnpm add -D github:sh5623/e2e-rail#v0.2.1
 ```
 It needs Node ≥ 20 and borrows the repo's own `@playwright/test` 1.56 or newer and `typescript`; an older
 Playwright is refused (`@playwright/test 1.56.0 or newer is required (found <x>)`): ask the human to upgrade it.

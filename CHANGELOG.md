@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.2.1 — 2026-10-08
+
+Fixes from a second external audit of 0.2.0 (both reproduced with real Playwright 1.63).
+
+### Upgrading
+
+- **Upgrading invalidates every earlier ledger line once.** Lines now carry the verification policy they were
+  recorded under (`policy`, 2), and only current-policy lines verify, pair in `shadow record`, complete a shard set or
+  serve as `--base last-green`. After upgrading, `verify` says
+  `stale: run <id> was recorded under an older e2e-rail verification policy (none < 2); run it again`: re-run a full
+  pass. `measure` and `shard plan` still read durations from the older lines.
+- Replace `--base $(cat .e2e-rail/last-green.<app>)` with `--base last-green` in scripts and CI (init's suggested
+  `e2e:select` script and `templates/ci/buildspec-snippet.yml` now do). The `last-green.<app>` file is still written,
+  for information only; nothing e2e-rail documents reads it any more.
+
+### Fixes
+
+- **A moving ref changed the base of an automatic reselection (J1, P1).** `select` stored `--base` as the string it
+  was given (`HEAD`, a branch), and `run --selection` reselected from that string again: after new commits it named a
+  newer commit, so the commits in between dropped out of the diff (audit scenario `moving-base-ref`: a change that
+  broke b was committed after `select --base HEAD`; the reselection ran a alone and verified as selected). `select`
+  now stores `base` as the full commit id the ref resolves to and `baseRef` as given; a ref that names no commit is no
+  base (full). The header reads `base <sha7> (<ref>)..HEAD`. A reselection diffs from the stored commit; a selection
+  whose base is not a full commit id (0.2.0 and earlier) is reselected with no base, in full:
+  `selection <id> stored its base by name ("<ref>"), which may have moved — reselected in full`.
+- **Ledger lines written under an older verification policy still verified (J2, P2).** The fingerprint covers code,
+  configs, Playwright and dist, but not e2e-rail's own rules: after upgrading only the CLI, a 0.1.0 line that recorded
+  an `--ignore-snapshots` pass as `filtered: false` matched its code and `verify` credited it. `appendRun` stamps
+  `policy: VERIFY_POLICY` (2) on every line, and shadow records carry it. `verify` (full runs, shard sets, selected
+  runs, and the `differing` / `lastVerifiedHead` / `passedBefore` baselines), `shard merge`'s completeness and
+  last-green, and `shadow record` count only lines with `policy` ≥ 2; `verify --json` names the older match as
+  `rejected: { runId, why: 'policy' }`, and `shadow record` refuses it with
+  `run <id> was recorded under an older e2e-rail verification policy (<n|none> < 2); …`.
+- **The last-green file could not tell an old pass from a current one (J2).** 0.1.0 wrote
+  `.e2e-rail/last-green.<app>` for dirty and relaxed passes too, and scripts read that bare sha with `cat`.
+  `select --base last-green` resolves the base from the ledger instead: the head of the app's newest current-policy,
+  unfiltered, passing full run (or complete shard set) of a clean tree, in any mode. None, or a commit the clone does
+  not have, is no base (`no base (last-green: …)`, full). It needs `--app` where several apps are configured.
+
 ## 0.2.0 — 2026-10-08
 
 Fixes from an external audit (each P1 reproduced with real Playwright 1.63). The invariant they restore: a run is
