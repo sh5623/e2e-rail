@@ -123,7 +123,9 @@ test('init detects the playwright config, writes config and gitignore; map --che
   assert.match(cfg, /root: '\.'/);
   assert.match(cfg, /playwrightConfig: 'playwright\.config\.ts'/);
   assert.match(readFileSync(at('.gitignore'), 'utf8'), /\.e2e-rail\//);
-  assert.match(r.stdout, /e2e:select/);
+  // J2: the base comes from the ledger, never from a bare marker file
+  assert.match(r.stdout, /^ {2}"e2e:select": "e2e-rail select --base last-green"$/m);
+  assert.doesNotMatch(r.stdout, /cat \.e2e-rail/);
   assert.match(r.stdout, /^ {2}"e2e:verify": "e2e-rail verify --require full"$/m, 'the template declares no preview build');
   assert.match(r.stdout, /next: e2e-rail map --check/);
   // The template's .tsx route-table globs match nothing here; left in, each would be an adapter `unresolved` (full).
@@ -777,6 +779,11 @@ test('select --app writes only that app and drops other test lists; --app is req
   assert.equal(other.code, 1);
   assert.match(other.stderr, /has no entry for app admin/);
   assert.match(run(['map', '--check']).stdout, /^covered apps: web, admin$/m);
+  // J2: last-green is one app's, so it needs --app here
+  const lastGreen = run(['select', '--base', 'last-green']);
+  assert.equal(lastGreen.code, 1, lastGreen.out);
+  assert.match(lastGreen.stderr, /^e2e-rail: several apps configured \(web, admin\); pass --app <name>\n$/);
+  assert.equal(run(['select', '--base', 'last-green', '--app', 'admin']).code, 10, 'no pass yet: no base, full');
 }));
 
 test('select --add/--remove amend the current selection with a reason; removing only after shadow promote', () => withRepo(({ run, at }) => {
@@ -822,6 +829,35 @@ test('J2 (audit repro legacy-ledger): verify names a matching run recorded under
   // run it again: verified
   assert.equal(run(['run', '--full', '--no-lock']).code, 0);
   assert.match(run(['verify']).stdout, /^verified: full@run-/);
+}));
+
+test('J2: select --base last-green takes the base from the ledger (last clean full pass under the current policy); a bare marker file is no base', () => withRepo(({ root, run, at }) => {
+  const h0 = execCapture('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim();
+  const current = () => JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  // only the marker file, as 0.1.0 also wrote it for a dirty or relaxed pass: nothing reads it any more
+  mkdirSync(at('.e2e-rail'), { recursive: true });
+  writeFileSync(at('.e2e-rail/last-green.web'), `${h0}\n`);
+  const none = run(['select', '--base', 'last-green']);
+  assert.equal(none.code, 10, none.out);
+  assert.match(none.stdout, /^selection sel-\S+ · no base \(last-green: no full pass of a clean tree under the current verification policy\) \+ uncommitted · apps: web$/m);
+  assert.deepEqual([current().base, current().baseRef, current().apps.web.reasons], [null, 'last-green', ['no-base']]);
+  // a clean full pass recorded under an older policy is no base either
+  assert.equal(run(['run', '--full', '--no-lock']).code, 0);
+  const { policy: _p, ...older } = ledgerLines(root).at(-1);
+  writeFileSync(at('.e2e-rail/ledger.jsonl'), `${JSON.stringify(older)}\n`);
+  assert.equal(run(['select', '--base', 'last-green']).code, 10);
+  assert.equal(current().base, null);
+  // the same pass recorded now is the base; a later pass of a newer commit with uncommitted changes does not move it
+  assert.equal(run(['run', '--full', '--no-lock']).code, 0);
+  writeFileSync(at('e2e/cart.spec.ts'), '// b changed\n', { flag: 'a' });
+  commit(root, ['e2e/cart.spec.ts']);
+  writeFileSync(at('e2e/orders.spec.ts'), '// a changed\n', { flag: 'a' });
+  assert.equal(run(['run', '--full', '--no-lock']).code, 0);
+  const s = run(['select', '--base', 'last-green']);
+  assert.equal(s.code, 0, s.out);
+  assert.ok(s.stdout.split('\n').includes(`selection ${current().id} · base ${h0.slice(0, 7)} (last-green)..HEAD + uncommitted · apps: web`), s.stdout);
+  assert.deepEqual([current().base, current().baseRef], [h0, 'last-green']);
+  assert.deepEqual(current().apps.web.specs.map((x) => x.file), ['e2e/cart.spec.ts', 'e2e/orders.spec.ts']);
 }));
 
 test('B: a full pass or a complete shard merge on a dirty tree says last-green did not move; on a clean tree it moves', () => withRepo(({ root, run, at }) => {

@@ -1,12 +1,14 @@
 import path from 'node:path';
 import { ledgerDir, loadConfig } from '../config.mjs';
+import { LAST_GREEN } from '../ledger.mjs';
 import { amendSelection, isCommitId, select, selectionExitCode, writeSelection } from '../select.mjs';
 import { readState } from '../shadow.mjs';
 import { parse, printUsage, shown, table, UsageError } from './_args.mjs';
 
 const OPTIONS = {
   app: { type: 'string' },
-  base: { type: 'string', optionalValue: true }, // `--base $(cat <missing last-green>)` leaves it empty: no base, full
+  // a ref, or `last-green` (J2: from the ledger); an empty value (`--base "$E2E_BASE"` unset) is no base: full
+  base: { type: 'string', optionalValue: true },
   head: { type: 'string' },
   'no-uncommitted': { type: 'boolean' },
   add: { type: 'string', multiple: true },
@@ -25,8 +27,10 @@ function topReasons(a) {
 }
 
 // J1: `base <sha7> (<ref>)..<head>`; the ref is left out when it already is that sha (or an abbreviation of it). A
-// selection 0.2.0 wrote shows its base as stored; a ref that named no commit is no base, and says so.
+// selection 0.2.0 wrote shows its base as stored; a ref that named no commit is no base, and says so (J2: so does
+// `last-green` with no clean full pass in the ledger).
 function rangeOf(sel) {
+  if (!sel.base && sel.baseRef === LAST_GREEN) return `no base (${LAST_GREEN}: no full pass of a clean tree under the current verification policy)`;
   if (!sel.base) return sel.baseRef ? `no base (${JSON.stringify(sel.baseRef)} names no commit)` : 'no base';
   if (!isCommitId(sel.base)) return `base ${sel.base}..${sel.head}`;
   const ref = typeof sel.baseRef === 'string' ? sel.baseRef : '';

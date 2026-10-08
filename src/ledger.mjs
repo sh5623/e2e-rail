@@ -100,8 +100,32 @@ export function completeShardSet(runs, app, fpId, { codeId } = {}) {
   return best ? best.set : null;
 }
 
-// Marker of the last head that passed a full verification (`select --base` falls back to it). Overwritten in place;
-// it is not part of the append-only ledger.
+// The run that finished the most recent full verification among `runs` (ledger order, already filtered by the caller
+// to what may count): a `full` run, or the last-appended member of a complete shard set, of any fingerprint. Or null.
+export function lastFullPass(runs, appName) {
+  let best = null;
+  const consider = (run, pos) => { if (!best || pos > best.pos) best = { run, pos }; };
+  runs.forEach((r, pos) => { if (r.kind === 'full' && r.app === appName && passed(r)) consider(r, pos); });
+  for (const id of new Set(runs.filter((r) => r.kind === 'shard' && r.fingerprint?.id).map((r) => r.fingerprint.id))) {
+    const set = completeShardSet(runs, appName, id);
+    if (set) { const pos = Math.max(...set.map((r) => runs.indexOf(r))); consider(runs[pos], pos); }
+  }
+  return best?.run ?? null;
+}
+
+// J2: the commit `select --base last-green` diffs from: the head of the newest passing, unfiltered full run or complete
+// shard set of a clean tree for this app (any mode), recorded under the current verification policy (the rule verify
+// applies to lastVerifiedHead). null when there is none. Read from the ledger, never from the `last-green.<app>` file:
+// 0.1.0 wrote that bare sha for dirty and relaxed passes too, and nothing tells an old one from a current one.
+export const LAST_GREEN = 'last-green';
+export function lastGreenHead(config, appName) {
+  const runs = readRuns(config, { app: appName })
+    .filter((r) => passed(r) && !r.filtered && r.fingerprint?.id && r.fingerprint.clean === true && currentPolicy(r));
+  return lastFullPass(runs, appName)?.fingerprint.head ?? null;
+}
+
+// Marker of the last head that passed a full verification of a clean tree. Informational since 0.2.1: nothing e2e-rail
+// documents reads it (`select --base last-green` reads the ledger). Overwritten in place; not part of the ledger.
 const lastGreenPath = (config, app) => path.join(ledgerDir(config), `last-green.${app}`);
 export function writeLastGreen(config, app, head) {
   mkdirSync(ledgerDir(config), { recursive: true });

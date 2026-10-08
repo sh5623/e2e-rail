@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ledgerDir } from './config.mjs';
 import { computeFingerprint } from './fingerprint.mjs';
-import { completeShardSet, currentPolicy, latestFull, policyOf, readRuns } from './ledger.mjs';
+import { completeShardSet, currentPolicy, lastFullPass, latestFull, policyOf, readRuns } from './ledger.mjs';
 import { isMeasure } from './measure.mjs';
 import { testListText } from './select.mjs';
 import { gitResolveCommit } from './util/git.mjs';
@@ -14,19 +14,6 @@ const REQUIRES = ['full', 'selected'];
 
 // The ledger run that came last: the latest-appended member of `set`, which is a subset of `runs` (same objects).
 const newestOf = (set, runs) => runs[Math.max(...set.map((r) => runs.indexOf(r)))];
-
-// The most recent passing, unfiltered full verification in `runs` (ledger order): a `full` run or a complete shard
-// set, of any fingerprint. Returns the run that finished it, or null.
-function lastVerified(runs, appName) {
-  let best = null;
-  const consider = (run, pos) => { if (!best || pos > best.pos) best = { run, pos }; };
-  runs.forEach((r, pos) => { if (r.kind === 'full') consider(r, pos); });
-  for (const id of new Set(runs.filter((r) => r.kind === 'shard').map((r) => r.fingerprint.id))) {
-    const set = completeShardSet(runs, appName, id);
-    if (set) { const run = newestOf(set, runs); consider(run, runs.indexOf(run)); }
-  }
-  return best?.run ?? null;
-}
 
 // The runs of this app in `mode` that passed, not narrowed (`filtered`, R44), with a fingerprint, under any policy.
 const passedRuns = (config, app, mode) => readRuns(config, { app: app.name })
@@ -122,8 +109,8 @@ export function verify({ config, app, mode = 'dev', require = 'full', maxAgeMin 
   // `differing` is measured from the latest full pass of any tree; the head offered as a base to narrow from
   // (`lastVerifiedHead`) only from a full pass of a clean tree (B): a pass with uncommitted changes verified that code,
   // never its HEAD. `passedBefore`: some full pass exists at all.
-  const base = lastVerified(counted, app.name);
-  const clean = base?.fingerprint.clean === true ? base : lastVerified(counted.filter((r) => r.fingerprint.clean === true), app.name);
+  const base = lastFullPass(counted, app.name);
+  const clean = base?.fingerprint.clean === true ? base : lastFullPass(counted.filter((r) => r.fingerprint.clean === true), app.name);
   const lastVerifiedHead = clean?.fingerprint.head ?? null;
   const passedBefore = base !== null;
   if (noDist) {

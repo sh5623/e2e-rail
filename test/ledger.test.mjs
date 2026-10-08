@@ -1,7 +1,7 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { appendRun, readRuns, ledgerPath, latestFull, completeShardSet, writeLastGreen, readLastGreen, VERIFY_POLICY } from '../src/ledger.mjs';
+import { appendRun, readRuns, ledgerPath, latestFull, completeShardSet, writeLastGreen, readLastGreen, lastGreenHead, VERIFY_POLICY } from '../src/ledger.mjs';
 import { ledgerDir, loadConfig } from '../src/config.mjs';
 import { makeTempRepo } from './helpers.mjs';
 
@@ -235,5 +235,36 @@ test('last-green marker is per app, overwritten in place, and empty/missing read
     assert.equal(readLastGreen(config, 'web'), null);
     // it lives next to the ledger and does not touch it
     assert.equal(existsSync(ledgerPath(config)), false);
+  });
+});
+
+test('J2: lastGreenHead is the head of the newest policy-current, unfiltered, passing full run or complete shard set of a clean tree', async () => {
+  await withLedger(async (config) => {
+    const at = (head, clean = true) => ({ ...fp(`F-${head}`), head, clean });
+    assert.equal(lastGreenHead(config, 'web'), null);
+    writeLastGreen(config, 'web', 'marker'); // the file alone names nothing
+    assert.equal(lastGreenHead(config, 'web'), null);
+    appendRun(config, run({ fingerprint: at('h1') }));
+    assert.equal(lastGreenHead(config, 'web'), 'h1');
+    // newer, but none of them names a verified commit: a dirty pass, a filtered, a failed, a selected and a rerun pass,
+    // a clean pass without `clean` (0.1.0), another app's pass, and a pass recorded under an older policy
+    appendRun(config, run({ fingerprint: at('h2', false) }));
+    appendRun(config, run({ fingerprint: at('h3'), filtered: true }));
+    appendRun(config, run({ fingerprint: at('h4'), rc: 1 }));
+    appendRun(config, run({ fingerprint: at('h5'), kind: 'selected' }));
+    appendRun(config, run({ fingerprint: at('h6'), kind: 'rerun' }));
+    appendRun(config, run({ fingerprint: { ...fp('F-h7'), head: 'h7' } }));
+    appendRun(config, run({ fingerprint: at('h8'), app: 'admin' }));
+    appendFileSync(ledgerPath(config), `${JSON.stringify(run({ id: 'run-older', fingerprint: at('h9') }))}\n`);
+    appendFileSync(ledgerPath(config), `${JSON.stringify(run({ id: 'run-p1', policy: 1, fingerprint: at('h10') }))}\n`);
+    assert.equal(lastGreenHead(config, 'web'), 'h1');
+    assert.equal(lastGreenHead(config, 'admin'), 'h8');
+    // a complete shard set of a clean tree is a full pass; half of one is not
+    appendRun(config, shard(1, 2, { fingerprint: at('h11') }));
+    assert.equal(lastGreenHead(config, 'web'), 'h1');
+    appendRun(config, shard(2, 2, { fingerprint: at('h11') }));
+    assert.equal(lastGreenHead(config, 'web'), 'h11');
+    appendRun(config, run({ fingerprint: at('h12') }));
+    assert.equal(lastGreenHead(config, 'web'), 'h12');
   });
 });

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { appDir, findApp, ledgerDir } from './config.mjs';
+import { LAST_GREEN, lastGreenHead } from './ledger.mjs';
 import { matchAny, matchGlob, walk } from './util/glob.mjs';
 import { gitChangedFiles, gitDiffHash, gitHead, gitLocation, gitResolveCommit, gitTreeClean, gitUncommittedFiles, gitUntrackedHash } from './util/git.mjs';
 import { sha256 } from './util/hash.mjs';
@@ -231,7 +232,10 @@ function appContext({ config, ts }) {
 // (`--no-uncommitted`, or under CI by default) of a tree that has some still runs, so every app runs in full
 // (`uncommitted-excluded`); a clean tree loses nothing by leaving it out. J1: the base is stored as the commit it
 // resolved to (`base`, a full object id) beside the ref as given (`baseRef`): a reselection diffs from that commit, never
-// from wherever a name such as HEAD or a branch points by then. A ref that names no commit is no base.
+// from wherever a name such as HEAD or a branch points by then. A ref that names no commit is no base. J2: `last-green`
+// is a keyword, not a ref: the head of the app's last clean full pass under the current verification policy, read from
+// the ledger (lastGreenHead; one app's, so it needs `app` where several are configured). None, or a commit this clone
+// does not have, is no base.
 export async function select({ config, ts, base, head = 'HEAD', includeUncommitted = !inCI(), app }) {
   for (const a of app ? [findApp(config, app)] : config.apps) assertPlaywrightSupported(appDir(config, a));
   const loc = gitLocation(config.root);
@@ -242,7 +246,8 @@ export async function select({ config, ts, base, head = 'HEAD', includeUncommitt
     ...(loc && !includeUncommitted && !gitTreeClean(config.root, ledger ? [`${ledger}/`] : []) ? ['uncommitted-excluded'] : []),
   ];
   const baseRef = base || null;
-  const baseCommit = loc && baseRef ? gitResolveCommit(config.root, baseRef) : null;
+  const named = baseRef === LAST_GREEN ? lastGreenHead(config, findApp(config, app).name) : baseRef;
+  const baseCommit = loc && named ? gitResolveCommit(config.root, named) : null;
   let changed = loc ? gitChangedFiles(config.root, baseCommit, head) : null;
   if (changed !== null && includeUncommitted) {
     const uncommitted = gitUncommittedFiles(config.root);

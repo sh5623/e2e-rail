@@ -130,7 +130,8 @@ export default async function init(argv) {
   console.log([
     '',
     `suggested package.json scripts${mode ? ' (the app declares run.preview: run and verify in the same mode)' : ''}:`,
-    `  "e2e:select": "e2e-rail select --base $(cat .e2e-rail/last-green.${app} 2>/dev/null)"`,
+    // J2: the base is the app's last clean full pass, read from the ledger (never a bare marker file)
+    '  "e2e:select": "e2e-rail select --base last-green"',
     `  "e2e:run":    "e2e-rail run --selection${mode}"`,
     `  "e2e:verify": "e2e-rail verify --require full${mode}"`,
     '',

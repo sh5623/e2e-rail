@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util';
 export const USAGES = {
   init: '[--force]',
   map: '[--app <name>] [--check] [--explain <spec>]',
-  select: '[--app <name>] [--base <ref>] [--head <ref>] [--no-uncommitted] [--json]'
+  select: '[--app <name>] [--base <ref>|last-green] [--head <ref>] [--no-uncommitted] [--json]'
     + ' | [--app <name>] (--add <spec> | --remove <spec>)… --reason <text>',
   run: '[--app <name>] (--full | --selection [id] | --test-list <file> | --last-failed) [--mode dev|preview]'
     + ' [--workers N] [--project <name>] [--shard i/n] [--blob] [--no-lock] [--no-build] [-- <playwright args>]',
