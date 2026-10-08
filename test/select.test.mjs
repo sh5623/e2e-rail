@@ -128,7 +128,29 @@ test('null changed files → every app full', async () => {
     assert.equal(sel.apps.web.rootDir, null);
     assert.equal(sel.changedFiles, null);
     assert.equal(selectionExitCode(sel), 10);
-    assert.equal((await select({ config, ts })).apps.web.mode, 'full', 'no base at all is not "no change"');
+    // J1: a ref that names no commit is no base; the ref as given is kept to say so
+    assert.deepEqual([sel.base, sel.baseRef], [null, 'deadbeef']);
+    const none = await select({ config, ts });
+    assert.equal(none.apps.web.mode, 'full', 'no base at all is not "no change"');
+    assert.deepEqual([none.base, none.baseRef], [null, null]);
+  } finally { cleanup(); }
+});
+
+test('J1: select stores the base as the commit it resolves to (base) and the ref as given (baseRef)', async () => {
+  const { root, config, cleanup } = await setup();
+  try {
+    const git = (...args) => { const r = execCapture('git', args, { cwd: root }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+    const x = git('rev-parse', 'HEAD');
+    git('branch', 'base-branch');
+    write(root, 'src/components/Table.ts', 'export const Table = (rows: unknown[]) => rows.length + 1;\n');
+    git('add', '--', 'src/components/Table.ts'); git('commit', '-qm', 'Y');
+    for (const [ref, sha] of [['HEAD', git('rev-parse', 'HEAD')], ['HEAD~1', x], ['base-branch', x], [x, x]]) {
+      const sel = await select({ config, base: ref, includeUncommitted: true });
+      assert.deepEqual([sel.base, sel.baseRef], [sha, ref], ref);
+      assert.match(sel.base, /^[0-9a-f]{40}$/);
+    }
+    const pinned = await select({ config, base: 'base-branch', includeUncommitted: true });
+    assert.deepEqual(pinned.changedFiles, ['src/components/Table.ts']);
   } finally { cleanup(); }
 });
 

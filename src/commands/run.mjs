@@ -3,7 +3,7 @@ import path from 'node:path';
 import { appDir, findApp, ledgerDir, loadConfig } from '../config.mjs';
 import { LAST_GREEN_DIRTY } from '../ledger.mjs';
 import { filteredBy, runTests } from '../run.mjs';
-import { amendSelection, codeIdOf, ledgerRel, readSelection, select, testListLines, testListText, writeSelection } from '../select.mjs';
+import { amendSelection, codeIdOf, isCommitId, ledgerRel, readSelection, select, testListLines, testListText, writeSelection } from '../select.mjs';
 import { gitResolveCommit, gitTreeClean } from '../util/git.mjs';
 import { oneOf, parse, positiveInt, printUsage, UsageError } from './_args.mjs';
 
@@ -45,16 +45,20 @@ function testListPath(value) {
 // than HEAD is dropped), for the apps it covered. It becomes the current selection only when the run used the current
 // one (`current`); a selection named by id is reselected into `selections/<new>.json` alone (G3).
 // Additions recorded with `--add` are carried over (an addition only widens; a spec that is gone is dropped);
-// removals are not (they were judged on the old change).
+// removals are not (they were judged on the old change). J1: the base is the commit the selection stored. A base
+// stored by name (0.2.0 and earlier wrote `HEAD` or a branch as given) may name another commit by now, and diffing
+// from there drops the commits in between: such a selection is reselected with no base, in full.
 async function reselect(config, sel, { current, why }) {
   const names = Object.keys(sel.apps ?? {});
+  const byName = sel.base != null && sel.base !== '' && !isCommitId(sel.base);
   const fresh = await select({
-    config, base: sel.base || undefined,
+    config, base: isCommitId(sel.base) ? sel.base : undefined,
     includeUncommitted: typeof sel.includeUncommitted === 'boolean' ? sel.includeUncommitted : undefined,
     app: names.length === 1 && config.apps.length > 1 ? names[0] : undefined, // `select --app` covers one app
   });
   writeSelection(config, fresh, { current });
   console.log(`selection ${sel.id} ${why} — reselected as ${fresh.id}`);
+  if (byName) console.log(`selection ${sel.id} stored its base by name (${JSON.stringify(sel.base)}), which may have moved — reselected in full`);
   let carried = 0;
   for (const [name, a] of Object.entries(sel.apps ?? {})) {
     const target = config.apps.find((x) => x.name === name);

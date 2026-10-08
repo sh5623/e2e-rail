@@ -163,9 +163,10 @@ function narrow(config, app, p, c) {
 // `ctx.forApp(app)` → { index, graph, entries, unresolvedEntries, main }, called only for apps that need narrowing.
 // `app`: compute that app only (other apps' files are not its business; shared/unknown-root still widen it).
 // `full`: reasons that run every app in full whatever changed (select's `head-not-HEAD:<ref>`, `uncommitted-excluded`).
-export async function computeSelection({ config, changedFiles, base = null, head = 'HEAD', includeUncommitted = true, ctx, app = null, full = [] }) {
+// `base`: the commit the change was diffed from (select stores its full id); `baseRef`: the base as it was given.
+export async function computeSelection({ config, changedFiles, base = null, baseRef = base, head = 'HEAD', includeUncommitted = true, ctx, app = null, full = [] }) {
   const targets = app ? [findApp(config, app)] : config.apps;
-  const sel = { id: newId('sel'), createdAt: new Date().toISOString(), base, head, includeUncommitted, changedFiles, codeId: codeIdOf(config), apps: {} };
+  const sel = { id: newId('sel'), createdAt: new Date().toISOString(), base, baseRef, head, includeUncommitted, changedFiles, codeId: codeIdOf(config), apps: {} };
   const per = new Map(targets.map((a) => [a.name, { mode: 'partial', reasons: [], rootDir: null, specs: new Map(), unmappedIncluded: 0, changedFiles: [], spec: [], src: [] }]));
   const widen = (name, reason) => {
     const p = per.get(name);
@@ -228,7 +229,9 @@ function appContext({ config, ts }) {
 // between a `head` other than HEAD and HEAD are part of it, so such a selection runs every app in full
 // (`head-not-HEAD:<ref>`); only a HEAD-based selection can narrow. H1: for the same reason, uncommitted work left out
 // (`--no-uncommitted`, or under CI by default) of a tree that has some still runs, so every app runs in full
-// (`uncommitted-excluded`); a clean tree loses nothing by leaving it out.
+// (`uncommitted-excluded`); a clean tree loses nothing by leaving it out. J1: the base is stored as the commit it
+// resolved to (`base`, a full object id) beside the ref as given (`baseRef`): a reselection diffs from that commit, never
+// from wherever a name such as HEAD or a branch points by then. A ref that names no commit is no base.
 export async function select({ config, ts, base, head = 'HEAD', includeUncommitted = !inCI(), app }) {
   for (const a of app ? [findApp(config, app)] : config.apps) assertPlaywrightSupported(appDir(config, a));
   const loc = gitLocation(config.root);
@@ -238,7 +241,9 @@ export async function select({ config, ts, base, head = 'HEAD', includeUncommitt
     ...(headCommit && headCommit !== gitHead(config.root) ? [`head-not-HEAD:${head}`] : []),
     ...(loc && !includeUncommitted && !gitTreeClean(config.root, ledger ? [`${ledger}/`] : []) ? ['uncommitted-excluded'] : []),
   ];
-  let changed = loc ? gitChangedFiles(config.root, base, head) : null;
+  const baseRef = base || null;
+  const baseCommit = loc && baseRef ? gitResolveCommit(config.root, baseRef) : null;
+  let changed = loc ? gitChangedFiles(config.root, baseCommit, head) : null;
   if (changed !== null && includeUncommitted) {
     const uncommitted = gitUncommittedFiles(config.root);
     changed = uncommitted === null ? null : [...changed, ...uncommitted];
@@ -247,8 +252,11 @@ export async function select({ config, ts, base, head = 'HEAD', includeUncommitt
     const here = `/${loc.prefix.replace(/\/$/, '')}`;
     changed = [...new Set(changed.map((p) => path.posix.relative(here, `/${p}`)))].sort();
   }
-  return computeSelection({ config, changedFiles: changed, base: base ?? null, head, includeUncommitted, ctx: appContext({ config, ts }), app, full });
+  return computeSelection({ config, changedFiles: changed, base: baseCommit, baseRef, head, includeUncommitted, ctx: appContext({ config, ts }), app, full });
 }
+
+// J1: a full commit id (SHA-1 or SHA-256 object name), the only base a stored selection can be trusted to reproduce.
+export const isCommitId = (s) => typeof s === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(s);
 
 // Playwright `--test-list` lines are matched against the path relative to config.rootDir, so without the spec index's
 // rootDir no line can be written (a guessed base makes every line match nothing).

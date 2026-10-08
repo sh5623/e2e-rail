@@ -5,6 +5,7 @@
 // (npm run test:contract). The fixture's specs use no browser fixtures, so no browser download is needed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -21,6 +22,15 @@ const skip = process.env.E2E_RAIL_CONTRACT ? false : 'set E2E_RAIL_CONTRACT=1 (n
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, '../..');
 const driver = path.join(here, 'run-driver.mjs');
+const bin = path.join(repoRoot, 'bin/e2e-rail.mjs');
+
+// The CLI as a user runs it, with CI removed from its environment (select's uncommitted default follows CI) and its
+// output (Playwright's reporter included) captured, never printed.
+function cli(root, args) {
+  const { CI: _ci, ...env } = process.env;
+  const r = spawnSync(process.execPath, [bin, ...args], { cwd: root, encoding: 'utf8', env });
+  return { code: r.status, stdout: r.stdout, out: `${r.stdout}${r.stderr}` };
+}
 
 // A temp repo from the contract fixture whose node_modules is a link to this repo's, so the real @playwright/test
 // resolves from the app dir exactly as it would in an adopter's repo (the fixture gitignores the link). The machine
@@ -171,5 +181,42 @@ test('real playwright: a full run that passes only because -G left a failing tes
       assert.equal(verify({ config, app }).lastVerifiedHead, null);
       assert.equal(existsSync(path.join(root, '.e2e-rail/last-green.web')), false);
     }
+  });
+});
+
+test('real playwright (J1, audit scenario moving-base-ref): after `select --base HEAD`, commits that break b move HEAD; run --selection still diffs from the commit selected from, runs b and fails', { skip }, async () => {
+  await withContractApp(async ({ root }) => {
+    const git = (...args) => {
+      const r = execCapture('git', args, { cwd: root });
+      assert.equal(r.status, 0, `${args.join(' ')}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    // select builds the import graph too: a tsconfig and an entry, committed so the tree is clean
+    writeFileSync(path.join(root, 'tsconfig.json'), '{ "compilerOptions": {} }\n');
+    mkdirSync(path.join(root, 'src'));
+    writeFileSync(path.join(root, 'src/main.ts'), 'export {};\n');
+    git('add', '--', 'tsconfig.json', 'src/main.ts');
+    git('commit', '-qm', 'setup');
+    const initial = git('rev-parse', 'HEAD');
+    const a = "import { test, expect } from '@playwright/test';\ntest('a changed', () => { expect(1).toBe(1); });\n";
+    writeFileSync(path.join(root, 'e2e/a.spec.ts'), a);
+    const s = cli(root, ['select', '--base', 'HEAD']);
+    assert.equal(s.code, 0, s.out);
+    const old = JSON.parse(readFileSync(path.join(root, '.e2e-rail/selection.json'), 'utf8'));
+    assert.deepEqual([old.base, old.apps.web.specs.map((x) => x.file)], [initial, ['e2e/a.spec.ts']]);
+
+    writeFileSync(path.join(root, 'e2e/b.spec.ts'), "import { test, expect } from '@playwright/test';\ntest('b regression', () => { expect(1).toBe(2); });\n");
+    git('add', '--', 'e2e/a.spec.ts', 'e2e/b.spec.ts');
+    git('commit', '-qm', 'a, and a regression in b, after the selection');
+    writeFileSync(path.join(root, 'e2e/a.spec.ts'), `${a}// another a edit\n`);
+
+    const r = cli(root, ['run', '--selection', '--no-lock', '--workers', '1']);
+    assert.equal(r.code, 1, r.out);
+    const fresh = JSON.parse(readFileSync(path.join(root, '.e2e-rail/selection.json'), 'utf8'));
+    assert.ok(r.stdout.split('\n').includes(`selection ${old.id} was for other code — reselected as ${fresh.id}`), r.out);
+    assert.equal(fresh.base, initial);
+    assert.deepEqual(fresh.apps.web.specs.map((x) => x.file), ['e2e/a.spec.ts', 'e2e/b.spec.ts']);
+    assert.match(r.stdout, /^ {2}failed: e2e\/b\.spec\.ts › b regression \[chromium\]/m);
+    assert.notEqual(cli(root, ['verify', '--require', 'selected']).code, 0);
   });
 });

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { ledgerDir, loadConfig } from '../config.mjs';
-import { amendSelection, select, selectionExitCode, writeSelection } from '../select.mjs';
+import { amendSelection, isCommitId, select, selectionExitCode, writeSelection } from '../select.mjs';
 import { readState } from '../shadow.mjs';
 import { parse, printUsage, shown, table, UsageError } from './_args.mjs';
 
@@ -24,10 +24,19 @@ function topReasons(a) {
   return `${top.join(' | ')}${counts.size > 3 ? ` (+${counts.size - 3} more)` : ''}`;
 }
 
+// J1: `base <sha7> (<ref>)..<head>`; the ref is left out when it already is that sha (or an abbreviation of it). A
+// selection 0.2.0 wrote shows its base as stored; a ref that named no commit is no base, and says so.
+function rangeOf(sel) {
+  if (!sel.base) return sel.baseRef ? `no base (${JSON.stringify(sel.baseRef)} names no commit)` : 'no base';
+  if (!isCommitId(sel.base)) return `base ${sel.base}..${sel.head}`;
+  const ref = typeof sel.baseRef === 'string' ? sel.baseRef : '';
+  const isSha = /^[0-9a-f]+$/i.test(ref) && sel.base.startsWith(ref.toLowerCase());
+  return `base ${sel.base.slice(0, 7)}${ref && !isSha ? ` (${ref})` : ''}..${sel.head}`;
+}
+
 function printSelection(config, sel) {
   const names = Object.keys(sel.apps);
-  const range = sel.base ? `base ${sel.base}..${sel.head}` : 'no base';
-  console.log(`selection ${sel.id} · ${range}${sel.includeUncommitted ? ' + uncommitted' : ''} · apps: ${names.join(', ')}`);
+  console.log(`selection ${sel.id} · ${rangeOf(sel)}${sel.includeUncommitted ? ' + uncommitted' : ''} · apps: ${names.join(', ')}`);
   console.log(table(names.map((name) => {
     const a = sel.apps[name];
     const full = a.mode === 'full';

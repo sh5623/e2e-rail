@@ -452,6 +452,77 @@ test('C (audit repro): run --selection on a selection made for other code resele
   assert.match(again.stdout, new RegExp(`^selection ${old.id} was for other code — reselected as sel-`, 'm'));
 }));
 
+test('J1 (audit repro moving-base-ref): a reselection diffs from the commit `--base HEAD` named, not from where HEAD moved since', () => withRepo(({ root, run, at }) => {
+  const initial = execCapture('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim();
+  writeFileSync(at('e2e/orders.spec.ts'), '// a changed\n', { flag: 'a' });
+  const s = run(['select', '--base', 'HEAD']);
+  assert.equal(s.code, 0, s.out);
+  const old = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  assert.deepEqual([old.base, old.baseRef], [initial, 'HEAD']);
+  assert.ok(s.stdout.split('\n').includes(`selection ${old.id} · base ${initial.slice(0, 7)} (HEAD)..HEAD + uncommitted · apps: web`), s.stdout);
+  // a, and a change that breaks b, committed on top of the base; then a changed again
+  writeFileSync(at('e2e/cart.spec.ts'), '// b broken\n', { flag: 'a' });
+  commit(root, ['e2e/orders.spec.ts', 'e2e/cart.spec.ts']);
+  writeFileSync(at('e2e/orders.spec.ts'), '// another a edit\n', { flag: 'a' });
+  const r = run(['run', '--selection', '--no-lock'], { STUB_PW_FAIL_IF_LISTED: 'cart.spec.ts' });
+  assert.equal(r.code, 1, r.out);
+  const fresh = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  assert.ok(r.stdout.split('\n').includes(`selection ${old.id} was for other code — reselected as ${fresh.id}`), r.stdout);
+  assert.equal(fresh.base, initial, 'the commit the selection was made from, not the HEAD of now');
+  const picked = fresh.apps.web.specs.map((x) => x.file);
+  assert.ok(picked.includes('e2e/cart.spec.ts') && picked.includes('e2e/orders.spec.ts'), picked.join(' '));
+  const entry = ledgerLines(root).at(-1);
+  assert.deepEqual([entry.kind, entry.selectionId, entry.rc], ['selected', fresh.id, 1]);
+  assert.notEqual(run(['verify', '--require', 'selected']).code, 0);
+}));
+
+test('J1: a branch-name base is pinned to the commit it named; the summary names both; a sha base prints the sha alone', () => withRepo(({ root, run, at }) => {
+  const git = (...args) => { const r = execCapture('git', args, { cwd: root }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  const initial = git('rev-parse', 'HEAD');
+  git('branch', 'base-branch');
+  writeFileSync(at('e2e/orders.spec.ts'), '// a changed\n', { flag: 'a' });
+  const s = run(['select', '--base', 'base-branch']);
+  assert.equal(s.code, 0, s.out);
+  const old = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  assert.deepEqual([old.base, old.baseRef], [initial, 'base-branch']);
+  assert.ok(s.stdout.split('\n').includes(`selection ${old.id} · base ${initial.slice(0, 7)} (base-branch)..HEAD + uncommitted · apps: web`), s.stdout);
+  // the branch moves past a commit that breaks b; a changes again
+  writeFileSync(at('e2e/cart.spec.ts'), '// b broken\n', { flag: 'a' });
+  commit(root, ['e2e/orders.spec.ts', 'e2e/cart.spec.ts']);
+  git('branch', '-f', 'base-branch', 'HEAD');
+  writeFileSync(at('e2e/orders.spec.ts'), '// another a edit\n', { flag: 'a' });
+  const r = run(['run', '--selection', '--no-lock'], { STUB_PW_FAIL_IF_LISTED: 'cart.spec.ts' });
+  assert.equal(r.code, 1, r.out);
+  const fresh = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  assert.equal(fresh.base, initial);
+  assert.ok(fresh.apps.web.specs.some((x) => x.file === 'e2e/cart.spec.ts'), 'the commit between the pinned base and HEAD is selected for');
+  // a base given as its sha has nothing to name beside it; a ref that names no commit is no base, and says so
+  const bySha = run(['select', '--base', initial]);
+  assert.match(bySha.stdout, new RegExp(`^selection sel-\\S+ · base ${initial.slice(0, 7)}\\.\\.HEAD \\+ uncommitted · apps: web$`, 'm'));
+  const nope = run(['select', '--base', 'nope']);
+  assert.match(nope.stdout, /^selection sel-\S+ · no base \("nope" names no commit\) \+ uncommitted · apps: web$/m);
+}));
+
+test('J1: a selection that stored its base by name (0.2.0 or earlier) is reselected in full, never from where the name points now', () => withRepo(({ root, run, at }) => {
+  writeFileSync(at('e2e/orders.spec.ts'), '// a changed\n', { flag: 'a' });
+  assert.equal(run(['select', '--base', 'HEAD']).code, 0);
+  const made = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  const { baseRef: _ref, ...legacy } = { ...made, base: 'HEAD' }; // what 0.2.0 `select --base HEAD` wrote
+  for (const f of ['.e2e-rail/selection.json', `.e2e-rail/selections/${made.id}.json`]) writeFileSync(at(f), JSON.stringify(legacy));
+  writeFileSync(at('e2e/cart.spec.ts'), '// b broken\n', { flag: 'a' });
+  commit(root, ['e2e/orders.spec.ts', 'e2e/cart.spec.ts']);
+  writeFileSync(at('e2e/orders.spec.ts'), '// another a edit\n', { flag: 'a' });
+  const r = run(['run', '--selection', '--no-lock'], { STUB_PW_RC: '1', STUB_PW_REPORT: at('stub/report-fail.json') });
+  assert.equal(r.code, 1, r.out);
+  const fresh = JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8'));
+  const lines = r.stdout.split('\n');
+  assert.ok(lines.includes(`selection ${made.id} was for other code — reselected as ${fresh.id}`), r.stdout);
+  assert.ok(lines.includes(`selection ${made.id} stored its base by name ("HEAD"), which may have moved — reselected in full`), r.stdout);
+  assert.deepEqual([fresh.base, fresh.apps.web.mode, fresh.apps.web.reasons], [null, 'full', ['no-base']]);
+  assert.match(r.stdout, /kind full/);
+  assert.deepEqual([ledgerLines(root).at(-1).kind, ledgerLines(root).at(-1).selectionId], ['full', fresh.id]);
+}));
+
 test('H2: run --selection reselects up to HEAD when the stored head is not HEAD, even for this very code (a 0.1.0 --head selection)', () => withRepo(({ root, run, at }) => {
   const older = execCapture('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim();
   writeFileSync(at('e2e/orders.spec.ts'), '// committed\n', { flag: 'a' });
