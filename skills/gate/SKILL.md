@@ -69,6 +69,8 @@ pnpm exec e2e-rail verify --app <app> --mode <mode> --require full
   `nothing verified yet` means nothing ever passed, `no full pass of a committed tree yet` means every pass had
   uncommitted changes, `dist: not built` means the preview dist is missing. Not a pass.
 - exit 21 `insufficient: this code has only <kinds> run(s); --require full needs …` — expected after a selected run.
+  With `--require selected`, `insufficient: the selection's list changed since run <id> (select --add/--remove); run
+  --selection again` means the selection was amended after that run: run it again.
 
 After a selected run you may also quote `verify --app <app> --mode <mode> --require selected`
 (`verified: selected@<run-id> (selection <selection-id>, shadowed) (<age>)`; `, shadowed` only while trust is shadow),

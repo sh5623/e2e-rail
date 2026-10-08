@@ -176,7 +176,10 @@ test('verify --require selected (G2): a selected run counts only for the very li
     const warn = mock.method(console, 'warn', () => {}); // no spec index here: added for chromium, with a warning
     try { amendSelection(config, { app: 'web', add: [{ spec: CART, reason: 'opens the cart by string' }] }); } finally { warn.mock.restore(); }
     assert.equal(readSelectionFile(config, sel.id).id, sel.id);
-    assert.equal(verify({ config, app, require: 'selected' }).status, 'insufficient', 'the run never ran the added spec');
+    const changed = verify({ config, app, require: 'selected' });
+    assert.equal(changed.status, 'insufficient', 'the run never ran the added spec');
+    assert.equal(changed.listChanged, ran.id, 'H5: says why: the list moved since that run');
+    assert.equal(verify({ config, app }).listChanged, undefined, 'only --require selected looks at selections');
     // a run of the amended list counts; a run that recorded no list hash (v0.1.0) never does
     synth(config, app, { kind: 'selected', selectionId: sel.id });
     assert.equal(verify({ config, app, require: 'selected' }).status, 'insufficient');

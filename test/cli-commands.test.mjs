@@ -545,7 +545,10 @@ test('G2 (review repro): select --add after a run amends the selection in place;
   assert.equal(add.code, 0, add.out);
   const v = run(['verify', '--require', 'selected']);
   assert.equal(v.code, 21, v.out);
-  assert.match(v.stdout, /^insufficient: /);
+  // H5: the run was a `run --selection` run; what moved is the selection's list
+  const first = ledgerLines(root).at(-1).id;
+  assert.equal(v.stdout, `insufficient: the selection's list changed since run ${first} (select --add/--remove); run --selection again\n`);
+  assert.equal(JSON.parse(run(['verify', '--require', 'selected', '--json']).stdout).listChanged, first);
   const again = run(['run', '--selection', '--no-lock'], { STUB_PW_ARGV_FILE: at('argv.json') });
   assert.equal(again.code, 0, again.out);
   assert.doesNotMatch(again.stdout, /reselected/, 'same code: the amended selection itself ran');

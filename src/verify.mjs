@@ -52,17 +52,19 @@ export function verifiedShardSet({ config, app, mode = 'dev' }) {
 // read (`testListSha`): `select --add` rewrites a selection in place, and a run made before it never ran the addition.
 // H2: and only when the selection's head is the commit the run tested (a 0.1.0 `--head <sha>` selection is not).
 // A missing, unreadable or foreign selection, or a run that recorded no list hash, does not count.
+// Returns 'ok', 'list' (everything holds but the list: H5 says so) or null.
 function selectionMatches(config, r) {
-  if (!/^[\w.-]+$/.test(r.selectionId) || typeof r.testListSha !== 'string') return false;
+  if (!/^[\w.-]+$/.test(r.selectionId) || typeof r.testListSha !== 'string') return null;
   try {
     const sel = JSON.parse(readFileSync(path.join(ledgerDir(config), 'selections', `${r.selectionId}.json`), 'utf8'));
-    if (typeof sel?.codeId !== 'string' || sel.codeId !== r.fingerprint.codeId || !sel.apps?.[r.app]) return false;
-    if (gitResolveCommit(config.root, sel.head || 'HEAD') !== r.fingerprint.head) return false;
-    return sha256(testListText(sel.apps[r.app])) === r.testListSha;
-  } catch { return false; }
+    if (typeof sel?.codeId !== 'string' || sel.codeId !== r.fingerprint.codeId || !sel.apps?.[r.app]) return null;
+    if (gitResolveCommit(config.root, sel.head || 'HEAD') !== r.fingerprint.head) return null;
+    return sha256(testListText(sel.apps[r.app])) === r.testListSha ? 'ok' : 'list';
+  } catch { return null; }
 }
-const isSelectionRun = (config, r) => r.kind === 'selected' && typeof r.selectionId === 'string' && r.selectionId !== ''
-  && !isMeasure(r) && selectionMatches(config, r);
+const selectionCheck = (config, r) => (r.kind === 'selected' && typeof r.selectionId === 'string' && r.selectionId !== ''
+  && !isMeasure(r) ? selectionMatches(config, r) : null);
+const isSelectionRun = (config, r) => selectionCheck(config, r) === 'ok';
 
 // "Has exactly this code (fingerprint) already passed?" answered from the ledger (spec §8). Only runs of this app, in
 // this mode, with this fingerprint id that passed and were not narrowed (`filtered`) count. `require: 'full'` wants a
@@ -98,7 +100,11 @@ export function verify({ config, app, mode = 'dev', require = 'full', maxAgeMin 
   const recent = noDist ? [] : matching.filter(isFresh);
   const found = settle(recent);
   if (found) return { status: 'verified', exitCode: 0, run: found.run, ...(found.shards && { shards: found.shards }), fingerprint };
-  if (recent.length) return { status: 'insufficient', exitCode: 21, fingerprint, have: [...new Set(recent.map((r) => r.kind))] };
+  if (recent.length) {
+    // H5: a run from the selection that only lacks the list the selection writes now (`select --add/--remove` since)
+    const moved = require === 'selected' ? [...recent].reverse().find((r) => selectionCheck(config, r) === 'list') : null;
+    return { status: 'insufficient', exitCode: 21, fingerprint, have: [...new Set(recent.map((r) => r.kind))], ...(moved && { listChanged: moved.id }) };
+  }
 
   // `differing` is measured from the latest full pass of any tree; the head offered as a base to narrow from
   // (`lastVerifiedHead`) only from a full pass of a clean tree (B): a pass with uncommitted changes verified that code,
