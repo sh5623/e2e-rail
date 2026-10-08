@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { appDir, findApp, ledgerDir, loadConfig } from '../config.mjs';
 import { LAST_GREEN_DIRTY } from '../ledger.mjs';
 import { filteredBy, runTests } from '../run.mjs';
-import { amendSelection, codeIdOf, readSelection, select, testListLines, writeSelection } from '../select.mjs';
+import { amendSelection, codeIdOf, readSelection, select, testListLines, testListText, writeSelection } from '../select.mjs';
 import { oneOf, parse, positiveInt, printUsage, UsageError } from './_args.mjs';
 
 const OPTIONS = {
@@ -41,24 +41,25 @@ function testListPath(value) {
 
 // C: a selection computed for other code (files changed since `select`) may miss what changed since. It is computed
 // again from its own base and uncommitted setting, up to HEAD (G1: the run tests the work tree, so a stored head other
-// than HEAD is dropped), for the apps it covered, and becomes the current selection.
+// than HEAD is dropped), for the apps it covered. It becomes the current selection only when the run used the current
+// one (`current`); a selection named by id is reselected into `selections/<new>.json` alone (G3).
 // Additions recorded with `--add` are carried over (an addition only widens; a spec that is gone is dropped);
 // removals are not (they were judged on the old change).
-async function reselect(config, sel) {
+async function reselect(config, sel, { current }) {
   const names = Object.keys(sel.apps ?? {});
   const fresh = await select({
     config, base: sel.base || undefined,
     includeUncommitted: typeof sel.includeUncommitted === 'boolean' ? sel.includeUncommitted : undefined,
     app: names.length === 1 && config.apps.length > 1 ? names[0] : undefined, // `select --app` covers one app
   });
-  writeSelection(config, fresh);
+  writeSelection(config, fresh, { current });
   console.log(`selection ${sel.id} was for other code — reselected as ${fresh.id}`);
   let carried = 0;
   for (const [name, a] of Object.entries(sel.apps ?? {})) {
     const target = config.apps.find((x) => x.name === name);
     if (!target || !fresh.apps[name]) continue;
     const add = (a.added ?? []).filter((x) => existsSync(path.join(appDir(config, target), x.spec))).map(({ spec, reason }) => ({ spec, reason }));
-    if (add.length) { amendSelection(config, { app: name, add }); carried += add.length; }
+    if (add.length) { amendSelection(config, { app: name, add, id: fresh.id, current }); carried += add.length; }
   }
   if (carried) console.log(`carried over ${carried} --add spec(s) from selection ${sel.id}`);
   const removed = Object.values(sel.apps ?? {}).reduce((n, a) => n + (a.removed?.length ?? 0), 0);
@@ -66,13 +67,20 @@ async function reselect(config, sel) {
   return readSelection(config, fresh.id);
 }
 
-// The selection's entry for this app, its test list rebuilt from that very JSON (never a list another selection left).
-// null testList with `skip` when there is nothing to run; null testList without `skip` when the app runs in full.
-// `codeId` is the code the selection was computed for (runTests refuses to credit it to other code).
+// The id of the current selection (`selection.json`), or null.
+function currentSelectionId(config) {
+  try { return readSelection(config).id ?? null; } catch { return null; }
+}
+
+// The selection's entry for this app, its test list rebuilt from that very JSON (never a list another selection left)
+// into a file of this invocation alone (G4: `.e2e-rail/reports/<selection>.<app>.<pid>.test-list.txt`, which the caller
+// deletes after the run; the shared test-list.<app>.txt is another `select`'s to rewrite while this run waits for the
+// lock). null testList with `skip` when there is nothing to run; null testList without `skip` when the app runs in
+// full. `codeId` is the code the selection was computed for (runTests refuses to credit it to other code).
 async function fromSelection(config, app, id) {
   let sel = readSelection(config, id || undefined);
   if (!sel.apps?.[app.name]) throw new Error(`selection ${sel.id} has no entry for app ${app.name}; run \`e2e-rail select --app ${app.name}\``);
-  if (sel.codeId !== codeIdOf(config)) sel = await reselect(config, sel);
+  if (sel.codeId !== codeIdOf(config)) sel = await reselect(config, sel, { current: !id || id === currentSelectionId(config) });
   const a = sel.apps[app.name];
   if (a.mode === 'full') {
     console.log(`${app.name}: selection ${sel.id} runs this app in full (${a.reasons.slice(0, 3).join(' | ') || 'no reason recorded'}); running the full suite`);
@@ -80,15 +88,14 @@ async function fromSelection(config, app, id) {
   }
   // Nothing to run is decided on the lines, not the specs: a spec with no Playwright project writes no line, and an
   // empty list would run nothing (R56 records that as a failure).
-  const lines = testListLines(a);
-  if (!lines.length) {
+  if (!testListLines(a).length) {
     console.log(`${app.name}: nothing selected (partial, ${a.specs.length ? `${a.specs.length} spec(s), 0 test-list lines` : '0 specs'})`);
     return { skip: true };
   }
-  const abs = path.join(ledgerDir(config), `test-list.${app.name}.txt`);
+  const abs = path.join(ledgerDir(config), 'reports', `${sel.id}.${app.name}.${process.pid}.test-list.txt`);
   mkdirSync(path.dirname(abs), { recursive: true });
-  writeFileSync(abs, `${lines.join('\n')}\n`);
-  return { selectionId: sel.id, codeId: sel.codeId, testList: abs };
+  writeFileSync(abs, testListText(a));
+  return { selectionId: sel.id, codeId: sel.codeId, testList: abs, own: true };
 }
 
 // One Playwright run through runTests: one ledger line, Playwright's exit code returned as is.
@@ -108,17 +115,24 @@ export default async function run(argv) {
   let testList = null;
   let selectionId = null;
   let expectCodeId = null;
+  let own = false; // a list file this invocation wrote, deleted after the run
   if (values['test-list'] !== undefined) testList = testListPath(values['test-list']);
   if (values.selection !== undefined) {
     const picked = await fromSelection(config, app, values.selection);
     if (picked.skip) return 0;
-    ({ testList, selectionId, codeId: expectCodeId } = picked);
+    ({ testList, selectionId, codeId: expectCodeId, own = false } = picked);
   }
 
-  const { rc, entry, lastGreen } = await runTests({
-    config, app, mode, testList, lastFailed: Boolean(values['last-failed']), workers, project: values.project, shard,
-    blob: Boolean(values.blob), lock: !values['no-lock'], build: !values['no-build'], selectionId, expectCodeId, passthrough,
-  });
+  let result;
+  try {
+    result = await runTests({
+      config, app, mode, testList, lastFailed: Boolean(values['last-failed']), workers, project: values.project, shard,
+      blob: Boolean(values.blob), lock: !values['no-lock'], build: !values['no-build'], selectionId, expectCodeId, passthrough,
+    });
+  } finally {
+    if (own) rmSync(testList, { force: true });
+  }
+  const { rc, entry, lastGreen } = result;
   if (!entry) return rc; // refused or the preview build failed: runTests said why, no ledger line
   // A narrowed or relaxed run (--project, -- --grep/-G, a file filter, --ignore-snapshots, --retries, an option
   // e2e-rail does not know) is never a verification, whatever its kind: both lines say so.

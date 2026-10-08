@@ -260,10 +260,15 @@ export function testListText(appSel) {
 
 // `.e2e-rail/test-list.<app>.txt` per partial app (a full app gets none, and loses a stale one; so does an app the
 // selection does not cover, e.g. after `select --app`), then `selections/<id>.json` and `selection.json` (the current
-// selection) last.
-export function writeSelection(config, selection) {
+// selection) last. `current: false` writes `selections/<id>.json` alone (G3: a reselection of a selection named by id
+// leaves the current selection, its lists and its decisions as they are).
+export function writeSelection(config, selection, { current = true } = {}) {
   const dir = ledgerDir(config);
   mkdirSync(path.join(dir, 'selections'), { recursive: true });
+  if (!current) {
+    writeFileSync(path.join(dir, 'selections', `${selection.id}.json`), `${JSON.stringify(selection, null, 2)}\n`);
+    return { selectionAbs: null, testLists: {} };
+  }
   for (const name of readdirSync(dir)) {
     const m = /^test-list\.(.+)\.txt$/.exec(name);
     if (m && !Object.hasOwn(selection.apps, m[1])) rmSync(path.join(dir, name), { force: true });
@@ -299,10 +304,12 @@ function cachedIndex(config, app) {
 
 // Agent corrections to the current selection (spec §6). Adding is always allowed and recorded; removing only after
 // `shadow promote`. Everything is validated before the selection changes, so a rejected call leaves no trace.
-export function amendSelection(config, { app, add = [], remove = [], allowRemove = false }) {
+// `id`/`current`: amend `selections/<id>.json` instead of the current selection, and write it back as writeSelection's
+// `current` says (default: the current selection).
+export function amendSelection(config, { app, add = [], remove = [], allowRemove = false, id, current = true }) {
   if (remove.length && !allowRemove) throw new Error('removing specs from a selection is only allowed after `shadow promote` (trust=selected)');
   const target = findApp(config, app);
-  const sel = readSelection(config);
+  const sel = readSelection(config, id);
   const a = sel.apps[target.name];
   if (!a) throw new Error(`selection ${sel.id} has no entry for app ${target.name}`);
   const root = dirRel(target.root);
@@ -357,7 +364,7 @@ export function amendSelection(config, { app, add = [], remove = [], allowRemove
   }
   a.specs.sort(byFile);
   a.unmappedIncluded = a.specs.filter((s) => s.reasons.includes('unmapped')).length;
-  writeSelection(config, sel);
+  writeSelection(config, sel, { current });
   return sel;
 }
 

@@ -161,7 +161,9 @@ rc, spec 별 결과, 실패, flaky. 깨끗한 트리에서 필터 없이 통과�
 e2e-rail 이 먼저 테스트를 나열해, 목록이 덮는 테스트마다 그런 줄 하나씩을 Playwright 에 넘긴다
 (`.e2e-rail/reports/<run-id>.test-list.txt`). 목록 자체와 위의 검사는 쓰인 그대로다. 다른 코드에 대해 계산된 선택(`select` 뒤에 파일이 바뀜)으로 `run --selection` 을 하면
 같은 base · 미커밋 포함 여부로 HEAD 까지 선택을 다시 계산하고 `selection <old> was for other code — reselected as <new>` 를
-찍은 뒤(`--add` 는 옮겨 오고 `--remove` 는 옮겨 오지 않는다) 새 선택을 돌린다. 락을 기다리는 동안 코드가 바뀌면
+찍은 뒤(`--add` 는 옮겨 오고 `--remove` 는 옮겨 오지 않는다) 새 선택을 돌린다. 새 선택은 실행이 현재 선택을 썼을 때만
+현재 선택이 된다(다른 선택을 `run --selection <id>` 로 돌리면 `selections/<new>.json` 만 쓴다). 선택 실행은 자기만의 목록
+파일(`.e2e-rail/reports/<selection>.<app>.<pid>.test-list.txt`, 실행 뒤 삭제)을 Playwright 에 넘긴다. 락을 기다리는 동안 코드가 바뀌면
 `the code changed while waiting for the lock (selection <id> no longer matches); run it again` 으로 멈추고 아무것도
 기록하지 않는다.
 

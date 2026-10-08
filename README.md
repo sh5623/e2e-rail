@@ -166,7 +166,10 @@ first and hands Playwright one such line per test the list covers (`.e2e-rail/re
 list itself, and the check above, stay as written.
 `run --selection` on a selection computed for other code (files changed since `select`) computes it again from the
 same base and uncommitted setting up to HEAD, prints `selection <old> was for other code — reselected as <new>` (carrying
-over its `--add`s, not its `--remove`s) and runs the new one. If the code changes while the run waits for the lock,
+over its `--add`s, not its `--remove`s) and runs the new one; it becomes the current selection only when the run used
+the current one (`run --selection <id>` of another selection writes `selections/<new>.json` alone). Each selection
+run hands Playwright a list file of its own (`.e2e-rail/reports/<selection>.<app>.<pid>.test-list.txt`, deleted
+afterwards). If the code changes while the run waits for the lock,
 it stops with `the code changed while waiting for the lock (selection <id> no longer matches); run it again` and
 records nothing.
 

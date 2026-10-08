@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ConfigError } from '../src/config.mjs';
 import { testListLines } from '../src/select.mjs';
+import { sha256 } from '../src/util/hash.mjs';
 import { execCapture } from '../src/util/exec.mjs';
 import { makeTempRepo } from './helpers.mjs';
 
@@ -389,9 +390,13 @@ test('run --selection: test list rebuilt from the selection it reads ([id]); ful
 
   const r = run(['run', '--selection', sel1.id, '--no-lock'], { STUB_PW_ARGV_FILE: argvFile });
   assert.equal(r.code, 0, r.out);
-  assert.equal(readFileSync(at('.e2e-rail/test-list.web.txt'), 'utf8'), `${lines1.join('\n')}\n`);
+  // G4: the run's own list file (never the shared test-list.<app>.txt another `select` may rewrite), gone afterwards
+  assert.equal(readFileSync(at('.e2e-rail/test-list.web.txt'), 'utf8'), '', 'the current selection\'s list is untouched');
   const argv = JSON.parse(readFileSync(argvFile, 'utf8'));
-  assert.equal(argv[argv.indexOf('--test-list') + 1], at('.e2e-rail/test-list.web.txt'));
+  const handed = argv[argv.indexOf('--test-list') + 1];
+  assert.match(handed, new RegExp(`^${at('.e2e-rail/reports').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/${sel1.id}\\.web\\.\\d+\\.test-list\\.txt$`));
+  assert.equal(existsSync(handed), false, 'deleted after the run');
+  assert.equal(ledgerLines(root).at(-1).testListSha, sha256(`${lines1.join('\n')}\n`), 'it held the selection\'s list');
   const e1 = ledgerLines(root).at(-1);
   assert.equal(e1.kind, 'selected');
   assert.equal(e1.selectionId, sel1.id);
@@ -443,6 +448,30 @@ test('C (audit repro): run --selection on a selection made for other code resele
   // the old selection's id still names the old code: running it by id reselects too
   const again = run(['run', '--selection', old.id, '--no-lock'], cartFails);
   assert.match(again.stdout, new RegExp(`^selection ${old.id} was for other code — reselected as sel-`, 'm'));
+}));
+
+test('G3: run --selection <older id> reselects into selections/<new>.json only; the current selection and its decisions stay', () => withRepo(({ root, run, at }) => {
+  writeFileSync(at('e2e/orders.spec.ts'), '// touched\n', { flag: 'a' });
+  const older = JSON.parse(run(['select', '--base', 'HEAD', '--json']).stdout);
+  writeFileSync(at('src/features/cart/services/cart.ts'), 'export const addToCart = () => 2;\n');
+  assert.equal(run(['select', '--base', 'HEAD']).code, 0);
+  assert.equal(run(['select', '--add', 'e2e/order-detail.spec.ts', '--reason', 'kept decision']).code, 0);
+  const current = readFileSync(at('.e2e-rail/selection.json'), 'utf8');
+  const currentList = readFileSync(at('.e2e-rail/test-list.web.txt'), 'utf8');
+  const r = run(['run', '--selection', older.id, '--no-lock']);
+  assert.equal(r.code, 0, r.out);
+  const freshId = r.stdout.match(new RegExp(`^selection ${older.id} was for other code — reselected as (sel-\\S+)$`, 'm'))?.[1];
+  assert.ok(freshId, r.stdout);
+  assert.ok(existsSync(at(`.e2e-rail/selections/${freshId}.json`)));
+  assert.equal(readFileSync(at('.e2e-rail/selection.json'), 'utf8'), current, 'selection.json is still the current selection');
+  assert.equal(readFileSync(at('.e2e-rail/test-list.web.txt'), 'utf8'), currentList);
+  assert.equal(ledgerLines(root).at(-1).selectionId, freshId);
+  assert.equal(run(['verify', '--require', 'selected']).code, 0, 'the new selection file vouches for the run');
+  // run with the current selection (bare): a reselection of it does become the current one
+  writeFileSync(at('e2e/smoke.spec.ts'), '// touched\n', { flag: 'a' });
+  const bare = run(['run', '--selection', '--no-lock']);
+  const bareId = bare.stdout.match(/reselected as (sel-\S+)$/m)?.[1];
+  assert.equal(JSON.parse(readFileSync(at('.e2e-rail/selection.json'), 'utf8')).id, bareId);
 }));
 
 test('G2 (review repro): select --add after a run amends the selection in place; the earlier run no longer verifies it, a run of the amended list does', () => withRepo(({ root, run, at }) => {

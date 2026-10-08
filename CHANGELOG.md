@@ -36,7 +36,10 @@ never presented as a verification it is not, and nothing narrows by guessing.
 - **A stale selection ran and verified (C, P1).** `run --selection` on a selection computed for other code computes it
   again from the same base and uncommitted setting up to HEAD (same apps), prints
   `selection <old> was for other code — reselected as <new>`, carries over its `--add` entries (not its `--remove`
-  entries) and runs the new one. When the code changes while a selection run waits for the lock, the run stops under
+  entries) and runs the new one; the reselection replaces `selection.json` only when the run used the current
+  selection (`run --selection <id>` of another one writes `selections/<new>.json` alone). A selection run hands
+  Playwright a list file of its own (`.e2e-rail/reports/<selection>.<app>.<pid>.test-list.txt`, deleted afterwards),
+  so another `select` during a long lock wait cannot swap it. When the code changes while a selection run waits for the lock, the run stops under
   the lock with `the code changed while waiting for the lock (selection <id> no longer matches); run it again`, writes
   no ledger line and releases the lock.
 - **A selection made with `--head` other than HEAD verified code it never looked at (G1).** A run always tests the
