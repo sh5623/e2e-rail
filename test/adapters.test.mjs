@@ -251,6 +251,36 @@ test('D and F: a spread of a call result or of a parameter is unresolved', async
   assert.match(f.unresolved[0], /spread of 'extra' is not a const array literal/);
 });
 
+test('H: a const set to a call of a same-file function whose every return is a route array literal is followed', async () => {
+  const router = "import { guideRoutes } from '@/features/guide/routes';\nexport const router = [{ path: '/app', children: [{ children: [...guideRoutes] }] }];\n";
+  const read = (guide) => readSource(router, { file: 'src/router.ts', routeFiles: ['src/router.ts', 'src/features/guide/routes.ts'], extra: { 'src/features/guide/routes.ts': guide } });
+  const ok = [
+    // an env gate: one branch returns no routes; the lazy arrow inside returns an object, which is its own return
+    `export function guideRoutesFor(env: string) {\n  if (env !== 'test') return [];\n  return [{ path: 'guide', ${page('OrdersPage')} }];\n}\nexport const guideRoutes = guideRoutesFor(ENV);\n`,
+    `const build = (on: boolean) => [{ path: 'guide', ${page('OrdersPage')} }];\nexport const guideRoutes = build(true) satisfies unknown[];\n`,
+    `const gate = function (on: boolean) { return on ? [{ path: 'guide', ${page('OrdersPage')} }] : []; };\nexport const guideRoutes = gate(ON);\n`,
+  ];
+  for (const guide of ok) {
+    const { entries, unresolved } = await read(guide);
+    assert.deepEqual(unresolved, [], guide);
+    assert.deepEqual(entries, [{ route: 'guide', file: 'src/features/orders/OrdersPage.ts' }], guide);
+  }
+  // Each of these could hand back routes the adapter never reads: the spread stays unresolved.
+  const open = [
+    ['a return that is not an array literal', `const base = [{ path: 'guide', ${page('OrdersPage')} }];\nfunction f() { return base; }\nexport const guideRoutes = f();\n`],
+    ['a returned array with a spread element', `const base = [{ path: 'guide', ${page('OrdersPage')} }];\nfunction f() { return [...base]; }\nexport const guideRoutes = f();\n`],
+    ['an async function', `async function f() { return [{ path: 'guide', ${page('OrdersPage')} }]; }\nexport const guideRoutes = f();\n`],
+    ['a function with no return', 'function f() {}\nexport const guideRoutes = f();\n'],
+    ['a function from another module', `import { f } from '@/features/guide/impl';\nexport const guideRoutes = f();\n`],
+    ['a method call', `const lib = { f: () => [{ path: 'guide', ${page('OrdersPage')} }] };\nexport const guideRoutes = lib.f();\n`],
+  ];
+  for (const [why, guide] of open) {
+    const { unresolved } = await read(guide);
+    assert.equal(unresolved.length, 1, why);
+    assert.match(unresolved[0], /^src\/router\.ts:2: spread of 'guideRoutes' is not a const array literal/, why);
+  }
+});
+
 test('E: a relative path at the top of a route list resolves against /, so basePath is stripped from it', async () => {
   const { entries, unresolved } = await readSource(`export const router = [{ path: 'app', children: [{ path: 'orders', ${page('OrdersPage')} }] }];\n`, { file: 'src/router.ts' });
   assert.deepEqual(unresolved, []);

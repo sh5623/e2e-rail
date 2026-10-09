@@ -20,6 +20,9 @@ import { normalizePattern } from './pattern.mjs';
 // a spread of a const array, or a const route object (declared in the same file or in a file `routeFiles` covers,
 // following re-exports only into covered files); route objects handed to a helper call; a spread or identifier under a
 // path prefix (prefixes are not composed across files); a spread inside a route object; JSX `<Route>`.
+// A const array may also be the result of calling a function declared at the top of the same file when every `return`
+// of that function is a route array literal or a `?:` of them (an env gate: `if (env !== 'test') return []; return [...]`):
+// those literals are walked like any route list in the file, so their union covers whatever the call yields.
 const ROUTE_KEYS = ['path', 'index', 'lazy', 'children', 'Component', 'element'];
 const ROUTER_FNS = new Set(['createBrowserRouter', 'createHashRouter', 'createMemoryRouter', 'createStaticRouter', 'useRoutes']);
 const MAX_REEXPORT_DEPTH = 8;
@@ -109,6 +112,7 @@ export const reactRouterLazy = {
       if (factsCache.has(rel)) return factsCache.get(rel);
       const imports = new Map(); // local name -> { spec, name: the name the module exports it under }
       const consts = new Map(); // top-level const name -> initializer
+      const functions = new Map(); // top-level function declaration name -> declaration
       const exportedAs = new Map(); // export name -> local name
       const reexports = []; // { spec, names: Map<export name, original name> | null (`export *`) }
       for (const st of parsed.get(rel).statements) {
@@ -126,6 +130,8 @@ export const reactRouterLazy = {
             if (isConst && d.initializer) consts.set(d.name.text, unwrap(d.initializer));
             if (exported) exportedAs.set(d.name.text, d.name.text);
           }
+        } else if (ts.isFunctionDeclaration(st) && st.name && st.body) {
+          functions.set(st.name.text, st);
         } else if (ts.isExportDeclaration(st) && !st.isTypeOnly) {
           const spec = st.moduleSpecifier && ts.isStringLiteral(st.moduleSpecifier) ? st.moduleSpecifier.text : null;
           if (!st.exportClause) {
@@ -139,16 +145,44 @@ export const reactRouterLazy = {
           }
         }
       }
-      const facts = { imports, consts, exportedAs, reexports };
+      const facts = { imports, consts, functions, exportedAs, reexports };
       factsCache.set(rel, facts);
       return facts;
     };
-    // Is `local` (a name in file `rel`) a top-level const initialised with an array (`want: 'array'`) or object
-    // (`want: 'object'`) literal, here or in a covered file it is imported from?
+    // An array literal made only of route object literals (`[]` included), or a `?:` whose branches both are.
+    const isRouteArray = (node) => {
+      const n = node && unwrap(node);
+      if (!n) return false;
+      if (ts.isConditionalExpression(n)) return isRouteArray(n.whenTrue) && isRouteArray(n.whenFalse);
+      return ts.isArrayLiteralExpression(n) && n.elements.every((e) => isRouteObject(unwrap(e)));
+    };
+    // Is `init` a call `f(...)` to a function declared at the top of file `rel` (a function declaration, or a const
+    // arrow or function expression; neither async nor a generator) whose every `return` is a route array? Those arrays
+    // are walked like any route list in `rel`, so whatever the arguments are, the call yields routes the adapter read.
+    const callReturnsRouteArrays = (rel, init) => {
+      if (!ts.isCallExpression(init)) return false;
+      const callee = unwrap(init.expression);
+      if (!ts.isIdentifier(callee)) return false;
+      const { consts, functions } = factsOf(rel);
+      const fn = functions.get(callee.text) ?? consts.get(callee.text);
+      if (!fn || !(ts.isFunctionDeclaration(fn) || ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) return false;
+      if (fn.asteriskToken || fn.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword)) return false;
+      if (!ts.isBlock(fn.body)) return isRouteArray(fn.body);
+      const returned = [];
+      const visit = (n) => {
+        if (ts.isFunctionLike(n) || ts.isClassLike(n)) return; // a nested function's returns are its own
+        if (ts.isReturnStatement(n)) returned.push(n.expression);
+        ts.forEachChild(n, visit);
+      };
+      ts.forEachChild(fn.body, visit);
+      return returned.length > 0 && returned.every(isRouteArray);
+    };
+    // Is `local` (a name in file `rel`) a top-level const initialised with an array (`want: 'array'`, or a call
+    // `callReturnsRouteArrays` accepts) or object (`want: 'object'`) literal, here or in a covered file it is imported from?
     const isConstLiteral = (rel, local, want, depth = 0) => {
       const { consts, imports } = factsOf(rel);
       const init = consts.get(local);
-      if (init) return want === 'array' ? ts.isArrayLiteralExpression(init) : ts.isObjectLiteralExpression(init);
+      if (init) return want === 'array' ? ts.isArrayLiteralExpression(init) || callReturnsRouteArrays(rel, init) : ts.isObjectLiteralExpression(init);
       const imp = imports.get(local);
       if (!imp || depth > MAX_REEXPORT_DEPTH) return false;
       const { file } = resolveSpec(imp.spec, rel);
