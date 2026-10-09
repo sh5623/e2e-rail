@@ -375,12 +375,12 @@ test('README.ko.md follows README.md section by section; Limits names the known 
 
 test('F: the release names one version: package, lockfile root, both plugins, the newest CHANGELOG entry, every install ref and the status lines', () => {
   const v = JSON.parse(read('package.json')).version;
-  assert.equal(v, '0.2.1');
+  assert.equal(v, '0.2.2');
   const lock = JSON.parse(read('package-lock.json'));
   assert.equal(lock.version, v);
   assert.equal(lock.packages[''].version, v);
   assert.equal(lock.packages[''].peerDependencies['@playwright/test'], JSON.parse(read('package.json')).peerDependencies['@playwright/test']);
-  assert.match(read('CHANGELOG.md'), new RegExp(`^# Changelog\\n\\n## ${v.replace(/\./g, '\\.')} — 2026-10-08\\n`));
+  assert.match(read('CHANGELOG.md'), new RegExp(`^# Changelog\\n\\n## ${v.replace(/\./g, '\\.')} — 2026-10-09\\n`));
   for (const rel of ['README.md', 'README.ko.md', 'skills/init/SKILL.md']) {
     const refs = read(rel).match(/e2e-rail#v[^\s`]+/g) ?? [];
     assert.ok(refs.length, `${rel}: an install ref`);

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.2 — 2026-10-09
+
+### Upgrading
+
+- No ledger line, selection or shadow record is invalidated (the verification policy stays 2). The selector can now
+  narrow an app that 0.2.1 ran in full because of the route shape below; every shadow record of such an app was
+  `trivial` under 0.2.1, so no streak was earned on the old behaviour.
+
+### Fixes
+
+- **An env-gated route list made the whole app run in full (adapter, P2).** A route file that builds its list with a
+  function and exports the call (`export const guideRoutes = guideRoutesFor(env.APP_ENV)`, where the function returns
+  `[]` outside one environment) was spread into the router as an unresolved reference, and one unresolved reference
+  widens every src change to the whole app, so every shadow record was `trivial` (found adopting a 149-spec app:
+  `adapter unresolved 1`, `verdict: every src change will run full`). `react-router-lazy` now reads a const set to a
+  call of a function declared at the top of the same file (a function declaration, or a const arrow or function
+  expression; not async, not a generator) when every `return` of that function, ignoring nested functions, is an
+  array of route object literals or a `?:` of such arrays, `[]` included. Those arrays are walked like any route
+  list in the file, so their union covers whatever the call yields for any argument. A return of an identifier, a
+  spread element, an async or generator function, a function from another module and a method call stay
+  unresolved. The README's Limits entry, which said listing such files in `tiers.full` was enough (it did not clear
+  the unresolved reference), says this now.
+
 ## 0.2.1 — 2026-10-08
 
 Fixes from a second external audit of 0.2.0 (both reproduced with real Playwright 1.63).

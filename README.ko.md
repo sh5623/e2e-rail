@@ -16,7 +16,7 @@
 **Claude Code** · **Codex** 스킬 층으로 이뤄진다. 선택·재실행·필터 실행을 전수 통과로 보고하지 않고, 선택 실행마다
 근거가 담긴 선택 블록을 붙이고, 어떤 주장 전에도 `verify` 를 거친다.
 
-**상태:** v0.2.1 (git 태그 `v0.2.1`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
+**상태:** v0.2.2 (git 태그 `v0.2.2`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
 `--test-list` 를 쓰므로 더 낮으면 e2e-rail 이 거부한다), `typescript` ≥ 5 가 필요하다(번들하지 않고 빌려 쓴다).
 
 ## 설치
@@ -24,7 +24,7 @@
 ### CLI (모든 런타임과 CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.2.1
+pnpm add -D github:sh5623/e2e-rail#v0.2.2
 ```
 
 스킬과 CI 는 항상 레포에 설치된 사본(`pnpm exec e2e-rail …`, npm·yarn 이면 `npx e2e-rail …`)을 부른다. 세션과 CI 가
@@ -56,7 +56,7 @@ codex plugin add e2e-rail@e2e-rail-codex
 
 레포 하나에 약 30분.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.2.1`
+1. `pnpm add -D github:sh5623/e2e-rail#v0.2.2`
 2. Claude Code 또는 Codex 플러그인을 설치한다(위).
 3. `init` 스킬을 돌린다. 손으로는 `pnpm exec e2e-rail init`: `e2e-rail.config.mjs` 를 쓰고(찾은
    `playwright.config.*` 마다 앱 하나), `paths` 를 가진 tsconfig 를 고르고, `.gitignore` 에 `.e2e-rail/`,
@@ -308,7 +308,9 @@ export default {
 - **tsconfig `paths` 에 대응이 없는 Vite `resolve.alias`**: 그 별칭을 거친 import 가 보이지 않는다. 모든 별칭을
   `paths` 에도 둔다. impact-analyst 점검 목록도 묻는다.
 - **헬퍼 호출로 만든 라우트 배열**과 **`errorElement` 로 쓰인 모듈**: 어댑터가 라우트 엔트리로 읽지 못할 수 있다.
-  그 파일을 `tiers.full` 에 둔다.
+  같은 라우트 파일에 선언된 함수의 호출로 초기화한 const 는, 그 함수의 모든 `return` 이 라우트 객체 리터럴 배열
+  (또는 그것들의 `?:`, `[]` 포함 — env 게이트)일 때 읽는다. 다른 헬퍼로 만든 목록은 unresolved 로 남아 const 배열
+  리터럴이 될 때까지 앱 전수가 된다. `errorElement` 로 쓰인 모듈은 `tiers.full` 에 둔다.
 - **URL 꼬리만 제한하는 API 글롭**(`**/items`): 꼬리가 동적인 소스 리터럴(`/api/orders/${id}/items` 는
   `/api/orders/*` 로 읽힌다)과는 맞춰 보지 않으므로, 꼬리만 목으로 잡는 spec 은 API 축으로 선택되지 않는다. 목 글롭에
   경로 접두를 쓴다(`**/api/orders/**`). impact-analyst 가 서비스와 그 목을 점검한다.

@@ -16,7 +16,7 @@ It is a zero-dependency Node CLI (`e2e-rail`) that your scripts and CI call, plu
 **Codex** that make agents use it honestly: no selected, rerun or filtered run reported as a full pass, a selection
 block with reasons for every selected run, and `verify` before any claim.
 
-**Status:** v0.2.1 (git tag `v0.2.1`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
+**Status:** v0.2.2 (git tag `v0.2.2`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
 `--test-list`; e2e-rail refuses an older one) and `typescript` ≥ 5 in the host repository (borrowed, not bundled).
 
 ## Install
@@ -24,7 +24,7 @@ block with reasons for every selected run, and `verify` before any claim.
 ### The CLI (every runtime and CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.2.1
+pnpm add -D github:sh5623/e2e-rail#v0.2.2
 ```
 
 Skills and CI always call the copy installed in the repository (`pnpm exec e2e-rail …`, or `npx e2e-rail …` with npm
@@ -56,7 +56,7 @@ no agent: the `select` skill reads `references/impact-analyst.md` and runs that 
 
 About 30 minutes per repository.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.2.1`
+1. `pnpm add -D github:sh5623/e2e-rail#v0.2.2`
 2. Install the Claude Code or the Codex plugin (above).
 3. Run the `init` skill, or by hand `pnpm exec e2e-rail init`: it writes `e2e-rail.config.mjs` (one app per
    `playwright.config.*` found), picks the tsconfig that holds your `paths`, adds `.e2e-rail/`, `test-results/`,
@@ -319,7 +319,10 @@ through before anyone trusts a selection.
 - **A Vite `resolve.alias` that tsconfig `paths` does not mirror**: imports through it are invisible. Mirror every
   alias in `paths`; the impact-analyst checklist asks about them.
 - **Route arrays built by helper calls** and **modules used as `errorElement`**: the adapter may not read them as
-  route entries. List those files in `tiers.full`.
+  route entries. A const set to a call of a function declared in the same route file is read when every `return` of
+  that function is an array of route object literals or a `?:` of them, `[]` included (an env gate); any other
+  helper-built list is unresolved and runs the app in full until it is a const array literal. List the modules used
+  as `errorElement` in `tiers.full`.
 - **API globs that only constrain a URL tail** (`**/items`): a source literal with a dynamic tail
   (`/api/orders/${id}/items` is read as `/api/orders/*`) is not matched against them, so a spec that mocks only the
   tail is not selected on the API axis. Write mock globs with the path prefix (`**/api/orders/**`); the

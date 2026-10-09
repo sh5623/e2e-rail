@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "e2e-rail",
-      "description": "Change-aware Playwright E2E — skills, a read-only impact analyst and a doctrine hook over the e2e-rail CLI installed in the repo (pnpm add -D github:sh5623/e2e-rail#v0.2.1).",
+      "description": "Change-aware Playwright E2E — skills, a read-only impact analyst and a doctrine hook over the e2e-rail CLI installed in the repo (pnpm add -D github:sh5623/e2e-rail#v0.2.2).",
       "source": "./",
       "category": "engineering",
       "tags": [

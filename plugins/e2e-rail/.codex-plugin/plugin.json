@@ -1,6 +1,6 @@
 {
   "name": "e2e-rail",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Change-aware Playwright E2E selection, verification ledger and sharding — Codex skills over the e2e-rail CLI.",
   "author": {
     "name": "Seungho"
