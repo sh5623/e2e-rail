@@ -55,10 +55,11 @@ export default async function lock(argv) {
     console.log(`reaped: ${removed.length ? removed.join(', ') : 'none'}`);
     return 0;
   }
-  const { heavy, light } = lockStatus(dir);
+  const { heavy, light, waiting = [] } = lockStatus(dir);
   console.log(`lock dir: ${dir}`);
   console.log(`heavy: ${heavy ? holder(heavy) : 'free'}`);
   if (!light.length) console.log('light: free');
   for (const o of light) console.log(`light: ${holder(o)}`);
+  for (const o of waiting) console.log(`waiting ${o.cls}: ${holder(o)}`);
   return 0;
 }

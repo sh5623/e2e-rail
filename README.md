@@ -16,7 +16,7 @@ It is a zero-dependency Node CLI (`e2e-rail`) that your scripts and CI call, plu
 **Codex** that make agents use it honestly: no selected, rerun or filtered run reported as a full pass, a selection
 block with reasons for every selected run, and `verify` before any claim.
 
-**Status:** v0.2.2 (git tag `v0.2.2`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
+**Status:** v0.2.3 (git tag `v0.2.3`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
 `--test-list`; e2e-rail refuses an older one) and `typescript` ≥ 5 in the host repository (borrowed, not bundled).
 
 ## Install
@@ -24,7 +24,7 @@ block with reasons for every selected run, and `verify` before any claim.
 ### The CLI (every runtime and CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.2.2
+pnpm add -D github:sh5623/e2e-rail#v0.2.3
 ```
 
 Skills and CI always call the copy installed in the repository (`pnpm exec e2e-rail …`, or `npx e2e-rail …` with npm
@@ -56,7 +56,7 @@ no agent: the `select` skill reads `references/impact-analyst.md` and runs that 
 
 About 30 minutes per repository.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.2.2`
+1. `pnpm add -D github:sh5623/e2e-rail#v0.2.3`
 2. Install the Claude Code or the Codex plugin (above).
 3. Run the `init` skill, or by hand `pnpm exec e2e-rail init`: it writes `e2e-rail.config.mjs` (one app per
    `playwright.config.*` found), picks the tsconfig that holds your `paths`, adds `.e2e-rail/`, `test-results/`,
@@ -228,8 +228,15 @@ delete it.
 
 **Lock.** One lock serves the whole machine (every repository and worktree), in a private 0700 directory under the
 temp dir; `E2E_RAIL_LOCK_DIR` moves it. Full and shard runs, runs without a worker count, and `measure workers` take
-the exclusive heavy lock; other runs share two light slots. A waiting heavy run keeps new light runs out.
-`pnpm exec e2e-rail lock status` shows the holders, `lock reap` removes locks whose process is gone, and
+the exclusive heavy lock; other runs share two light slots. Requests publish monotonic-clock tickets and enter in
+ticket order. A ticket leaves the queue when its request claims a lock: consecutive lights can share the slots;
+a heavy waits for earlier running lights to finish and blocks later arrivals. A heavy driver that releases and
+immediately asks again queues behind requests already waiting. Existing holders are never interrupted, so wait time
+depends on the work ahead and polling, not a fixed number of seconds. `timeoutMs` still bounds an acquisition when set.
+Tickets are removed on acquisition, timeout, error or process exit; a killed request is reaped just like a killed
+holder (an ownerless ticket gets the same 10-second grace). All contenders need 0.2.3 or newer for fairness: older
+processes share the same exclusion locks but do not observe the queue. Update idle runners; do not delete live locks.
+`pnpm exec e2e-rail lock status` shows the holders and waiting requests, `lock reap` removes orphan locks and tickets, and
 `lock run heavy -- <command>` wraps any other command in the same lock.
 
 **Workers.** e2e-rail never chooses a worker count. `pnpm exec e2e-rail measure workers 1,2,4 --test-list <file>`

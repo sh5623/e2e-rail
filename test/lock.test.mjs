@@ -111,6 +111,117 @@ test('a heavy waiting for running lights holds the heavy lock and keeps new ligh
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('fairness: a queued light runs before a zero-gap heavy chain reacquires', async () => {
+  const dir = tempDir();
+  const order = [];
+  try {
+    const first = await acquire({ dir, cls: 'heavy' });
+    const light = acquire({ dir, cls: 'light', pollMs: 20, timeoutMs: 5000 })
+      .then((l) => { order.push('light'); l.release(); });
+    first.release();
+    // Deliberately no yield here: a fast heavy driver used to win both times before light's next poll.
+    for (let i = 0; i < 2; i++) {
+      const h = await acquire({ dir, cls: 'heavy', pollMs: 5, timeoutMs: 5000 });
+      order.push(`heavy-${i}`); h.release();
+    }
+    await light;
+    assert.deepEqual(order, ['light', 'heavy-0', 'heavy-1']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('fairness: an already queued heavy keeps its place, but later heavies cannot pass the light behind it', async () => {
+  const dir = tempDir();
+  const order = [];
+  try {
+    const first = await acquire({ dir, cls: 'heavy' });
+    const queued = (cls, label, pollMs) => acquire({ dir, cls, purpose: label, pollMs, timeoutMs: 5000 })
+      .then((h) => { order.push(label); h.release(); });
+    const olderHeavy = queued('heavy', 'older-heavy', 20);
+    const light = queued('light', 'light', 20);
+    first.release();
+    const laterHeavy = queued('heavy', 'later-heavy', 5);
+    await Promise.all([olderHeavy, light, laterHeavy]);
+    assert.deepEqual(order, ['older-heavy', 'light', 'later-heavy']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('fairness: a light cohort shares slots and later light arrivals cannot starve the queued heavy', async () => {
+  const dir = tempDir();
+  const order = [];
+  const lights = [];
+  try {
+    const first = await acquire({ dir, cls: 'heavy' });
+    const older = [0, 1].map((i) => acquire({ dir, cls: 'light', pollMs: 5, timeoutMs: 5000 })
+      .then((l) => { order.push(`older-${i}`); lights.push(l); return l; }));
+    const heavy = acquire({ dir, cls: 'heavy', pollMs: 5, timeoutMs: 5000 })
+      .then((h) => { order.push('heavy'); h.release(); });
+    const later = Array.from({ length: 6 }, (_, i) => acquire({ dir, cls: 'light', pollMs: 5, timeoutMs: 5000 })
+      .then((l) => { order.push(`later-${i}`); l.release(); }));
+    first.release();
+    await Promise.all(older);
+    assert.equal(lockStatus(dir).light.length, 2, 'both older lights may share the machine');
+    assert.equal(order.includes('heavy'), false, 'heavy cannot enter during the cohort');
+    lights.forEach((l) => l.release());
+    await Promise.all([heavy, ...later]);
+    assert.equal(order.indexOf('heavy'), 2, 'all six later lights stay behind the heavy');
+    assert.equal(fs.readdirSync(dir).length, 0);
+  } finally { lights.forEach((l) => l.release()); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('queue tickets are removed on timeout or a throwing onWait without leaking exit listeners', async () => {
+  const dir = tempDir();
+  const baseline = process.listenerCount('exit');
+  try {
+    const h = await acquire({ dir, cls: 'heavy' });
+    await assert.rejects(acquire({ dir, cls: 'light', pollMs: 5, timeoutMs: 40 }), /timed out/);
+    assert.equal(lockStatus(dir).waiting, undefined);
+    await assert.rejects(acquire({ dir, cls: 'heavy', onWait: () => { throw new Error('observer failed'); } }), /observer failed/);
+    assert.equal(lockStatus(dir).waiting, undefined);
+    assert.equal(process.listenerCount('exit'), baseline + 1);
+    h.release();
+    assert.equal(process.listenerCount('exit'), baseline);
+    assert.deepEqual(fs.readdirSync(dir), []);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('fairness: a slow-polling light cannot be overtaken by a fresh light at a free slot', async () => {
+  const dir = tempDir();
+  const order = [];
+  try {
+    const first = await acquire({ dir, cls: 'light', slots: 1 });
+    const older = acquire({ dir, cls: 'light', slots: 1, pollMs: 25, timeoutMs: 5000 })
+      .then((l) => { order.push('older'); l.release(); });
+    first.release();
+    const fresh = await acquire({ dir, cls: 'light', slots: 1, pollMs: 5, timeoutMs: 5000 });
+    order.push('fresh'); fresh.release();
+    await older;
+    assert.deepEqual(order, ['older', 'fresh']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('queue tickets retain orphan grace, dead-owner recovery and symlink safety', async () => {
+  const dir = tempDir();
+  const outside = tempDir();
+  const name = 'wait-000000000000000000000000-000000000001.lock';
+  try {
+    mkdirSync(path.join(dir, name));
+    assert.deepEqual(reap(dir), []);
+    await assert.rejects(acquire({ dir, cls: 'light', timeoutMs: 40, pollMs: 5 }), /timed out/);
+    utimesSync(path.join(dir, name), longAgo(), longAgo());
+    assert.deepEqual(reap(dir), [name]);
+    writeOwner(dir, name, { pid: deadPid(), token: 'dead', cls: 'light', start: 'old' });
+    const h = await acquire({ dir, cls: 'heavy', timeoutMs: 2000, pollMs: 5 });
+    assert.equal(existsSync(path.join(dir, name)), false);
+    h.release();
+    if (process.platform !== 'win32') {
+      writeFileSync(path.join(outside, 'keep'), 'unchanged');
+      symlinkSync(outside, path.join(dir, name));
+      assert.deepEqual(reap(dir), [name]);
+      assert.equal(readFileSync(path.join(outside, 'keep'), 'utf8'), 'unchanged');
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); }
+});
+
 test('the handle reports wait, load and times; release returns its time once', async () => {
   const dir = tempDir();
   try {
@@ -263,6 +374,58 @@ const exitOf = (child, ms = 30_000) => new Promise((resolve) => {
   child.stderr?.on('data', (d) => { err += d; });
   const timer = setTimeout(() => { err += `\n(killed after ${ms} ms)`; child.kill('SIGKILL'); }, ms);
   child.on('close', (code, signal) => { clearTimeout(timer); resolve({ code, signal, err }); });
+});
+
+test('fairness across processes: a waiting light enters before a newly requested heavy', async () => {
+  const dir = tempDir();
+  let first;
+  let child;
+  let done;
+  try {
+    first = await acquire({ dir, cls: 'heavy' });
+    child = spawn(process.execPath, ['--input-type=module', '-e', `
+      import { writeFileSync } from 'node:fs';
+      const { acquire } = await import(process.env.LOCK_URL);
+      const l = await acquire({ dir: process.argv[1], cls: 'light', pollMs: 30, timeoutMs: 10000 });
+      writeFileSync(process.argv[2], 'light acquired');
+      l.release();
+    `, dir, path.join(dir, 'light-entered')], { env: { ...process.env, LOCK_URL }, stdio: ['ignore', 'ignore', 'pipe'] });
+    done = exitOf(child);
+    await until(() => lockStatus(dir).waiting?.some((o) => o.pid === child.pid));
+    first.release();
+    const h = await acquire({ dir, cls: 'heavy', pollMs: 5, timeoutMs: 10000 });
+    const lightFirst = existsSync(path.join(dir, 'light-entered'));
+    h.release();
+    assert.equal((await done).code, 0);
+    assert.equal(lightFirst, true, 'queue order must work across different process clocks');
+  } finally { first?.release(); child?.kill('SIGKILL'); if (done) await done; rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a waiting process removes its ticket on exit, and SIGKILL tickets are reaped', { skip: process.platform === 'win32' }, async () => {
+  for (const kill of [false, true]) {
+    const dir = tempDir();
+    let held;
+    let child;
+    let done;
+    try {
+      held = await acquire({ dir, cls: 'heavy' });
+      child = spawn(process.execPath, ['--input-type=module', '-e', `
+        const { acquire } = await import(process.env.LOCK_URL);
+        process.stdin.on('data', () => process.exit(0));
+        await acquire({ dir: process.argv[1], cls: 'light', pollMs: 10, timeoutMs: 10000 });
+      `, dir], { env: { ...process.env, LOCK_URL }, stdio: ['pipe', 'ignore', 'pipe'] });
+      done = exitOf(child);
+      await until(() => lockStatus(dir).waiting?.some((o) => o.pid === child.pid));
+      const ticket = lockStatus(dir).waiting.find((o) => o.pid === child.pid).lock;
+      if (kill) child.kill('SIGKILL'); else child.stdin.end('exit');
+      const result = await done;
+      if (!kill) assert.equal(result.code, 0, result.err);
+      if (kill) assert.deepEqual(reap(dir), [ticket]);
+      assert.equal(existsSync(path.join(dir, ticket)), false);
+      held.release();
+      assert.deepEqual(lockStatus(dir), { heavy: null, light: [] });
+    } finally { held?.release(); child?.kill('SIGKILL'); if (done) await done; rmSync(dir, { recursive: true, force: true }); }
+  }
 });
 
 test('processes racing for heavy and light never overlap, also while they all reap the same orphan', async () => {

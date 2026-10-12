@@ -17,13 +17,19 @@ import { execCapture } from './util/exec.mjs';
 // OWNERLESS_GRACE_MS. The lock dir must be private to the user (a shared /tmp lets another user block runs or plant
 // symlinks), and nothing here follows a symlink: a symlinked entry is removed itself, never its target. Both classes publish first and look second: a light takes its slot, then checks for a heavy; a
 // heavy takes its lock, then waits for the lights. Whichever looks second sees the other, so they never overlap, and a
-// waiting heavy keeps every new light out.
+// waiting heavy keeps every new light out once it has reserved heavy.lock.
+// Each requester first publishes a wait-<monotonic time>-<token>.lock ticket with the same owner/reap protocol.
+// Only the earliest published ticket may claim a lock; its ticket disappears on admission, not on release. Consecutive
+// lights can therefore share the slots, but later requests of either class cannot overtake an earlier waiter.
+// Concurrent publications need no serial counter or new mutex.
+// Admission still uses the original locks above: queue order never relaxes exclusion, even with older CLI processes.
 
 export const OWNERLESS_GRACE_MS = 10_000;
 const REUSE_SLACK_SEC = 5;
 const HEAVY = 'heavy.lock';
 const OWNER = 'owner.json';
 const LIGHT = /^light-\d+\.lock$/;
+const WAIT = /^wait-\d{24}-[a-f0-9]{12}\.lock$/;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const token = () => randomBytes(6).toString('hex');
@@ -161,28 +167,32 @@ function reapOne(dir, name, graceMs) {
 export function reap(dir, { graceMs = OWNERLESS_GRACE_MS } = {}) {
   if (!lstat(dir)) return [];
   assertPrivateDir(dir);
-  return entries(dir).filter((name) => (name === HEAVY || LIGHT.test(name)) && reapOne(dir, name, graceMs));
+  return entries(dir).filter((name) => (name === HEAVY || LIGHT.test(name) || WAIT.test(name)) && reapOne(dir, name, graceMs));
 }
 
-// { heavy: owner | null, light: owner[] }; each owner row also carries its `lock` name and whether it is `alive`.
+// { heavy: owner | null, light: owner[], waiting?: owner[] }; waiting is present only for queued requests, in order.
+// Each owner row also carries its `lock` name and whether it is `alive`.
 export function lockStatus(dir) {
   const status = { heavy: null, light: [] };
   for (const name of entries(dir).sort()) {
     const heavy = name === HEAVY;
-    if (!heavy && !LIGHT.test(name)) continue;
+    const waiting = WAIT.test(name);
+    if (!heavy && !LIGHT.test(name) && !waiting) continue;
     if (!lstat(path.join(dir, name))?.isDirectory()) continue;
     const owner = readOwner(path.join(dir, name));
     if (!owner) continue;
     const row = { ...owner, lock: name, alive: ownerAlive(owner) };
-    if (heavy) status.heavy = row;
+    if (waiting) (status.waiting ??= []).push(row);
+    else if (heavy) status.heavy = row;
     else status.light.push(row);
   }
   return status;
 }
 
-export function describeHolders({ heavy, light }) {
+export function describeHolders({ heavy, light, waiting = [] }) {
   const one = (o) => `${o.cls} pid ${o.pid}${o.purpose ? ` ${o.purpose}` : ''} since ${o.start}${o.alive ? '' : ' (gone)'}`;
   const rows = [heavy, ...light].filter(Boolean).map(one);
+  rows.push(...waiting.map((o) => `queued ${one(o)}`));
   return rows.length ? rows.join('; ') : 'a holder is being set up';
 }
 
@@ -198,15 +208,25 @@ export async function acquire({ dir, cls, slots = 2, pollMs = 500, timeoutMs = I
   const requestedAt = new Date(t0).toISOString();
   const tok = token();
   const record = () => ({ pid: process.pid, token: tok, cls, purpose, cwd: process.cwd(), start: new Date().toISOString(), uptime: uptime() });
+  // hrtime is the machine's monotonic clock, independent of wall-clock corrections. Token breaks simultaneous ties.
+  const ticketName = `wait-${process.hrtime.bigint().toString().padStart(24, '0')}-${tok}.lock`;
+  let ticket = null;
   let held = null; // { abs, owner } — a heavy holds its lock while the running lights drain
-  const onExit = () => { if (held) removeIfOwner(dir, held.abs, held.owner); };
-  const hold = (abs, owner) => { held = { abs, owner }; process.once('exit', onExit); };
+  const dropTicket = () => {
+    if (ticket) removeIfOwner(dir, ticket.abs, ticket.owner);
+    ticket = null;
+  };
+  const onExit = () => { dropTicket(); if (held) removeIfOwner(dir, held.abs, held.owner); };
+  const hold = (abs, owner) => { held = { abs, owner }; dropTicket(); };
   const drop = () => {
     process.removeListener('exit', onExit);
+    dropTicket();
     if (held) removeIfOwner(dir, held.abs, held.owner);
     held = null;
   };
   const heavyIn = () => lstat(path.join(dir, HEAVY)) !== undefined;
+  // An incomplete older publication blocks admission too, until its owner appears or its grace period expires.
+  const ourTurn = () => !entries(dir).some((name) => WAIT.test(name) && name < ticketName);
   const grant = () => {
     const acquired = Date.now();
     let releasedAt = null;
@@ -224,29 +244,38 @@ export async function acquire({ dir, cls, slots = 2, pollMs = 500, timeoutMs = I
     };
   };
   let waiting = false;
-  for (;;) {
-    reap(dir);
-    if (cls === 'heavy') {
-      if (!held) { const o = record(); if (take(dir, HEAVY, o)) hold(path.join(dir, HEAVY), o); }
-      if (held && !entries(dir).some((n) => LIGHT.test(n))) return grant();
-    } else if (!heavyIn()) {
-      for (let i = 0; i < slots; i++) {
-        const name = `light-${i}.lock`;
-        const o = record();
-        if (!take(dir, name, o)) continue;
-        if (heavyIn()) { removeIfOwner(dir, path.join(dir, name), o); break; } // a heavy came in meanwhile: it goes first
-        hold(path.join(dir, name), o);
-        return grant();
+  process.once('exit', onExit);
+  try {
+    reap(dir); // validate the directory before publishing anything
+    const owner = record();
+    if (!take(dir, ticketName, owner)) throw new Error('e2e-rail: could not publish lock request; retry acquisition');
+    ticket = { abs: path.join(dir, ticketName), owner };
+    for (;;) {
+      reap(dir);
+      if (cls === 'heavy') {
+        if (!held && ourTurn()) { const o = record(); if (take(dir, HEAVY, o)) hold(path.join(dir, HEAVY), o); }
+        if (held && !entries(dir).some((n) => LIGHT.test(n))) return grant();
+      } else if (ourTurn() && !heavyIn()) {
+        for (let i = 0; i < slots; i++) {
+          const name = `light-${i}.lock`;
+          const o = record();
+          if (!take(dir, name, o)) continue;
+          if (heavyIn() || !ourTurn()) { removeIfOwner(dir, path.join(dir, name), o); break; }
+          hold(path.join(dir, name), o);
+          return grant();
+        }
       }
+      if (Date.now() - t0 > timeoutMs) {
+        const err = new Error(`e2e-rail: timed out after ${timeoutMs} ms waiting for the ${cls} lock in ${dir} (${describeHolders(lockStatus(dir))})`);
+        err.code = 'E2E_RAIL_LOCK_TIMEOUT';
+        throw err;
+      }
+      if (!waiting) { waiting = true; onWait?.(lockStatus(dir)); }
+      await sleep(pollMs);
     }
-    if (Date.now() - t0 > timeoutMs) {
-      drop();
-      const err = new Error(`e2e-rail: timed out after ${timeoutMs} ms waiting for the ${cls} lock in ${dir} (${describeHolders(lockStatus(dir))})`);
-      err.code = 'E2E_RAIL_LOCK_TIMEOUT';
-      throw err;
-    }
-    if (!waiting) { waiting = true; onWait?.(lockStatus(dir)); }
-    await sleep(pollMs);
+  } catch (error) {
+    drop();
+    throw error;
   }
 }
 

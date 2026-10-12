@@ -16,7 +16,7 @@
 **Claude Code** · **Codex** 스킬 층으로 이뤄진다. 선택·재실행·필터 실행을 전수 통과로 보고하지 않고, 선택 실행마다
 근거가 담긴 선택 블록을 붙이고, 어떤 주장 전에도 `verify` 를 거친다.
 
-**상태:** v0.2.2 (git 태그 `v0.2.2`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
+**상태:** v0.2.3 (git 태그 `v0.2.3`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
 `--test-list` 를 쓰므로 더 낮으면 e2e-rail 이 거부한다), `typescript` ≥ 5 가 필요하다(번들하지 않고 빌려 쓴다).
 
 ## 설치
@@ -24,7 +24,7 @@
 ### CLI (모든 런타임과 CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.2.2
+pnpm add -D github:sh5623/e2e-rail#v0.2.3
 ```
 
 스킬과 CI 는 항상 레포에 설치된 사본(`pnpm exec e2e-rail …`, npm·yarn 이면 `npx e2e-rail …`)을 부른다. 세션과 CI 가
@@ -56,7 +56,7 @@ codex plugin add e2e-rail@e2e-rail-codex
 
 레포 하나에 약 30분.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.2.2`
+1. `pnpm add -D github:sh5623/e2e-rail#v0.2.3`
 2. Claude Code 또는 Codex 플러그인을 설치한다(위).
 3. `init` 스킬을 돌린다. 손으로는 `pnpm exec e2e-rail init`: `e2e-rail.config.mjs` 를 쓰고(찾은
    `playwright.config.*` 마다 앱 하나), `paths` 를 가진 tsconfig 를 고르고, `.gitignore` 에 `.e2e-rail/`,
@@ -219,8 +219,14 @@ miss 로 보인다. 예상된 결과다. miss 가 streak 를 되돌리는 것은
 
 **락.** 락 하나가 머신 전체(모든 레포와 워크트리)를 맡는다. 임시 디렉터리 아래의 0700 개인 디렉터리에 있고
 `E2E_RAIL_LOCK_DIR` 로 옮긴다. 전수·샤드 실행, 워커 수 없는 실행, `measure workers` 는 배타적인 heavy 락을 잡고, 나머지는
-light 두 자리를 나눠 쓴다. 기다리는 heavy 가 있으면 새 light 는 들어가지 못한다. `pnpm exec e2e-rail lock status` 는
-보유자를, `lock reap` 은 프로세스가 사라진 락을 지우고, `lock run heavy -- <command>` 는 다른 명령을 같은 락으로 감싼다.
+light 두 자리를 나눠 쓴다. 요청은 단조 시계 번호표를 만들고 그 순서로 진입한다. 번호표는 락을 잡으면 대기열에서 빠져,
+연속된 light 는 슬롯을 함께 쓰고 heavy 는 앞서 실행 중인 light 가 끝나길 기다리며 뒤의 요청을 막는다.
+heavy 드라이버가 해제 즉시 다시 요청해도 이미 기다리는 요청 뒤에 선다. 보유 중인 작업을 중단하지 않으므로
+대기 시간은 앞선 작업과 폴링에 달렸으며 고정 초 단위 상한은 아니다. 지정한 `timeoutMs` 는 계속 획득 대기를 제한한다.
+번호표는 획득·타임아웃·오류·프로세스 종료 때 지우고, 강제 종료된 요청은 기존 락처럼 reap 한다(주인 없는 번호표는
+같은 10초 유예). 공정성을 보장하려면 모든 요청자가 0.2.3 이상이어야 한다. 구버전도 같은 배타 락을 쓰지만 대기열을
+따르지 않는다. 쉬고 있는 러너부터 갱신하고 살아 있는 락은 지우지 않는다. `pnpm exec e2e-rail lock status` 는
+보유자와 대기 요청을, `lock reap` 은 고아 락과 번호표를 지우고, `lock run heavy -- <command>` 는 다른 명령을 같은 락으로 감싼다.
 
 **워커.** e2e-rail 은 워커 수를 정하지 않는다. `pnpm exec e2e-rail measure workers 1,2,4 --test-list <file>` 이
 같은 목록을 워커 수마다 한 번씩, 매번 배타 락 아래서 돌리고 벽시계·실패·재시도·부하를 출력한다. 이긴 값은 사람이

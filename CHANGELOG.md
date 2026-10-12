@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.3 — 2026-10-12
+
+### Fixes
+
+- **Queued light work could starve behind a zero-gap heavy chain.** Every acquisition now publishes an owned,
+  monotonic-clock ticket before competing for the existing heavy/light locks. Admission follows ticket order;
+  tickets leave on admission, so consecutive lights still share the configured slots. A later heavy cannot pass a
+  queued light, and later lights cannot pass a queued heavy (or an earlier light). Heavy exclusion and light-slot
+  limits are unchanged, including for `run`, `measure workers`, and `lock run`.
+- Waiting tickets use the existing private-directory, owner identity, process-exit and orphan-grace protections.
+  Timeout and callback errors remove them too; `lock status` shows waiting requests and `lock reap` removes orphan
+  tickets. The optional `waiting` array in `lockStatus` is present only while requests are queued.
+
+### Upgrading
+
+- Verification policy stays 2: no ledger or shadow reset. Scheduling changes, not what a passing run verifies.
+- Fairness requires every contender to use 0.2.3 or newer. Older runners still preserve exclusion through the same
+  heavy/light lock paths but may overtake queue tickets. Do not remove live locks to upgrade.
+- Waits are bounded by earlier work and polling, not a fixed duration: running tasks are never preempted.
+
+Decision and reproduction: `docs/superpowers/decisions/2026-10-12-lock-fairness.md`.
+
 ## 0.2.2 — 2026-10-09
 
 ### Upgrading
