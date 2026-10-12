@@ -16,7 +16,7 @@ It is a zero-dependency Node CLI (`e2e-rail`) that your scripts and CI call, plu
 **Codex** that make agents use it honestly: no selected, rerun or filtered run reported as a full pass, a selection
 block with reasons for every selected run, and `verify` before any claim.
 
-**Status:** v0.3.1 (git tag `v0.3.1`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
+**Status:** v0.3.2 (git tag `v0.3.2`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
 `--test-list`; e2e-rail refuses an older one) and `typescript` ≥ 5 in the host repository (borrowed, not bundled).
 
 ## Install
@@ -24,7 +24,7 @@ block with reasons for every selected run, and `verify` before any claim.
 ### The CLI (every runtime and CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.3.1
+pnpm add -D github:sh5623/e2e-rail#v0.3.2
 ```
 
 This pins one version for the team and CI (project mode): they call it as `pnpm exec e2e-rail …` (`npx e2e-rail …`
@@ -89,7 +89,7 @@ existing in-repository ledger.
 
 About 30 minutes per repository.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.3.1` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
+1. `pnpm add -D github:sh5623/e2e-rail#v0.3.2` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
 2. Install the Claude Code or the Codex plugin (above).
 3. Run the `init` skill, or by hand `pnpm exec e2e-rail init`: it writes `e2e-rail.config.mjs` (one app per
    `playwright.config.*` found), picks the tsconfig that holds your `paths`, adds `.e2e-rail/`, `test-results/`,

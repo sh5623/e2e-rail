@@ -213,3 +213,32 @@ test('turn snapshots never follow a link: a linked turns dir, a planted temp lin
     void root;
   } finally { rmSync(outside, { recursive: true, force: true }); }
 }));
+
+test('a relative ledger dir reached through a link on the way out of the work tree is refused; so are snapshot paths that leave it', () => withRepo(({ hook, cli, root, at }) => {
+  const outside = realpathSync(mkdtempSync(path.join(tmpdir(), 'e2e-rail-hook-out2-')));
+  try {
+    const cfg = at('e2e-rail.config.mjs');
+    writeFileSync(cfg, readFileSync(cfg, 'utf8').replace(/ledger: \{ dir: '\.e2e-rail' \}/, "ledger: { dir: 'state/.e2e-rail' }"));
+    mkdirSync(at('state'));
+    assert.equal(cli(['status']).code, 0); // recorded while `state` was a plain directory
+    rmSync(at('state'), { recursive: true });
+    symlinkSync(outside, at('state')); // a later pull makes it a link out of the work tree
+    const victim = path.join(outside, '.e2e-rail/turns/old.json');
+    mkdirSync(path.dirname(victim), { recursive: true });
+    writeFileSync(victim, 'precious');
+    const weekAgo = new Date(Date.now() - 8 * 24 * 3600 * 1000);
+    utimesSync(victim, weekAgo, weekAgo);
+    hook('turn-start', { session_id: 'sess-1' });
+    assert.deepEqual(readdirSync(path.dirname(victim)), ['old.json'], 'nothing written or pruned out of the work tree');
+    rmSync(at('state'));
+    mkdirSync(at('state/.e2e-rail/turns'), { recursive: true });
+
+    // a snapshot naming a path that leaves the work tree is not a snapshot
+    const head = execCapture('git', ['rev-parse', 'HEAD'], { cwd: root }).stdout.trim();
+    writeFileSync(at('state/.e2e-rail/turns/sess-4.json'), JSON.stringify({ head, files: { '../../etc/hosts': 'deleted' } }));
+    writeFileSync(at('src/components/Table.ts'), TABLE_EDIT);
+    assert.equal(hook('stop', { ...S, session_id: 'sess-4' }).stdout, '');
+    writeFileSync(at('state/.e2e-rail/turns/sess-5.json'), JSON.stringify({ head, files: {} }));
+    assert.equal(hook('stop', { ...S, session_id: 'sess-5' }).json.decision, 'block', 'the same change with a clean snapshot is caught');
+  } finally { rmSync(outside, { recursive: true, force: true }); }
+}));

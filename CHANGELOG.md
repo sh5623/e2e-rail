@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.2 — 2026-10-12
+
+### Security
+
+- **No link on the way out of the work tree.** 0.3.1 refused a ledger or turns dir that is itself a link, but a
+  relative ledger dir (`ledger: { dir: 'state/.e2e-rail' }`) could still be reached through a directory that a later
+  pull turns into a link elsewhere, and the hook wrote and pruned there (reproduced in a test). A hook now leaves the
+  turns dir alone unless its real path lies inside the work tree's (an absolute ledger dir is the user's own choice and
+  only gets the link checks).
+- **A snapshot names only paths inside the work tree.** A snapshot listing an absolute path or a `..` segment is not
+  read.
+
+### Upgrading
+
+- Verification policy stays 2; recorded configs from 0.3.1 stay valid.
+
 ## 0.3.1 — 2026-10-12
 
 ### Security

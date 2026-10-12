@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ConfigError, ledgerDir, loadConfig } from './config.mjs';
 import { readRuns } from './ledger.mjs';
@@ -79,13 +79,20 @@ export function changedBetween(config, a, b) {
     for (const rel of r.stdout.split('\0').filter(Boolean)) candidates.add(rel);
   }
   const rels = [...candidates];
-  const atA = { ...treeBlobs(top, a.head, rels.filter((rel) => !(rel in a.files))), ...a.files };
-  const atB = { ...treeBlobs(top, b.head, rels.filter((rel) => !(rel in b.files))), ...b.files };
-  return rels.filter((rel) => atA[rel] !== atB[rel]).sort();
+  const atA = { ...treeBlobs(top, a.head, rels.filter((rel) => !Object.hasOwn(a.files, rel))), ...a.files };
+  const atB = { ...treeBlobs(top, b.head, rels.filter((rel) => !Object.hasOwn(b.files, rel))), ...b.files };
+  return rels.filter((rel) => (Object.hasOwn(atA, rel) ? atA[rel] : 'deleted') !== (Object.hasOwn(atB, rel) ? atB[rel] : 'deleted')).sort();
 }
 
-// The turns dir, or null when the ledger dir or the turns dir is a link or not a directory: a hook never writes,
-// prunes or reads through a link (a repository could ship `.e2e-rail/turns` pointing anywhere).
+// The turns dir, or null when a hook must not touch it: the ledger dir or the turns dir is a link or not a directory,
+// or a relative ledger dir (one inside the work tree) is reached through a link that leads out of the work tree. A hook
+// never writes, prunes or reads through a link a repository could ship (`.e2e-rail/turns`, or a directory on the way).
+const inside = (p, top) => p === top || p.startsWith(`${top}${path.sep}`);
+function nearestExisting(p) {
+  let q = p;
+  while (!existsSync(q) && path.dirname(q) !== q) q = path.dirname(q);
+  return q;
+}
 function turnsDir(config) {
   const ledger = ledgerDir(config);
   const dir = path.join(ledger, 'turns');
@@ -93,6 +100,7 @@ function turnsDir(config) {
     const st = lstatSync(p, { throwIfNoEntry: false });
     if (st && !st.isDirectory()) return null;
   }
+  if (!path.isAbsolute(config.ledger.dir) && !inside(realpathSync(nearestExisting(dir)), realpathSync(config.root))) return null;
   return dir;
 }
 const turnName = (session) => `${String(session).replace(/[^\w.-]/g, '_')}.json`;
@@ -127,6 +135,8 @@ function readTurn(dir, session) {
   if (!s || typeof s.head !== 'string' || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(s.head)) return null;
   if (!s.files || typeof s.files !== 'object' || Array.isArray(s.files)) return null;
   if (!Object.values(s.files).every((v) => typeof v === 'string' && BLOB.test(v))) return null;
+  // paths as git lists them: relative to the toplevel, never leaving it
+  if (!Object.keys(s.files).every((k) => k && !path.isAbsolute(k) && !k.split(/[\\/]/).includes('..'))) return null;
   return s;
 }
 
