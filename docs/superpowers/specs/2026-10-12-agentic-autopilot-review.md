@@ -180,3 +180,28 @@ CHANGELOG 초안(범프 때 그대로 옮긴다):
 #### Codex 재검증 반영 (같은 날 · 미커밋 수정본 대상)
 - 해결 확인(Codex): 기존 6건 · workspace-write 자동 E2E 2개 통과 → verify · 기본 프롬프트 경고 사라짐.
 - **새 회귀** — Stop 훅이 `verify` 를 부르면서 `playwrightVersion` 의 `require('@playwright/test/package.json')` 이 패키지 `exports` 를 따라 JS 를 실행할 수 있었다(0.3.2 훅은 verify 를 안 불러 해당 없음). → 패키지 루트 package.json 을 파일로 읽고(앱 디렉터리와 상위의 `node_modules`), JSON·문자열 version 이 아니면 읽기 실패로 처리. 회귀 테스트 2층(유틸 · 훅).
+
+#### Codex Desktop 훅 신뢰·SessionStart 검증 (2026-10-12 · v0.3.3)
+
+이 항목은 위의 «데스크톱 UI 훅 신뢰·SessionStart 발화 미평가»를 대체한다. **사용자의 데스크톱 훅 신뢰 처리와 신뢰 후 새 채팅의 doctrine 주입을 확인했다.**
+
+- 대상: `v0.3.3`, commit `9f97c79eae8a6cf5ddba12df6a68d4d42244c0b0` (원격 main 및 annotated tag가 같은 커밋). 공식 CLI로 Git marketplace를 `--ref v0.3.3`에 고정해 설치했다. 설치된 Codex 패키지 10개 파일은 해당 소스와 바이트 단위로 일치했다.
+- 실제 실행 환경: 세션 기록의 `originator: Codex Desktop`, `cli_version: 0.162.0-alpha.17.2`, `source: vscode`. 이전 `codex exec` CLI 0.154.0 평가와 별개다.
+- 설치 직후: 플러그인은 `enabled = true`, e2e-rail 훅 신뢰 항목은 없었다. 첫 새 채팅은 여섯 스킬을 발견했지만 developer context에 doctrine이 없었고, 파일·도구를 읽지 않은 모델도 «SessionStart doctrine 미주입»으로 응답했다.
+- 신뢰 처리: 사용자가 데스크톱에서 직접 처리했다고 확인했고, 설정에 `e2e-rail@e2e-rail-codex:hooks/hooks.json:session_start:0:0`의 `trusted_hash`가 생긴 것을 읽어 검증했다. UI 자동화는 Codex 앱 접근을 안전 정책으로 차단했으므로 버튼 조작·화면 표시는 자동 검증하지 못했다. 신뢰 값을 직접 쓰거나 `--dangerously-bypass-hook-trust`를 사용하지 않았다.
+- 신뢰 후: 같은 확인 요청으로 만든 두 번째 새 채팅의 **developer 메시지에 설치된 `hooks/doctrine.md` 전체가 주입**됐다. 모델은 파일·도구 실행 없이 0번(변경 후 E2E 자동 수행)과 1번(보고 전 verify) 규칙을 인식했다. 설치·스킬 발견만을 훅 발화로 간주한 결과가 아니다.
+
+| 대조 | 데스크톱 채팅 ID | doctrine 개발자 메시지 | 판정 |
+| --- | --- | --- | --- |
+| 설치 후·신뢰 전 | `01a12eca-46e5-7813-b8af-b6b5e4ef1067` | 없음 | 미신뢰 훅 미주입 확인 |
+| 신뢰 후·새 세션 | `01a12ecb-6772-7e90-a504-a0e1c9d11c6c` | 전체 본문 일치 | SessionStart 실제 주입 통과 |
+
+증거는 로컬 `~/.codex/sessions/2026/10/12/`의 해당 ID `rollout-*.jsonl`과 `~/.codex/config.toml`의 플러그인 활성화·훅 신뢰 항목이다. 사용자 설정/세션 원문은 저장소에 복사하지 않았다. 검증 후 플러그인 0.3.3 설치·활성화·신뢰와 marketplace의 `v0.3.3` 고정을 유지한다(사용자 승인 범위).
+
+범위: 새 데스크톱 세션의 SessionStart 주입까지 통과. UI 버튼/경고의 시각적 검증, resume/compact 재주입, 실제 브라우저 E2E 및 모든 작업에서의 autopilot 자동 호출 보장은 이번 평가에 포함하지 않았다. 신뢰한 훅이 주입되는 것과 모델이 항상 규칙을 준수하는 것은 별도다. 설치 후 신뢰가 필요하다는 계약은 [공식 Hooks 문서](https://learn.chatgpt.com/docs/hooks)와 일치한다.
+
+#### 락 테스트 간헐 실패 원인 확정 (2026-10-12 · 테스트만 수정 · 버전 그대로)
+- 증상: «a holder killed with SIGKILL leaves an orphan the next acquire reaps» 가 전체 실행 1회에서 5,343ms 로 실패(획득 한도 5초).
+- 원인: 테스트가 `lockStatus` 에 heavy 가 보이자마자 SIGKILL 한다. 보유자가 아직 자기 대기 티켓을 지우는 중(소유자 기록을 옆으로 옮긴 뒤, 디렉터리 삭제 전)이면 소유자 없는 티켓이 남고, 설계상 10초 유예(`OWNERLESS_GRACE_MS`) 동안 다음 요청을 막는다. 0.2.3(대기 티켓 도입 `63c2bfe`)부터 있던 경합이며 0.3.3 시계 변경과 무관하다(죽은 pid 는 시계 판단 전에 끝난다).
+- 근거: 그 상태를 직접 만들면 5초 한도 실패 · 고부하에서 «보이자마자 종료» 300회 중 1회 재현 · `held` 출력 뒤 종료 300회 중 0회.
+- 조치: 두 테스트가 보유자의 `held`(acquire 반환 = 티켓 삭제 완료)를 기다린 뒤 종료한다. 제품 동작(정확히 그 순간 죽으면 다음 실행이 최대 10초 더 기다림)은 만드는 중인 락을 보호하는 설계의 부작용으로 두었다. 전체 스위트 3회 350/350.
