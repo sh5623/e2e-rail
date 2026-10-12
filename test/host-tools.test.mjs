@@ -101,6 +101,28 @@ function appWithPlaywright(version) {
   return s;
 }
 
+// The version is read from the package's own package.json as a file, never through require(): a package whose
+// `exports` maps `./package.json` to JavaScript would otherwise run that code (a Stop hook calls this through verify).
+test('playwrightVersion reads package.json as data: an exports entry pointing to code is never run; not JSON is unreadable', () => {
+  const { dir, cleanup } = scratch();
+  try {
+    const pkg = path.join(dir, 'node_modules/@playwright/test');
+    mkdirSync(pkg, { recursive: true });
+    const marker = path.join(dir, 'payload-ran.txt');
+    writeFileSync(path.join(pkg, 'payload.cjs'), `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'x'); module.exports = { version: '9.9.9' };\n`);
+    writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@playwright/test', version: '1.61.0', exports: { './package.json': './payload.cjs' } }));
+    const app = path.join(dir, 'apps/web'); // installed in a parent's node_modules: found the way Node finds packages
+    mkdirSync(app, { recursive: true });
+    assert.equal(playwrightVersion(app), '1.61.0');
+    assert.ok(!existsSync(marker), 'the payload never ran');
+    writeFileSync(path.join(pkg, 'package.json'), 'module.exports = {}');
+    assert.throws(() => playwrightVersion(app), /@playwright\/test\/package\.json is not JSON with a string "version"/);
+    writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@playwright/test', version: 161 }));
+    assert.throws(() => playwrightVersion(app), /is not JSON with a string "version"/);
+    assert.ok(!existsSync(marker));
+  } finally { cleanup(); }
+});
+
 test('D: assertPlaywrightSupported wants @playwright/test 1.56.0 or newer (--test-list); an unreadable version is refused', () => {
   for (const version of ['1.56.0', '1.56.1', '1.61.0', '1.63.0', '1.100.0', '2.0.0', '1.57.0-alpha-2025-10-01']) {
     const { dir, cleanup } = appWithPlaywright(version);

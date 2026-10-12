@@ -16,7 +16,7 @@
 **Claude Code** · **Codex** 스킬 층으로 이뤄진다. 선택·재실행·필터 실행을 전수 통과로 보고하지 않고, 선택 실행마다
 근거가 담긴 선택 블록을 붙이고, 어떤 주장 전에도 `verify` 를 거친다.
 
-**상태:** v0.3.2 (git 태그 `v0.3.2`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
+**상태:** v0.3.3 (git 태그 `v0.3.3`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
 `--test-list` 를 쓰므로 더 낮으면 e2e-rail 이 거부한다), `typescript` ≥ 5 가 필요하다(번들하지 않고 빌려 쓴다).
 
 ## 설치
@@ -24,7 +24,7 @@
 ### CLI (모든 런타임과 CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.3.2
+pnpm add -D github:sh5623/e2e-rail#v0.3.3
 ```
 
 팀과 CI 가 한 버전을 고정해 쓰는 방식(프로젝트 모드)이다. `pnpm exec e2e-rail …`(npm·yarn 이면 `npx e2e-rail …`)로
@@ -50,7 +50,8 @@ pnpm add -D github:sh5623/e2e-rail#v0.3.2
 
 무엇이 실행되나: 훅은 레포 코드를 실행하지 않는다. 설정은 JavaScript 이므로, 명시적인 e2e-rail 명령이 설정이 만든 데이터를
 기록하고(`~/.e2e-rail/recorded-configs.json`, 설정 파일의 sha256 과 함께) 훅은 파일이 그 바이트일 때만 그 데이터로 설정을
-다시 만든다. pull 로 설정이 바뀌면 다음 명시적 명령 전까지 훅은 조용하다. 명시적 명령은 레포 코드를 실행한다: 설정, 레포의
+다시 만든다. pull 로 설정이 바뀌면 다음 명시적 명령 전까지 훅은 조용하다. 같은 명령이 원장 디렉터리의 실경로도
+기록하고, 훅은 원장이 그 실경로에 있을 때만 쓴다(경로 중간에 링크가 생기면 조용하다). 명시적 명령은 레포 코드를 실행한다: 설정, 레포의
 TypeScript, Playwright 와 그 설정, 그리고 PATH 사본이 넘겨주는 고정본 e2e-rail(stderr 로 알린다). 레포 자체 테스트를 돌릴
 만한 곳에서만 돌린다. PATH 사본은 git 작업 트리 안에서, toplevel 까지만, `package.json` 이 e2e-rail 을 명시한 곳에서만
 고정본을 찾는다.
@@ -78,7 +79,8 @@ e2e-rail init --personal
 ```
 
 `~/.e2e-rail/<repo>/e2e-rail.config.mjs` 를 쓴다(`E2E_RAIL_HOME` 이 `~/.e2e-rail` 을 옮긴다. `<repo>` 는 메인
-worktree 의 디렉터리 이름이라 연결된 worktree 도 모두 같은 설정을 찾는다). 원장은 작업 트리마다
+worktree 의 디렉터리 이름과 레포 git 디렉터리의 해시라, 연결된 worktree 는 모두 같은 설정을 찾고 다른 곳의 같은 이름 레포는
+자기 설정을 갖는다). 원장은 작업 트리마다
 `~/.e2e-rail/<repo>/ledger/<worktree>`(`main`, 연결된 worktree 는 `<dir>-<sha8>`)에 둔다. git 이 아직 무시하지 않는
 Playwright 실행 산출물은 레포 자신의 `.git/info/exclude` 에 적는다. 작업 트리 루트의 설정(프로젝트 모드)이 있으면
 언제나 그쪽이 이긴다. 기존 레포 안 원장을 계속 쓰려면 개인 설정에 `ledger: { dir: '.e2e-rail' }` 를 남겨 둔다.
@@ -87,7 +89,7 @@ Playwright 실행 산출물은 레포 자신의 `.git/info/exclude` 에 적는�
 
 레포 하나에 약 30분.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.3.2`(개인 모드는 건너뛰고 3단계에서 `e2e-rail init --personal`)
+1. `pnpm add -D github:sh5623/e2e-rail#v0.3.3`(개인 모드는 건너뛰고 3단계에서 `e2e-rail init --personal`)
 2. Claude Code 또는 Codex 플러그인을 설치한다(위).
 3. `init` 스킬을 돌린다. 손으로는 `pnpm exec e2e-rail init`: `e2e-rail.config.mjs` 를 쓰고(찾은
    `playwright.config.*` 마다 앱 하나), `paths` 를 가진 tsconfig 를 고르고, `.gitignore` 에 `.e2e-rail/`,
@@ -249,8 +251,9 @@ streak 는 선택이 잡아낸 것을 셀 뿐이고, 훈련은 선택이 진짜 
 임시 worktree 에서 한다: 브랜치 전환은 미커밋 편집을 양쪽으로 옮겨(고장이 내 파일에 남고, 내 미커밋 작업은 덮어써진다)
 훈련의 `select`·`run` 이 실제 선택과 원장을 덮어쓴다. 원본 상태의 해시(HEAD, `git diff HEAD --binary`, staged diff,
 미추적 목록)를 남긴 뒤 `git worktree add --detach "$DRILL" HEAD` 로 임시 트리를 만들고, 미커밋 작업은 패치
-(`git diff HEAD --binary`)로 적용하고 미추적 파일은 복사한다(미추적 config 포함 — 훈련의 원장이 따로 생긴다). 임시
-트리에서 최근 변경 하나를 골라, 그 변경이 건드리는 코드를 일부러 망가뜨려 선택돼야 할 spec 이 실패하게 만든다.
+(`git diff HEAD --binary`)로 적용하고 미추적 파일은 복사한다. 훈련 명령은 모두 `E2E_RAIL_LEDGER_DIR` 를 임시 원장으로
+지정해 돌린다(복사한 설정의 `ledger.dir` 가 절대경로면 여전히 실제 원장을 가리킨다). 선택하기 전에 `e2e-rail status` 가 그
+원장을 보이는지 확인한다. 임시 트리에서 최근 변경 하나를 골라, 그 변경이 건드리는 코드를 일부러 망가뜨려 선택돼야 할 spec 이 실패하게 만든다.
 `select --app <app> --base <base>` 를 돌려 그 spec 이 고장 낸 파일을 가리키는 근거와 함께 선택에 들어 있는지 확인하고,
 `run --app <app> --selection` 이 실패하는지 본다. 그 spec 이 빠진 선택이나 통과한 실행은 섀도 miss 처럼 고칠 선택기의
 놓침이다. 관계없는(UNRELATED) spec 에도 실패를 하나 심는다: 전수는 실패하고, 선택과 짝지으면 miss 로 보인다. 예상된

@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { execCapture } from './exec.mjs';
 
@@ -20,12 +20,23 @@ export function playwrightCli(appDirAbs) {
   }
 }
 
+// The version of the host's @playwright/test, read from the package's own package.json as data. Never through
+// require(): a package whose `exports` maps `./package.json` to JavaScript would run that code, and `verify` (which a
+// Stop hook calls) reads this for the fingerprint. The package is looked for the way Node looks for one: in
+// `node_modules/@playwright/test` of the app dir and of each parent. A package.json that is not JSON with a string
+// `version` cannot be read, so nothing it ran can be verified.
 export function playwrightVersion(appDirAbs) {
-  try {
-    return hostRequire(appDirAbs)('@playwright/test/package.json').version;
-  } catch (e) {
-    throw missing(appDirAbs, e);
+  for (let dir = path.resolve(appDirAbs); ; dir = path.dirname(dir)) {
+    const file = path.join(dir, 'node_modules', '@playwright', 'test', 'package.json');
+    if (existsSync(file)) {
+      let pkg = null;
+      try { pkg = JSON.parse(readFileSync(file, 'utf8')); } catch { /* reported below */ }
+      if (typeof pkg?.version !== 'string') throw new Error(`e2e-rail: ${file} is not JSON with a string "version"; the Playwright version cannot be read`);
+      return pkg.version;
+    }
+    if (path.dirname(dir) === dir) break;
   }
+  throw missing(appDirAbs, new Error("Cannot find module '@playwright/test/package.json'"));
 }
 
 // D: selected and shard runs hand Playwright `--test-list`, which @playwright/test has from 1.56.0 (absent in 1.44–1.55).

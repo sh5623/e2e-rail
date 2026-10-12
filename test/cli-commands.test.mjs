@@ -1063,3 +1063,23 @@ test('lock run holds the lock around a command and passes its rc through; status
     assert.match(reap.stdout, /^reaped: none$/m);
   });
 }));
+
+// Codex workspace-write on macOS denies the boot clock (os.uptime throws EPERM). A run there takes the machine lock
+// like anywhere else and records its result; the lock is not skipped.
+test('run under a sandbox that denies os.uptime takes the lock, runs and records', { skip: process.platform === 'win32' }, () => withRepo(({ root, lockRoot }) => {
+  const preload = path.join(lockRoot, '..', `no-uptime-${process.pid}.mjs`);
+  writeFileSync(preload, `import os from 'node:os';
+import { syncBuiltinESMExports } from 'node:module';
+os.uptime = () => { const e = new Error('A system error occurred: uv_uptime returned EPERM (operation not permitted)'); e.code = 'ERR_SYSTEM_ERROR'; throw e; };
+syncBuiltinESMExports();
+`);
+  try {
+    const { CI: _ci, ...base } = process.env;
+    const r = spawnSync(process.execPath, ['--import', preload, bin, 'run', '--full'], { cwd: root, encoding: 'utf8', env: { ...base, E2E_RAIL_LOCK_DIR: lockRoot } });
+    assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
+    assert.doesNotMatch(r.stderr, /uv_uptime/);
+    assert.match(r.stdout, /^run-id run-\S+ · kind full · rc 0/m);
+    assert.equal(ledgerLines(root).at(-1).kind, 'full');
+    assert.equal(ledgerLines(root).at(-1).lock?.class, 'heavy', 'the machine lock was taken');
+  } finally { rmSync(preload, { force: true }); }
+}));

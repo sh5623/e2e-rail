@@ -92,17 +92,26 @@ function processAgeSec(pid) {
   return m ? ((Number(m[1] ?? 0) * 24 + Number(m[2] ?? 0)) * 60 + Number(m[3])) * 60 + Number(m[4]) : null;
 }
 
+// Machine clocks a wall-clock step does not move. The boot clock (`os.uptime`) may be denied: a macOS sandbox (Codex
+// workspace-write) makes it throw `uv_uptime returned EPERM`, so it reads as null there. The monotonic clock (hrtime,
+// already the order of queue tickets) is never denied; it also restarts at boot, and where it stands still during sleep
+// a lock only looks younger, never dead.
+const bootSec = () => { try { return uptime(); } catch { return null; } };
+const monoSec = () => Number(process.hrtime.bigint() / 1_000_000n) / 1000;
+
 // Is the process that took the lock still running? No process with that pid: dead. A pid is also reused once its
 // owner is gone, so a lock taken before the last boot, or now named by a process younger than the lock, is dead too
-// (otherwise an orphan whose pid came back would block every later run). Ages use the boot clock (`os.uptime`), which a
-// wall-clock step does not move. A confirmed owner is not asked again.
+// (otherwise an orphan whose pid came back would block every later run). The lock's age comes from the boot clock when
+// both sides have it, else from the monotonic clock; with neither (a foreign or older record) the pid is all there is.
+// A confirmed owner is not asked again.
 const confirmed = new Set();
 function ownerAlive(o) {
   try { process.kill(o.pid, 0); } catch (e) { if (e.code !== 'EPERM') return false; }
-  if (typeof o.uptime !== 'number') return true; // a record without boot time (foreign, older): the pid is all there is
-  const lockAge = uptime() - o.uptime;
+  const now = typeof o.uptime === 'number' ? bootSec() : null;
+  const lockAge = now !== null ? now - o.uptime : typeof o.mono === 'number' ? monoSec() - o.mono : null;
+  if (lockAge === null) return true;
   if (lockAge < -REUSE_SLACK_SEC) return false;
-  const key = `${o.pid}@${o.uptime}`;
+  const key = `${o.pid}@${now !== null ? `u${o.uptime}` : `m${o.mono}`}`;
   if (confirmed.has(key)) return true;
   const age = processAgeSec(o.pid);
   if (age !== null && age + REUSE_SLACK_SEC < lockAge) return false;
@@ -207,7 +216,7 @@ export async function acquire({ dir, cls, slots = 2, pollMs = 500, timeoutMs = I
   const t0 = Date.now();
   const requestedAt = new Date(t0).toISOString();
   const tok = token();
-  const record = () => ({ pid: process.pid, token: tok, cls, purpose, cwd: process.cwd(), start: new Date().toISOString(), uptime: uptime() });
+  const record = () => ({ pid: process.pid, token: tok, cls, purpose, cwd: process.cwd(), start: new Date().toISOString(), uptime: bootSec(), mono: monoSec() });
   // hrtime is the machine's monotonic clock, independent of wall-clock corrections. Token breaks simultaneous ties.
   const ticketName = `wait-${process.hrtime.bigint().toString().padStart(24, '0')}-${tok}.lock`;
   let ticket = null;

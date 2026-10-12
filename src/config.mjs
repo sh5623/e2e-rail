@@ -54,8 +54,10 @@ function defaultIgnore(srcDir) {
 }
 
 // Personal mode: a tool one person runs needs no file in the repository. Its config lives in
-// `$E2E_RAIL_HOME/<key>/e2e-rail.config.mjs` (default `~/.e2e-rail`), where <key> is the directory name of the main
-// worktree, so every linked worktree of the repository finds the same config. Its default ledger is
+// `$E2E_RAIL_HOME/<key>/e2e-rail.config.mjs` (default `~/.e2e-rail`), where <key> is `<name>-<sha8>`: the directory
+// name of the main worktree and a hash of the repository's real git directory (shared by all its worktrees). Every
+// linked worktree of the repository finds the same config, and a same-named repository elsewhere gets its own (0.3.0
+// to 0.3.2 keyed by the name alone: `legacyDir`, never read, only named). Its default ledger is
 // `$E2E_RAIL_HOME/<key>/ledger/<worktree>`: `main` for the main worktree, `<dir>-<sha8 of its path>` for a linked one,
 // so selections and ledgers of different work trees never mix. The config root is the work tree's toplevel.
 // null outside a git work tree.
@@ -68,10 +70,16 @@ export function personalPaths(cwd) {
   const list = execCapture('git', ['worktree', 'list', '--porcelain'], { cwd });
   const first = /^worktree (.+)$/m.exec(list.stdout)?.[1];
   const main = first ? real(first) : root;
-  const key = path.basename(main);
+  let common = execCapture('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd });
+  if (common.status !== 0) common = execCapture('git', ['rev-parse', '--git-common-dir'], { cwd }); // git < 2.31
+  if (common.status !== 0 || !common.stdout.trim()) return null;
+  const key = `${path.basename(main)}-${sha256(real(path.resolve(cwd, common.stdout.trim()))).slice(0, 8)}`;
   const dir = path.join(personalHome(), key);
   const worktree = main === root ? 'main' : `${path.basename(root)}-${sha256(root).slice(0, 8)}`;
-  return { root, key, dir, configPath: path.join(dir, CONFIG_FILE), ledgerDefault: path.join(dir, 'ledger', worktree) };
+  return {
+    root, key, dir, configPath: path.join(dir, CONFIG_FILE), ledgerDefault: path.join(dir, 'ledger', worktree),
+    legacyDir: path.join(personalHome(), path.basename(main)),
+  };
 }
 
 // Where the config is: `<cwd>/e2e-rail.config.mjs` (project mode, root = cwd), else the personal one (root = the work
@@ -99,10 +107,22 @@ function readRecords() {
     return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
   } catch { return {}; }
 }
-function recordConfig(abs, raw) {
+// The real path of `p` (which may not exist yet): its nearest existing ancestor resolved, the rest appended.
+export function realPathOf(p) {
+  let q = path.resolve(p);
+  while (!existsSync(q) && path.dirname(q) !== q) q = path.dirname(q);
+  return path.join(realpathSync(q), path.relative(q, path.resolve(p)));
+}
+
+// `ledgers`: per config root, the real path of the ledger dir the explicit command used. A hook touches a ledger only
+// at that real path, so a link that appears on the way later (a pull turning a directory into a link) silences it.
+// Kept while the config's bytes stay the same; not updated when E2E_RAIL_LEDGER_DIR moved the ledger for one command.
+function recordConfig(abs, raw, { root, ledger }) {
   const data = JSON.parse(JSON.stringify(raw)); // plain data only; a config that is not JSON-shaped is not recorded
   const all = readRecords();
-  all[abs] = { sha256: digestOf(abs), data };
+  const sha = digestOf(abs);
+  const prev = all[abs]?.sha256 === sha && all[abs].ledgers && typeof all[abs].ledgers === 'object' ? all[abs].ledgers : {};
+  all[abs] = { sha256: sha, data, ledgers: ledger ? { ...prev, [root]: ledger } : prev };
   const file = recordPath();
   mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
@@ -110,9 +130,9 @@ function recordConfig(abs, raw) {
   writeFileSync(tmp, `${JSON.stringify(all, null, 2)}\n`, { flag: 'wx' });
   renameSync(tmp, file);
 }
-function recordedData(abs) {
+function recorded(abs) {
   const rec = readRecords()[abs];
-  return rec && typeof rec === 'object' && rec.sha256 === digestOf(abs) && rec.data && typeof rec.data === 'object' ? rec.data : null;
+  return rec && typeof rec === 'object' && rec.sha256 === digestOf(abs) && rec.data && typeof rec.data === 'object' ? rec : null;
 }
 
 // `hook: true` — called from a runtime hook: no module is imported; the config is rebuilt from the data an explicit
@@ -122,18 +142,26 @@ export async function loadConfig(cwd, { hook = false } = {}) {
   const at = locateConfig(cwd);
   if (!at) {
     const p = personalPaths(cwd);
+    const legacy = p && path.join(p.legacyDir, CONFIG_FILE);
+    if (legacy && existsSync(legacy)) {
+      throw new ConfigError(`${CONFIG_FILE} not found in ${cwd} nor at ${p.configPath} (personal). ${legacy} is where e2e-rail 0.3.0–0.3.2 kept a personal config, by directory name alone, which other repositories of that name share: if it belongs to this repository, move it (mv ${p.legacyDir} ${p.dir}).`);
+    }
     throw new ConfigError(`${CONFIG_FILE} not found in ${cwd}${p ? ` nor at ${p.configPath} (personal)` : ''}. Run \`e2e-rail init\` first.`);
   }
   if (hook) {
-    const data = recordedData(at.configPath);
-    if (!data) throw new UntrustedConfigError(`${at.configPath} has no data recorded by an explicit e2e-rail command for these exact bytes`);
-    return withDefaults(data, at.root, at);
+    const rec = recorded(at.configPath);
+    if (!rec) throw new UntrustedConfigError(`${at.configPath} has no data recorded by an explicit e2e-rail command for these exact bytes`);
+    const config = withDefaults(rec.data, at.root, at);
+    const ledger = rec.ledgers?.[at.root];
+    return { ...config, recordedLedger: typeof ledger === 'string' ? ledger : null };
   }
   // The mtime query defeats the ESM module cache, so a config rewritten in the same process is re-read.
   const mod = await import(`${pathToFileURL(at.configPath).href}?mtime=${statSync(at.configPath).mtimeMs}`);
   const raw = mod.default ?? mod;
   const config = withDefaults(raw, at.root, at);
-  try { recordConfig(at.configPath, raw); } catch { /* a read-only home or a non-JSON config: the hooks stay silent */ }
+  try {
+    recordConfig(at.configPath, raw, { root: at.root, ledger: process.env.E2E_RAIL_LEDGER_DIR ? null : realPathOf(ledgerDir(config)) });
+  } catch { /* a read-only home or a non-JSON config: the hooks stay silent */ }
   return config;
 }
 
@@ -181,7 +209,9 @@ export function withDefaults(raw, root, { checkFiles = true, mode = 'project', c
     autopilot: raw.autopilot !== false,
     shared: raw.shared ?? [], ignore: raw.ignore ?? ['**/*.md', 'docs/**'],
     shadow: { promoteAfter: raw.shadow?.promoteAfter ?? 3 },
-    ledger: { dir: raw.ledger?.dir ?? ledgerDefault ?? '.e2e-rail' },
+    // E2E_RAIL_LEDGER_DIR moves the ledger for the commands it is set for (a seeded-failure drill), whatever the config
+    // says: an absolute ledger dir would otherwise be shared by every copy of the config.
+    ledger: { dir: (process.env.E2E_RAIL_LEDGER_DIR || null) ?? raw.ledger?.dir ?? ledgerDefault ?? '.e2e-rail' },
   };
 }
 

@@ -16,7 +16,7 @@ It is a zero-dependency Node CLI (`e2e-rail`) that your scripts and CI call, plu
 **Codex** that make agents use it honestly: no selected, rerun or filtered run reported as a full pass, a selection
 block with reasons for every selected run, and `verify` before any claim.
 
-**Status:** v0.3.2 (git tag `v0.3.2`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
+**Status:** v0.3.3 (git tag `v0.3.3`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
 `--test-list`; e2e-rail refuses an older one) and `typescript` ≥ 5 in the host repository (borrowed, not bundled).
 
 ## Install
@@ -24,7 +24,7 @@ block with reasons for every selected run, and `verify` before any claim.
 ### The CLI (every runtime and CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.3.2
+pnpm add -D github:sh5623/e2e-rail#v0.3.3
 ```
 
 This pins one version for the team and CI (project mode): they call it as `pnpm exec e2e-rail …` (`npx e2e-rail …`
@@ -51,7 +51,8 @@ they never start a test, and `autopilot: false` in the config turns them off.
 What runs: a hook runs no repository code. A config is JavaScript, so every explicit e2e-rail command records the data
 its config produced (`~/.e2e-rail/recorded-configs.json`, with the config file's sha256), and a hook rebuilds the
 config from that data, only while the file still holds those bytes; after a pull that changes the config the hooks stay
-silent until the next explicit command. Explicit commands do run repository code: the config, the repository's
+silent until the next explicit command. The same command records the real path of the ledger dir, and a hook writes
+there only while the ledger is still at that real path (a link that appears on the way silences it). Explicit commands do run repository code: the config, the repository's
 TypeScript, Playwright and its config, and a pinned e2e-rail the PATH copy defers to (said on stderr). Run them where
 you would run the repository's own tests. The PATH copy looks for a pinned copy only inside a git work tree, up to its
 toplevel, where `package.json` names e2e-rail.
@@ -79,7 +80,8 @@ e2e-rail init --personal
 ```
 
 It writes `~/.e2e-rail/<repo>/e2e-rail.config.mjs` (`E2E_RAIL_HOME` moves `~/.e2e-rail`; `<repo>` is the main
-worktree's directory name, so every linked worktree finds the same config) and keeps each work tree's ledger in
+worktree's directory name and a hash of the repository's git directory, so every linked worktree finds the same config
+and a same-named repository elsewhere gets its own) and keeps each work tree's ledger in
 `~/.e2e-rail/<repo>/ledger/<worktree>` (`main`, or `<dir>-<sha8>` for a linked worktree). Playwright run output that git
 does not ignore yet goes to the repository's own `.git/info/exclude`. A config at the root of the work tree (project
 mode) always wins over a personal one. A personal config may still name `ledger: { dir: '.e2e-rail' }` to keep an
@@ -89,7 +91,7 @@ existing in-repository ledger.
 
 About 30 minutes per repository.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.3.2` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
+1. `pnpm add -D github:sh5623/e2e-rail#v0.3.3` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
 2. Install the Claude Code or the Codex plugin (above).
 3. Run the `init` skill, or by hand `pnpm exec e2e-rail init`: it writes `e2e-rail.config.mjs` (one app per
    `playwright.config.*` found), picks the tsconfig that holds your `paths`, adds `.e2e-rail/`, `test-results/`,
@@ -260,8 +262,9 @@ scratch worktree, never in the tree you work in: a branch switch carries uncommi
 your files and your own uncommitted work is overwritten), and a drill's `select` and `run` would overwrite the real
 selection and ledger. Note a hash of the original state (HEAD, `git diff HEAD --binary`, the staged diff, the untracked
 list), then `git worktree add --detach "$DRILL" HEAD`, apply your uncommitted work there as a patch
-(`git diff HEAD --binary`) and copy the untracked files (an untracked config included, so the drill's ledger is its
-own). In the scratch tree, pick a recent change and break the code it touches so that a spec that should be selected
+(`git diff HEAD --binary`) and copy the untracked files. Run every drill command there with `E2E_RAIL_LEDGER_DIR` set
+to a scratch ledger (a copied config with an absolute `ledger.dir` still names the real one), and check that
+`e2e-rail status` shows that ledger before anything is selected. In the scratch tree, pick a recent change and break the code it touches so that a spec that should be selected
 fails. Run `select --app <app> --base <base>` and check that the spec is in the selection, with a reason naming the
 broken file; then `run --app <app> --selection` must fail. A selection without the spec, or a passing run, is a
 selector miss to fix like a shadow miss. Plant a failure in an UNRELATED spec as well: the full run fails and, paired

@@ -125,3 +125,58 @@ UserPromptSubmit 훅은 세션별 스냅샷 파일로 발화를 확인했다. �
 
 ### 0.3.2 보안 수정 (v0.3.1 커밋 보안 리뷰 1건)
 - **중간 링크·경로 이탈** — 0.3.1 은 원장·turns 디렉터리 자체의 링크만 막았다. 상대 원장 경로(`state/.e2e-rail`)의 중간 디렉터리가 나중에 바깥 링크로 바뀌면 훅이 그곳에 쓰고 정리했다(테스트로 재현). 이제 상대 원장은 turns 의 실제 경로가 작업 트리 안일 때만 다룬다. 스냅샷 파일 키에 절대 경로나 `..` 가 있으면 읽지 않는다.
+
+### 0.3.3 수정 (v0.3.2 외부 감사 4건 + Codex 검증 3건 · 2026-10-12 · Codex 최종 재검증 통과 뒤 릴리스)
+감사 재현 스크립트(`/tmp/e2e-rail-v032-audit.qA0nyF/{probes,absolute-hook}.mjs`)를 CLI 경로만 바꿔 재실행: 샤드 1/2 → Stop 차단 · 같은 이름 저장소 → 분리 · 절대경로 원장 중간 링크 → 바깥 파일 보존 · 드릴(새 절차) → 실제 원장 그대로. 드릴을 변수 없이 돌리면 여전히 공유한다(같은 설정 + 절대경로 원장 = 같은 원장은 설계상 동작) → 절차로 막는다.
+
+CHANGELOG 초안(범프 때 그대로 옮긴다):
+
+```
+## 0.3.3 — <date>
+
+### Security
+
+- **A hook touches the ledger only at the real path the recording command used.** 0.3.2 checked the real path of a
+  relative ledger dir only; an absolute one inside the work tree could still be reached through a directory a later
+  pull turns into a link, and the hook wrote and pruned there. Every explicit command now records the real path of the
+  ledger dir with the config data (per config root), and a hook leaves the ledger alone unless it is still there.
+
+- **Reading the Playwright version runs no dependency code.** It was `require('@playwright/test/package.json')`, which
+  follows the package's `exports`: an entry mapping `./package.json` to JavaScript ran that code, and once the Stop
+  check called `verify`, a hook could run it too. The version is now read from the package's own package.json as a
+  file (looked for in `node_modules` of the app dir and its parents); one that is not JSON with a string `version`
+  cannot be read, and nothing is verified.
+
+### Fixes
+
+- **The Stop check credits what verify credits.** It took any passing run of the code (one shard of several, an
+  ad-hoc `--test-list` run, a worker measurement, a run of an older policy) as covering it. It now asks
+  `verify --require selected` in each mode the code ran in: a full run, a complete shard set, or a run from a
+  selection computed for this code.
+- **Same-named repositories no longer share a personal config and ledger.** The personal dir is
+  `<main worktree dir name>-<sha8 of the repository's real git directory>`. A config left at the 0.3.0–0.3.2 place
+  (`~/.e2e-rail/<name>/`) is never read; the not-found error names it and the `mv` that moves it.
+- **The machine lock works where the boot clock is denied.** In a macOS sandbox (Codex workspace-write) `os.uptime()`
+  throws `uv_uptime returned EPERM`, and every locked run stopped before Playwright started. A lock record now carries
+  the monotonic clock too, and a lock's age comes from the boot clock when both sides have it, else from the monotonic
+  clock, else from the pid alone. Exclusion is unchanged; an orphan of a killed holder is still reaped there.
+- **Codex shows the default prompts again.** Codex reads at most 3 (`ignoring interface.defaultPrompt: maximum of 3
+  prompts is supported`); the list is autopilot, init and gate.
+- **The seeded-failure drill forces its own ledger.** A copied config with an absolute `ledger.dir` named the real
+  ledger, so the drill's `select` overwrote the real selection. `E2E_RAIL_LEDGER_DIR` moves the ledger for the commands
+  it is set for; the drill exports it in every block and checks `e2e-rail status` before anything is selected.
+
+### Upgrading
+
+- Verification policy stays 2. Records made by 0.3.1–0.3.2 have no ledger path: run any e2e-rail command once per
+  config and work tree, and the hooks work again. Personal configs: move `~/.e2e-rail/<name>/` as the error says.
+```
+
+#### Codex 실제 실행 검증 반영 (같은 날 · Codex CLI 0.154.0 · e2e-rail 0.3.2)
+- 확인된 것: 일반 버그 수정 요청에서 스킬명 없이 autopilot 자동 호출 · 샌드박스 없음에서 status → select → run → verify 완료 · 코드 설명은 실행 없음 · «테스트하지 마» 는 미검증 명시. 데스크톱 UI 의 훅 신뢰·SessionStart 발화는 미평가.
+- **workspace-write 샌드박스 락 실패** — `os.uptime()` 이 `uv_uptime returned EPERM` → 락 기록에 단조 시계(`mono`)를 함께 남기고, 나이는 부팅 시계 → 단조 시계 → pid 순으로 판단. 배타는 그대로. 테스트: `os.uptime` 을 막는 사전 로드로 자식 프로세스를 띄워 배타·고아 회수·이전 부팅 판정 확인. 수정 전 코드(a47ac0c)는 같은 조건에서 rc 1 · `uv_uptime ... EPERM`, 지금은 rc 0.
+- **Codex 기본 프롬프트 4개 → 무시됨** — 3개(autopilot·init·gate)로 줄임. 실제 Codex 로더 재확인은 하지 않았다(Codex 쪽 재검증 필요).
+
+#### Codex 재검증 반영 (같은 날 · 미커밋 수정본 대상)
+- 해결 확인(Codex): 기존 6건 · workspace-write 자동 E2E 2개 통과 → verify · 기본 프롬프트 경고 사라짐.
+- **새 회귀** — Stop 훅이 `verify` 를 부르면서 `playwrightVersion` 의 `require('@playwright/test/package.json')` 이 패키지 `exports` 를 따라 JS 를 실행할 수 있었다(0.3.2 훅은 verify 를 안 불러 해당 없음). → 패키지 루트 package.json 을 파일로 읽고(앱 디렉터리와 상위의 `node_modules`), JSON·문자열 version 이 아니면 읽기 실패로 처리. 회귀 테스트 2층(유틸 · 훅).

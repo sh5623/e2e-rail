@@ -63,6 +63,10 @@ test('codex package mirrors root skills, doctrine and references exactly', () =>
   assert.equal(readFileSync(path.join(root, 'plugins/e2e-rail/references/impact-analyst.md'), 'utf8'), readFileSync(path.join(root, 'references/impact-analyst.md'), 'utf8'));
   const codex = JSON.parse(readFileSync(path.join(root, 'plugins/e2e-rail/.codex-plugin/plugin.json'), 'utf8'));
   assert.equal(codex.name, 'e2e-rail'); assert.equal(codex.skills, './skills/');
+  // Codex ignores the whole list above 3 entries ("maximum of 3 prompts is supported", CLI 0.154)
+  const prompts = codex.interface.defaultPrompt;
+  assert.ok(Array.isArray(prompts) && prompts.length >= 1 && prompts.length <= 3, `defaultPrompt: ${prompts?.length}`);
+  assert.match(prompts[0], /\$e2e-rail:autopilot/);
   const mk = JSON.parse(readFileSync(path.join(root, '.agents/plugins/marketplace.json'), 'utf8'));
   assert.equal(mk.plugins[0].source.path, './plugins/e2e-rail');
 });
@@ -176,7 +180,7 @@ test('E: the shadow skill and both READMEs carry the seeded-failure drill: break
     const drill = next < 0 ? md.slice(at) : md.slice(at, nl + next);
     // A scratch worktree holds the break, the drill's selection and its ledger; the work tree and index are never
     // switched, stashed, reset or checked out (a branch switch carries uncommitted edits both ways).
-    for (const token of ['git worktree add --detach', 'git diff HEAD --binary', 'git worktree remove --force', 'git worktree prune',
+    for (const token of ['git worktree add --detach', 'git diff HEAD --binary', 'git worktree remove --force', 'git worktree prune', 'E2E_RAIL_LEDGER_DIR',
       'select --app <app> --base', 'run --app <app> --selection', 'shadow record']) {
       assert.ok(drill.includes(token), `${rel}: ${token}`);
     }
@@ -189,6 +193,9 @@ test('E: the shadow skill and both READMEs carry the seeded-failure drill: break
   assert.match(skill, /UNRELATED spec/);
   assert.match(skill, /never `shadow record` a drill/i);
   assert.match(skill, /git worktree list/); // a drill an interrupted session left behind is found and removed
+  // every drill command runs with the drill's own ledger, checked before anything is selected
+  assert.match(skill, /export E2E_RAIL_LEDGER_DIR="\$DRILL\.ledger"/);
+  assert.match(skill, /e2e-rail status[^\n]*\n[\s\S]{0,400}ledger \$DRILL\.ledger/);
   // the original tree's state is hashed before the drill and compared after the cleanup
   assert.ok(skill.includes('> "${TMPDIR:-/tmp}/e2e-rail-drill.before"') && skill.includes('| diff - "${TMPDIR:-/tmp}/e2e-rail-drill.before"'));
 
@@ -428,7 +435,7 @@ test('README.ko.md follows README.md section by section; Limits names the known 
 
 test('F: the release names one version: package, lockfile root, both plugins, the newest CHANGELOG entry, every install ref and the status lines', () => {
   const v = JSON.parse(read('package.json')).version;
-  assert.equal(v, '0.3.2');
+  assert.equal(v, '0.3.3');
   const lock = JSON.parse(read('package-lock.json'));
   assert.equal(lock.version, v);
   assert.equal(lock.packages[''].version, v);

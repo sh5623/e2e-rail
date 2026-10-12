@@ -1,6 +1,6 @@
 {
   "name": "e2e-rail",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Change-aware Playwright E2E selection, verification ledger and sharding — Codex skills over the e2e-rail CLI.",
   "author": {
     "name": "Seungho"
@@ -19,7 +19,6 @@
     "defaultPrompt": [
       "Use $e2e-rail:autopilot after changing code: select, run and verify the E2E it needs.",
       "Use $e2e-rail:init to set this repo up.",
-      "Use $e2e-rail:select to decide the E2E scope for this change.",
       "Use $e2e-rail:gate to run and report it."
     ]
   },

@@ -63,9 +63,10 @@ decision: promotion proposed to a human | not promotable (streak <s>/<n>) | trus
 
 ## 6. Seeded-failure drill (during the shadow period)
 A streak counts what the selection caught; a drill shows it catches a real break. Run one now and then, and before
-proposing promotion. Always in a scratch worktree, never in the tree you work in: switching branches carries
-uncommitted edits both ways (the break stays in your files, and your own uncommitted work is overwritten), and a
-drill's `select` and `run` would overwrite the real selection and add failures to the real ledger.
+proposing promotion. Always in a scratch worktree with a scratch ledger, never in the tree or the ledger you work with:
+switching branches carries uncommitted edits both ways (the break stays in your files, and your own uncommitted work
+is overwritten), and a drill's `select` and `run` would overwrite the real selection and add failures to the real
+ledger. A copied config does not separate the ledger by itself: an absolute `ledger.dir` is the same for every copy.
 
 1. Note the original state, then make the scratch worktree from HEAD and copy your uncommitted work into it as a patch
    (your tree, index and stashes are only read):
@@ -76,31 +77,39 @@ drill's `select` and `run` would overwrite the real selection and add failures t
    git diff HEAD --binary > "$DRILL.patch" && git -C "$DRILL" apply --allow-empty "$DRILL.patch"
    git ls-files --others --exclude-standard -z | tar --null -T - -cf - | tar -xf - -C "$DRILL"
    ```
-   The last line copies untracked files, an untracked `e2e-rail.config.mjs` included, so the drill's ledger is
-   `$DRILL/.e2e-rail/`, apart from the real one (a personal config in `~/.e2e-rail/` gives each worktree its own ledger
-   anyway). Install the scratch tree's dependencies the way the repo does (for example
-   `pnpm install --frozen-lockfile --offline`). Start when `e2e-rail lock status` shows no run: the drill
-   serves the app on its configured port.
-2. In `$DRILL`, pick a recent change and break the code it touches so that a spec that should be selected fails (an
-   assertion it checks, a label it reads). Select and run there (`cd "$DRILL"` first):
+   The last line copies untracked files, an untracked `e2e-rail.config.mjs` included. Install the scratch tree's
+   dependencies the way the repo does (for example `pnpm install --frozen-lockfile --offline`). Start when
+   `e2e-rail lock status` shows no run: the drill serves the app on its configured port.
+2. Every drill command runs in `$DRILL` with the scratch ledger. Shell variables do not outlive one command call, so
+   start every block with the first three lines below, and check the ledger before anything is selected:
+   ```sh
+   DRILL="${TMPDIR:-/tmp}/e2e-rail-drill"
+   export E2E_RAIL_LEDGER_DIR="$DRILL.ledger"
+   cd "$DRILL"
+   e2e-rail status | head -1
+   ```
+   The line must end with `ledger $DRILL.ledger` (spelled out as the path). Anything else: stop.
+3. Pick a recent change and break the code it touches so that a spec that should be selected fails (an assertion it
+   checks, a label it reads). Then, with the three lines first:
    ```sh
    e2e-rail select --app <app> --base <base>
    e2e-rail run --app <app> --selection --mode <mode>
    ```
    The spec must be in the selection (a reason naming the broken file) and `run --selection` must fail. A selection
-   without it, or a passing run, is a selector miss: name the coupling and propose a fix as in step 4. That is the
-   positive control; a planted assertion alone shows nothing about the impact analysis.
-3. Still in `$DRILL`, plant a failure in an UNRELATED spec as well and run `run --app <app> --full --mode <mode>`: the
-   full run fails and, paired with the selection, would show as a miss. That is the negative control, and expected.
-   A miss resets the streak only when the failure is genuine, so never `shadow record` a drill's run.
+   without it, or a passing run, is a selector miss: name the coupling and propose a fix as in section 4. That is the
+   positive control; a planted assertion alone shows nothing about the impact analysis. Plant a failure in an
+   UNRELATED spec as well and run `run --app <app> --full --mode <mode>`: the full run fails and, paired with the
+   selection, would show as a miss. That is the negative control, and expected. A miss resets the streak only when
+   the failure is genuine, so never `shadow record` a drill's run.
 4. Clean up, also after a failure or an interrupted run, from the original tree:
    ```sh
-   git worktree remove --force "$DRILL" && git worktree prune && rm -f "$DRILL.patch"
+   DRILL="${TMPDIR:-/tmp}/e2e-rail-drill"
+   git worktree remove --force "$DRILL" && git worktree prune && rm -rf "$DRILL.patch" "$DRILL.ledger"
    { git rev-parse HEAD; git diff HEAD --binary; git diff --cached --binary; git ls-files --others --exclude-standard; } | shasum | diff - "${TMPDIR:-/tmp}/e2e-rail-drill.before"
    ```
    No output from `diff`: the original is as it was before. Any output: stop and report it. A session that ended
    mid-drill leaves the scratch tree behind: `git worktree list` shows `…/e2e-rail-drill`; remove it the same way
-   before the next drill. Then select again on the real code.
+   before the next drill. Then select again on the real code, without `E2E_RAIL_LEDGER_DIR`.
 
 Report: `drill: <spec> selected (<reason>) · run --selection failed as expected · original unchanged` or
 `drill: missed <spec> — <coupling>`.

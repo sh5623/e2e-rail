@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.3.3 — 2026-10-12
+
+### Security
+
+- **A hook touches the ledger only at the real path the recording command used.** 0.3.2 checked the real path of a
+  relative ledger dir only; an absolute one inside the work tree could still be reached through a directory a later
+  pull turns into a link, and the hook wrote and pruned there. Every explicit command now records the real path of the
+  ledger dir with the config data (per config root), and a hook leaves the ledger alone unless it is still there.
+- **Reading the Playwright version runs no dependency code.** It was `require('@playwright/test/package.json')`, which
+  follows the package's `exports`: an entry mapping `./package.json` to JavaScript ran that code, and once the Stop
+  check called `verify`, a hook could run it too. The version is now read from the package's own package.json as a
+  file (looked for in `node_modules` of the app dir and its parents); one that is not JSON with a string `version`
+  cannot be read, and nothing is verified.
+
+### Fixes
+
+- **The Stop check credits what verify credits.** It took any passing run of the code (one shard of several, an
+  ad-hoc `--test-list` run, a worker measurement, a run of an older policy) as covering it. It now asks
+  `verify --require selected` in each mode the code ran in: a full run, a complete shard set, or a run from a
+  selection computed for this code.
+- **Same-named repositories no longer share a personal config and ledger.** The personal dir is
+  `<main worktree dir name>-<sha8 of the repository's real git directory>`. A config left at the 0.3.0–0.3.2 place
+  (`~/.e2e-rail/<name>/`) is never read; the not-found error names it and the `mv` that moves it.
+- **The machine lock works where the boot clock is denied.** In a macOS sandbox (Codex workspace-write) `os.uptime()`
+  throws `uv_uptime returned EPERM`, and every locked run stopped before Playwright started. A lock record now carries
+  the monotonic clock too, and a lock's age comes from the boot clock when both sides have it, else from the monotonic
+  clock, else from the pid alone. Exclusion is unchanged; an orphan of a killed holder is still reaped there.
+- **Codex shows the default prompts again.** Codex reads at most 3 (`ignoring interface.defaultPrompt: maximum of 3
+  prompts is supported`); the list is autopilot, init and gate.
+- **The seeded-failure drill forces its own ledger.** A copied config with an absolute `ledger.dir` named the real
+  ledger, so the drill's `select` overwrote the real selection. `E2E_RAIL_LEDGER_DIR` moves the ledger for the commands
+  it is set for; the drill exports it in every block and checks `e2e-rail status` before anything is selected.
+
+### Upgrading
+
+- Verification policy stays 2. Records made by 0.3.1–0.3.2 have no ledger path: run any e2e-rail command once per
+  config and work tree, and the hooks work again. Personal configs: move `~/.e2e-rail/<name>/` as the error says.
+
 ## 0.3.2 — 2026-10-12
 
 ### Security

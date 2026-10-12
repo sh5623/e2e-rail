@@ -545,3 +545,68 @@ test('symlinks planted inside the lock dir are removed or ignored, never followe
     h.release();
   } finally { rmSync(dir, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); }
 });
+
+// A sandbox (Codex workspace-write on macOS) may deny the boot clock: os.uptime() throws `uv_uptime returned EPERM`.
+// The lock must still exclude and still recover orphans there, without the boot clock and without being bypassed.
+const NO_UPTIME = path.join(mkdtempSync(path.join(tmpdir(), 'lock-no-uptime-')), 'no-uptime.mjs');
+process.on('exit', () => rmSync(path.dirname(NO_UPTIME), { recursive: true, force: true }));
+writeFileSync(NO_UPTIME, `import os from 'node:os';
+import { syncBuiltinESMExports } from 'node:module';
+os.uptime = () => { const e = new Error('A system error occurred: uv_uptime returned EPERM (operation not permitted)'); e.code = 'ERR_SYSTEM_ERROR'; throw e; };
+syncBuiltinESMExports();
+`);
+const sandboxed = (code, args, extra = {}) => spawn(process.execPath, ['--import', NO_UPTIME, '--input-type=module', '-e', code, ...args], { env: { ...process.env, LOCK_URL }, stdio: ['ignore', 'pipe', 'pipe'], ...extra });
+
+test('without the boot clock (a sandbox denies os.uptime): heavy still excludes, and a killed holder is still reaped', { skip: process.platform === 'win32' }, async () => {
+  const dir = tempDir();
+  const holder = sandboxed(`
+    const { acquire } = await import(process.env.LOCK_URL);
+    await acquire({ dir: process.argv[1], cls: 'heavy', pollMs: 5, timeoutMs: 20000 });
+    console.log('held');
+    setInterval(() => {}, 1000);
+  `, [dir]);
+  try {
+    await until(() => lockStatus(dir).heavy?.pid === holder.pid);
+    const second = sandboxed(`
+      const { acquire } = await import(process.env.LOCK_URL);
+      try { await acquire({ dir: process.argv[1], cls: 'heavy', pollMs: 5, timeoutMs: 700 }); console.log('ACQUIRED'); }
+      catch (e) { console.log(e.code); }
+    `, [dir]);
+    let out = '';
+    second.stdout.on('data', (d) => { out += d; });
+    const r = await exitOf(second);
+    assert.equal(r.code, 0, r.err);
+    assert.equal(out.trim(), 'E2E_RAIL_LOCK_TIMEOUT', 'the live holder still excludes');
+    assert.equal(reap(dir).length, 0, 'a normal reaper keeps a live sandboxed holder');
+    holder.kill('SIGKILL');
+    await exitOf(holder);
+    const third = sandboxed(`
+      const { acquire } = await import(process.env.LOCK_URL);
+      const h = await acquire({ dir: process.argv[1], cls: 'heavy', pollMs: 5, timeoutMs: 5000 });
+      console.log('ACQUIRED'); h.release();
+    `, [dir]);
+    let out3 = '';
+    third.stdout.on('data', (d) => { out3 += d; });
+    const r3 = await exitOf(third);
+    assert.equal(r3.code, 0, r3.err);
+    assert.equal(out3.trim(), 'ACQUIRED', 'the orphan of a killed holder is reaped without the boot clock');
+  } finally { holder.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('without the boot clock: a lock from a previous boot (monotonic clock ahead of now) is an orphan; a live one is not', { skip: process.platform === 'win32' }, async () => {
+  const dir = tempDir();
+  try {
+    const mono = Number(process.hrtime.bigint() / 1_000_000n) / 1000;
+    writeOwner(dir, 'light-0.lock', { pid: process.pid, token: 'c', cls: 'light', start: new Date().toISOString(), uptime: null, mono: mono + 100_000 });
+    writeOwner(dir, 'light-1.lock', { pid: process.pid, token: 'd', cls: 'light', start: new Date().toISOString(), uptime: null, mono });
+    const child = sandboxed(`
+      const { reap } = await import(process.env.LOCK_URL);
+      console.log(JSON.stringify(reap(process.argv[1])));
+    `, [dir]);
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    const r = await exitOf(child);
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(JSON.parse(out), ['light-0.lock']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

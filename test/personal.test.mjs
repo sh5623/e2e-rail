@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -21,7 +22,9 @@ async function withPersonal(fn) {
   const { root, cleanup } = makeTempRepo('sample-app');
   const home = realpathSync(mkdtempSync(path.join(tmpdir(), 'e2e-rail-home-')));
   const lockRoot = mkdtempSync(path.join(tmpdir(), 'e2e-rail-personal-lock-'));
-  const key = path.basename(root);
+  // the main worktree's directory name and a hash of the repository's real git directory: same-named repositories
+  // elsewhere get a dir of their own
+  const key = keyOf(root);
   const personalConfig = path.join(home, key, CONFIG_FILE);
   // The fixture's project config moves to the personal place, without its in-repo ledger line.
   mkdirSync(path.dirname(personalConfig), { recursive: true });
@@ -47,6 +50,7 @@ async function withPersonal(fn) {
   }
 }
 
+const keyOf = (root) => `${path.basename(root)}-${createHash('sha256').update(realpathSync(path.join(root, '.git'))).digest('hex').slice(0, 8)}`;
 const status = (cwd) => execCapture('git', ['status', '--porcelain', '--untracked-files=all'], { cwd }).stdout;
 
 test('personal mode: no config in the repo → the one in E2E_RAIL_HOME/<main worktree dir> is loaded; the ledger lives beside it, per work tree', () => withPersonal(async ({ root, home, key, personalConfig }) => {
@@ -204,3 +208,63 @@ test('bin/e2e-rail is executable in git (mode 100755)', () => {
 });
 
 void renameSync;
+
+test('personal mode: two repositories with the same directory name never share a config or a ledger', async () => {
+  const parent = realpathSync(mkdtempSync(path.join(tmpdir(), 'e2e-rail-samename-')));
+  const home = realpathSync(mkdtempSync(path.join(tmpdir(), 'e2e-rail-samename-home-')));
+  try {
+    const roots = ['org-a', 'org-b'].map((org) => {
+      const { root } = makeTempRepo('sample-app');
+      const dest = path.join(parent, org, 'app');
+      mkdirSync(path.dirname(dest), { recursive: true });
+      renameSync(root, dest);
+      execCapture('git', ['rm', '-q', '--cached', CONFIG_FILE], { cwd: dest });
+      rmSync(path.join(dest, CONFIG_FILE));
+      execCapture('git', ['commit', '-qm', 'personal'], { cwd: dest });
+      return dest;
+    });
+    const run = (cwd, args) => spawnSync(process.execPath, [bin, ...args], { cwd, encoding: 'utf8', env: { ...process.env, E2E_RAIL_HOME: home } });
+    const a = run(roots[0], ['init', '--personal']);
+    const b = run(roots[1], ['init', '--personal']);
+    assert.equal(a.status, 0, a.stderr); assert.equal(b.status, 0, b.stderr);
+    assert.doesNotMatch(b.stdout, /exists; left unchanged/, 'the second repository gets a config of its own');
+    const sa = JSON.parse(run(roots[0], ['status', '--json']).stdout);
+    const sb = JSON.parse(run(roots[1], ['status', '--json']).stdout);
+    assert.notEqual(sa.config.path, sb.config.path);
+    assert.notEqual(sa.ledger, sb.ledger);
+    assert.equal(path.basename(path.dirname(sa.config.path)), keyOf(roots[0]));
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('personal mode: a config left at the 0.3.0–0.3.2 place (directory name only) is named, not used', () => withPersonal(({ root, home, personalConfig, cli }) => {
+  const legacy = path.join(home, path.basename(root), CONFIG_FILE);
+  mkdirSync(path.dirname(legacy), { recursive: true });
+  renameSync(personalConfig, legacy);
+  const r = cli(['status']);
+  assert.equal(r.code, 1, r.out);
+  assert.ok(r.stderr.includes(legacy) && r.stderr.includes(path.dirname(personalConfig)), r.stderr);
+  assert.match(r.stderr, /move it/);
+}));
+
+// A drill must never write the real ledger, whatever the config says (an absolute ledger dir is shared by every copy
+// of the config): E2E_RAIL_LEDGER_DIR moves the ledger for the commands it is set for.
+test('E2E_RAIL_LEDGER_DIR moves the ledger for one command, an absolute ledger dir in the config included', () => withPersonal(({ root, personalConfig, cli }) => {
+  const real = realpathSync(mkdtempSync(path.join(tmpdir(), 'e2e-rail-real-ledger-')));
+  const drill = realpathSync(mkdtempSync(path.join(tmpdir(), 'e2e-rail-drill-ledger-')));
+  try {
+    writeFileSync(personalConfig, readFileSync(personalConfig, 'utf8').replace(/shadow: \{ promoteAfter: 2 \}/, `shadow: { promoteAfter: 2 }, ledger: { dir: ${JSON.stringify(real)} }`));
+    writeFileSync(path.join(root, 'src/components/Table.ts'), 'export const Table = (rows: unknown[]) => rows.length + 1;\n');
+    const env = { E2E_RAIL_LEDGER_DIR: drill };
+    assert.equal(JSON.parse(cli(['status', '--json'], { env }).stdout).ledger, drill);
+    const s = cli(['select', '--base', 'HEAD'], { env });
+    assert.ok([0, 10].includes(s.code), s.out);
+    assert.ok(existsSync(path.join(drill, 'selection.json')));
+    assert.ok(!existsSync(path.join(real, 'selection.json')), 'the real ledger is untouched');
+  } finally {
+    rmSync(real, { recursive: true, force: true });
+    rmSync(drill, { recursive: true, force: true });
+  }
+}));

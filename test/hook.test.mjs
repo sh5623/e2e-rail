@@ -242,3 +242,79 @@ test('a relative ledger dir reached through a link on the way out of the work tr
     assert.equal(hook('stop', { ...S, session_id: 'sess-5' }).json.decision, 'block', 'the same change with a clean snapshot is caught');
   } finally { rmSync(outside, { recursive: true, force: true }); }
 }));
+
+// The Stop check credits only what verify credits (a full run, a complete shard set, a run from a selection of this
+// code): one shard of two, an ad-hoc --test-list run or a worker measurement passing proves nothing about the change.
+test('stop: one shard, an ad-hoc test list or a measurement passing does not count; a selection run of this code does', () => withRepo(({ hook, cli, at }) => {
+  hook('turn-start', { session_id: 'sess-1' });
+  writeFileSync(at('src/components/Table.ts'), TABLE_EDIT);
+  const one = cli(['run', '--full', '--shard', '1/2', '--no-lock']);
+  assert.equal(one.code, 0, one.out);
+  assert.match(one.out, /kind shard/);
+  const shard = hook('stop', S);
+  assert.equal(shard.json?.decision, 'block', 'one shard of two');
+  assert.match(shard.json.reason, /web: no run verifies this code \(only shard\)/);
+
+  const list = path.join(realpathSync(mkdtempSync(path.join(tmpdir(), 'e2e-rail-hook-list-'))), 'one.txt'); // outside the work tree
+  writeFileSync(list, '[chromium] › cart.spec.ts\n');
+  assert.equal(cli(['run', '--test-list', list, '--workers', '1', '--no-lock']).code, 0);
+  assert.equal(hook('stop', S).json?.decision, 'block', 'an ad-hoc test list');
+  const m = cli(['measure', 'workers', '1', '--test-list', list]);
+  assert.equal(m.code, 0, m.out);
+  assert.equal(hook('stop', S).json?.decision, 'block', 'a worker measurement');
+  rmSync(path.dirname(list), { recursive: true, force: true });
+
+  const sel = cli(['select', '--base', 'HEAD']);
+  assert.equal(sel.code, 0, sel.out);
+  assert.equal(cli(['run', '--selection', '--workers', '1', '--no-lock']).code, 0);
+  assert.equal(hook('stop', S).stdout, '', 'a run from a selection of this code');
+}));
+
+// A hook touches the ledger only where the explicit command that recorded the config found it: the real path of the
+// ledger dir is recorded with the config data, and a link that appears on the way later (a pull) silences the hook,
+// whether the ledger dir is relative or absolute.
+test('an absolute ledger dir: the hook works where it was recorded, and nowhere a later link leads', () => withRepo(({ hook, cli, at }) => {
+  const outside = realpathSync(mkdtempSync(path.join(tmpdir(), 'e2e-rail-hook-abs-')));
+  try {
+    const ledger = at('state/.e2e-rail');
+    const cfg = at('e2e-rail.config.mjs');
+    writeFileSync(cfg, readFileSync(cfg, 'utf8').replace(/ledger: \{ dir: '\.e2e-rail' \}/, `ledger: { dir: ${JSON.stringify(ledger)} }`));
+    mkdirSync(at('state'));
+    assert.equal(cli(['status']).code, 0);
+    hook('turn-start', { session_id: 'sess-1' });
+    assert.ok(existsSync(path.join(ledger, 'turns/sess-1.json')), 'works where it was recorded');
+
+    rmSync(at('state'), { recursive: true });
+    symlinkSync(outside, at('state'));
+    const victim = path.join(outside, '.e2e-rail/turns/old.json');
+    mkdirSync(path.dirname(victim), { recursive: true });
+    writeFileSync(victim, 'precious');
+    const weekAgo = new Date(Date.now() - 8 * 24 * 3600 * 1000);
+    utimesSync(victim, weekAgo, weekAgo);
+    hook('turn-start', { session_id: 'sess-2' });
+    assert.deepEqual(readdirSync(path.dirname(victim)), ['old.json'], 'nothing written or pruned where the link leads');
+  } finally { rmSync(outside, { recursive: true, force: true }); }
+}));
+
+// verify reads the Playwright version for the fingerprint. From a hook that must stay a file read: a dependency whose
+// `exports` maps `./package.json` to JavaScript is never run, and a package.json that is not JSON verifies nothing.
+test('stop: reading the Playwright version runs no dependency code; an unreadable version verifies nothing', () => withRepo(({ hook, cli, root, at }) => {
+  execCapture('git', ['rm', '-r', '-q', '--cached', '--', 'node_modules'], { cwd: root });
+  writeFileSync(at('.gitignore'), `${readFileSync(at('.gitignore'), 'utf8')}\nnode_modules/\n`);
+  execCapture('git', ['add', '--', '.gitignore'], { cwd: root });
+  execCapture('git', ['commit', '-qm', 'dependencies are installed, not tracked'], { cwd: root });
+  assert.equal(cli(['status']).code, 0);
+  hook('turn-start', { session_id: 'sess-1' });
+  writeFileSync(at('src/components/Table.ts'), TABLE_EDIT);
+  assert.equal(cli(['run', '--full', '--no-lock']).code, 0);
+  const pkgFile = at('node_modules/@playwright/test/package.json');
+  const pkg = JSON.parse(readFileSync(pkgFile, 'utf8'));
+  const marker = at('payload-ran.txt');
+  writeFileSync(at('node_modules/@playwright/test/payload.cjs'), `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'x'); module.exports = { version: ${JSON.stringify(pkg.version)} };\n`);
+  writeFileSync(pkgFile, JSON.stringify({ ...pkg, exports: { './package.json': './payload.cjs', './cli': './cli.js' } }));
+  assert.equal(hook('stop', S).stdout, '', 'the same version: still verified');
+  assert.ok(!existsSync(marker), 'the hook ran no dependency code');
+  writeFileSync(pkgFile, 'not json');
+  assert.equal(hook('stop', S).json?.decision, 'block', 'an unreadable version verifies nothing');
+  assert.ok(!existsSync(marker));
+}));

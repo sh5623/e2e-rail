@@ -12,7 +12,8 @@ repositories.
 ## 1. Pick the mode, check the CLI
 - **Personal** — one person runs it and nothing in the repository changes: the CLI is the plugin's `e2e-rail` on PATH,
   the config and the ledger live in `~/.e2e-rail/<repo>/` (`E2E_RAIL_HOME` moves it; `<repo>` is the main worktree's
-  directory name, so every linked worktree finds the same config and gets a ledger of its own). Take it unless the
+  directory name and a hash of the repository's git directory, so every linked worktree finds the same config and gets
+  a ledger of its own, and a same-named repository elsewhere does not share it). Take it unless the
   human says the team or CI runs e2e-rail.
 - **Project** — the team and CI run one pinned version: a devDependency, the config at the repository root, the ledger
   in `.e2e-rail/`. Only after the human's yes: it edits `package.json` and the lockfile.
@@ -20,10 +21,10 @@ repositories.
 ```sh
 e2e-rail --version
 ```
-A version (`0.3.2`) → installed. Not found and the repository pins it: `pnpm exec e2e-rail --version`. For project
+A version (`0.3.3`) → installed. Not found and the repository pins it: `pnpm exec e2e-rail --version`. For project
 mode, ask the human first; on a yes:
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.3.2
+pnpm add -D github:sh5623/e2e-rail#v0.3.3
 ```
 It needs Node ≥ 20 and borrows the repo's own `@playwright/test` 1.56 or newer and `typescript`; an older
 Playwright is refused (`@playwright/test 1.56.0 or newer is required (found <x>)`): ask the human to upgrade it.
