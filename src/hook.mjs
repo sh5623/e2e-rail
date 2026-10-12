@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ConfigError, ledgerDir, loadConfig } from './config.mjs';
 import { readRuns } from './ledger.mjs';
@@ -20,8 +20,8 @@ const WEEK_MS = 7 * 24 * 3600 * 1000;
 const CHUNK = 200;
 
 // The config for a session's cwd: the project config there, at the work tree's toplevel, or the personal one. null when
-// there is none (a repository that does not use e2e-rail) and when a project config's bytes were never run by an
-// explicit e2e-rail command (loadConfig's `hook`: opening a repository must not run its JavaScript).
+// there is none (a repository that does not use e2e-rail) and when no explicit e2e-rail command recorded the config
+// for its current bytes (loadConfig's `hook`: a hook runs no repository code).
 export async function configFor(cwd) {
   for (const dir of [cwd, gitLocation(cwd)?.top].filter(Boolean)) {
     try { return await loadConfig(dir, { hook: true }); } catch (e) { if (!(e instanceof ConfigError)) throw e; }
@@ -36,10 +36,10 @@ function workBlobs(top, rels) {
   const out = {};
   const present = [];
   for (const rel of rels) {
-    const st = statSync(path.join(top, rel), { throwIfNoEntry: false });
+    const st = lstatSync(path.join(top, rel), { throwIfNoEntry: false });
     if (!st) out[rel] = 'deleted';
     else if (st.isFile()) present.push(rel);
-    else out[rel] = 'other'; // a nested repository or a socket: listed, not hashed
+    else out[rel] = 'other'; // a link, a nested repository or a socket: listed, never read through
   }
   for (const part of chunks(present)) {
     const r = execCapture('git', ['hash-object', '--', ...part], { cwd: top });
@@ -84,22 +84,50 @@ export function changedBetween(config, a, b) {
   return rels.filter((rel) => atA[rel] !== atB[rel]).sort();
 }
 
-const turnsDir = (config) => path.join(ledgerDir(config), 'turns');
-const turnFile = (config, session) => path.join(turnsDir(config), `${String(session).replace(/[^\w.-]/g, '_')}.json`);
+// The turns dir, or null when the ledger dir or the turns dir is a link or not a directory: a hook never writes,
+// prunes or reads through a link (a repository could ship `.e2e-rail/turns` pointing anywhere).
+function turnsDir(config) {
+  const ledger = ledgerDir(config);
+  const dir = path.join(ledger, 'turns');
+  for (const p of [ledger, dir]) {
+    const st = lstatSync(p, { throwIfNoEntry: false });
+    if (st && !st.isDirectory()) return null;
+  }
+  return dir;
+}
+const turnName = (session) => `${String(session).replace(/[^\w.-]/g, '_')}.json`;
+const TURN_FILE = /^[\w.-]+\.json(\.\d+\.tmp)?$/;
 
 export async function turnStart(input) {
   const config = await configFor(input.cwd ?? process.cwd());
   if (!config || config.autopilot === false || !input.session_id) return null;
   const dir = turnsDir(config);
+  if (!dir) return null;
   mkdirSync(dir, { recursive: true });
-  for (const name of readdirSync(dir)) {
-    const abs = path.join(dir, name);
-    if (Date.now() - (statSync(abs, { throwIfNoEntry: false })?.mtimeMs ?? Date.now()) > WEEK_MS) rmSync(abs, { force: true });
+  for (const ent of readdirSync(dir, { withFileTypes: true })) {
+    if (!ent.isFile() || !TURN_FILE.test(ent.name)) continue; // links and anything not ours stay
+    const abs = path.join(dir, ent.name);
+    if (Date.now() - (lstatSync(abs, { throwIfNoEntry: false })?.mtimeMs ?? Date.now()) > WEEK_MS) rmSync(abs, { force: true });
   }
-  const abs = turnFile(config, input.session_id);
-  writeFileSync(`${abs}.tmp`, JSON.stringify(snapshot(config)));
-  renameSync(`${abs}.tmp`, abs);
+  const abs = path.join(dir, turnName(input.session_id));
+  const tmp = `${abs}.${process.pid}.tmp`;
+  rmSync(tmp, { force: true }); // a planted link there is removed, never written through
+  writeFileSync(tmp, JSON.stringify(snapshot(config)), { flag: 'wx' });
+  renameSync(tmp, abs); // replaces a link at `abs` itself
   return null;
+}
+
+// A snapshot as turnStart writes it: HEAD a full commit id (it reaches git as an argument), blob ids or markers.
+const BLOB = /^(?:[0-9a-f]{40}|[0-9a-f]{64}|deleted|other|unknown)$/;
+function readTurn(dir, session) {
+  const abs = path.join(dir, turnName(session));
+  if (!lstatSync(abs, { throwIfNoEntry: false })?.isFile()) return null;
+  let s;
+  try { s = JSON.parse(readFileSync(abs, 'utf8')); } catch { return null; }
+  if (!s || typeof s.head !== 'string' || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(s.head)) return null;
+  if (!s.files || typeof s.files !== 'object' || Array.isArray(s.files)) return null;
+  if (!Object.values(s.files).every((v) => typeof v === 'string' && BLOB.test(v))) return null;
+  return s;
 }
 
 const PASSING = new Set(['full', 'selected', 'shard']);
@@ -109,9 +137,9 @@ export async function stop(input) {
   if (input.stop_hook_active) return null;
   const config = await configFor(input.cwd ?? process.cwd());
   if (!config || config.autopilot === false || !input.session_id) return null;
-  const abs = turnFile(config, input.session_id);
-  if (!existsSync(abs)) return null;
-  const start = JSON.parse(readFileSync(abs, 'utf8'));
+  const dir = turnsDir(config);
+  const start = dir && readTurn(dir, input.session_id);
+  if (!start) return null;
   const changed = toConfigRel(config, changedBetween(config, start, snapshot(config)));
   const reach = [];
   const apps = new Set();

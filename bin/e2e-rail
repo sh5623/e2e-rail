@@ -11,6 +11,8 @@ if [ "${E2E_RAIL_SHIM:-}" != plugin ] && top=$(git rev-parse --show-toplevel 2>/
   while :; do
     case "$dir/" in "$top"/*) ;; *) break ;; esac
     if [ -x "$dir/node_modules/.bin/e2e-rail" ] && [ -f "$dir/package.json" ] && grep -q '"e2e-rail"' "$dir/package.json"; then
+      # Every e2e-rail command runs repository code anyway (its config, TypeScript, Playwright); this one is said.
+      echo "e2e-rail: running the repository's pinned copy ($dir/node_modules/.bin/e2e-rail); E2E_RAIL_SHIM=plugin runs the plugin's own" >&2
       exec "$dir/node_modules/.bin/e2e-rail" "$@"
     fi
     if [ "$dir" = "$top" ]; then break; fi

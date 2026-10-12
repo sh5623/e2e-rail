@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.1 — 2026-10-12
+
+### Security
+
+- **Hooks run no repository code.** In 0.3.0 a hook imported a project config once an explicit command had run the
+  same bytes, and with it whatever the config imports, which those bytes do not cover. Every explicit command now
+  records the data its config produced (`~/.e2e-rail/recorded-configs.json`: per config path, the file's sha256 and the
+  data), and a hook rebuilds the config from that data without importing anything, only while the file still holds
+  those bytes. Personal configs go the same way.
+- **Turn snapshots never follow a link.** A repository could ship `.e2e-rail/turns` as a link to another directory,
+  and 0.3.0's weekly prune deleted old files there. A hook now does nothing when the ledger or turns dir is a link,
+  prunes only its own regular files, removes a planted link instead of writing through it, hashes no work-tree file
+  through a link, and reads only a snapshot whose HEAD is a full commit id (HEAD reaches git as an argument).
+- **The PATH copy says when it runs a repository's pinned copy** (one stderr line). Every e2e-rail command runs
+  repository code by design (its config, TypeScript, Playwright and its config), so this adds no capability; it is no
+  longer silent. The READMEs now say what runs.
+
+### Upgrading
+
+- Verification policy stays 2. 0.3.0's `trusted-configs.json` is no longer read: run any e2e-rail command once per
+  config (`e2e-rail status` will do) and the hooks have recorded data again.
+
 ## 0.3.0 — 2026-10-12
 
 ### Autopilot (Claude Code)

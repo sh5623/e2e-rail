@@ -173,6 +173,8 @@ test('bin/e2e-rail: runs a copy the repo pins in node_modules/.bin (from a subdi
     mkdirSync(path.join(dir, 'apps/web'), { recursive: true });
     const sub = spawnSync('sh', [shim, 'verify', '--app', 'web'], { cwd: path.join(dir, 'apps/web'), encoding: 'utf8' });
     assert.equal(sub.stdout.trim(), 'pinned verify --app web');
+    // running repository code is said out loud
+    assert.match(sub.stderr, /^e2e-rail: running the repository's pinned copy \(.*node_modules\/\.bin\/e2e-rail\); E2E_RAIL_SHIM=plugin runs the plugin's own$/m);
     const forced = spawnSync('sh', [shim, '--version'], { cwd: dir, encoding: 'utf8', env: { ...process.env, E2E_RAIL_SHIM: 'plugin' } });
     assert.equal(forced.stdout.trim(), pkgVersion);
   } finally { rmSync(dir, { recursive: true, force: true }); }

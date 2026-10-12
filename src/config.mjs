@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -11,7 +11,7 @@ export class ConfigError extends Error {
     this.name = 'ConfigError';
   }
 }
-// A hook asked for a project config whose exact bytes no explicit e2e-rail command has run on this machine.
+// A hook asked for a config whose exact bytes no explicit e2e-rail command has recorded on this machine.
 export class UntrustedConfigError extends ConfigError {
   constructor(message) {
     super(message);
@@ -84,52 +84,56 @@ export function locateConfig(cwd) {
   return null;
 }
 
-// Trusted project configs. A config is JavaScript: loading it runs it. An explicit e2e-rail command is something the
-// user (or their permission rules) let run; a runtime hook runs on every prompt with no prompt of its own. So a hook
-// loads a project config only when an explicit command already ran those exact bytes on this machine, and every
-// explicit command records the bytes it ran: `$E2E_RAIL_HOME/trusted-configs.json` (path → sha256), outside every
-// repository. A pull that changes the config silences the hooks until the next explicit command. A personal config
-// lives in the user's own E2E_RAIL_HOME and needs no record.
-const trustPath = () => path.join(personalHome(), 'trusted-configs.json');
+// Recorded configs. A config is JavaScript: loading it runs it, and whatever it imports. An explicit e2e-rail command
+// is something the user (or their permission rules) let run; a runtime hook runs on every prompt with no prompt of its
+// own. So a hook runs no repository code at all: every explicit command records the data its config produced, with
+// the sha256 of the config file's bytes, in `$E2E_RAIL_HOME/recorded-configs.json` (outside every repository), and a
+// hook rebuilds the config from that data, and only while the file still holds those bytes. A pull that changes the
+// config silences the hooks until the next explicit command. (A change to a file the config imports is not seen until
+// then either; the hook never runs it.)
+const recordPath = () => path.join(personalHome(), 'recorded-configs.json');
 const digestOf = (abs) => sha256(readFileSync(abs));
-function readTrust() {
+function readRecords() {
   try {
-    const v = JSON.parse(readFileSync(trustPath(), 'utf8'));
+    const v = JSON.parse(readFileSync(recordPath(), 'utf8'));
     return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
   } catch { return {}; }
 }
-export function isTrusted(abs) {
-  const all = readTrust();
-  return Object.hasOwn(all, abs) && all[abs] === digestOf(abs);
-}
-function recordTrust(abs) {
-  const all = readTrust();
-  const digest = digestOf(abs);
-  if (all[abs] === digest) return;
-  all[abs] = digest;
-  const file = trustPath();
+function recordConfig(abs, raw) {
+  const data = JSON.parse(JSON.stringify(raw)); // plain data only; a config that is not JSON-shaped is not recorded
+  const all = readRecords();
+  all[abs] = { sha256: digestOf(abs), data };
+  const file = recordPath();
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(`${file}.${process.pid}.tmp`, `${JSON.stringify(all, null, 2)}\n`);
-  renameSync(`${file}.${process.pid}.tmp`, file);
+  const tmp = `${file}.${process.pid}.tmp`;
+  rmSync(tmp, { force: true });
+  writeFileSync(tmp, `${JSON.stringify(all, null, 2)}\n`, { flag: 'wx' });
+  renameSync(tmp, file);
+}
+function recordedData(abs) {
+  const rec = readRecords()[abs];
+  return rec && typeof rec === 'object' && rec.sha256 === digestOf(abs) && rec.data && typeof rec.data === 'object' ? rec.data : null;
 }
 
-// `hook: true` — called from a runtime hook: an untrusted project config is refused (UntrustedConfigError) before it
-// is imported. Otherwise the project config's bytes are recorded as trusted once it loaded.
+// `hook: true` — called from a runtime hook: no module is imported; the config is rebuilt from the data an explicit
+// command recorded for these exact bytes, else UntrustedConfigError. Otherwise the config is imported and its data
+// recorded.
 export async function loadConfig(cwd, { hook = false } = {}) {
   const at = locateConfig(cwd);
   if (!at) {
     const p = personalPaths(cwd);
     throw new ConfigError(`${CONFIG_FILE} not found in ${cwd}${p ? ` nor at ${p.configPath} (personal)` : ''}. Run \`e2e-rail init\` first.`);
   }
-  if (hook && at.mode === 'project' && !isTrusted(at.configPath)) {
-    throw new UntrustedConfigError(`${at.configPath} has not been run by an explicit e2e-rail command in these exact bytes`);
+  if (hook) {
+    const data = recordedData(at.configPath);
+    if (!data) throw new UntrustedConfigError(`${at.configPath} has no data recorded by an explicit e2e-rail command for these exact bytes`);
+    return withDefaults(data, at.root, at);
   }
   // The mtime query defeats the ESM module cache, so a config rewritten in the same process is re-read.
   const mod = await import(`${pathToFileURL(at.configPath).href}?mtime=${statSync(at.configPath).mtimeMs}`);
-  const config = withDefaults(mod.default ?? mod, at.root, at);
-  if (!hook && at.mode === 'project') {
-    try { recordTrust(at.configPath); } catch { /* a read-only home: the hooks stay silent, nothing else changes */ }
-  }
+  const raw = mod.default ?? mod;
+  const config = withDefaults(raw, at.root, at);
+  try { recordConfig(at.configPath, raw); } catch { /* a read-only home or a non-JSON config: the hooks stay silent */ }
   return config;
 }
 

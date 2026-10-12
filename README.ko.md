@@ -16,7 +16,7 @@
 **Claude Code** · **Codex** 스킬 층으로 이뤄진다. 선택·재실행·필터 실행을 전수 통과로 보고하지 않고, 선택 실행마다
 근거가 담긴 선택 블록을 붙이고, 어떤 주장 전에도 `verify` 를 거친다.
 
-**상태:** v0.3.0 (git 태그 `v0.3.0`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
+**상태:** v0.3.1 (git 태그 `v0.3.1`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
 `--test-list` 를 쓰므로 더 낮으면 e2e-rail 이 거부한다), `typescript` ≥ 5 가 필요하다(번들하지 않고 빌려 쓴다).
 
 ## 설치
@@ -24,7 +24,7 @@
 ### CLI (모든 런타임과 CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.3.0
+pnpm add -D github:sh5623/e2e-rail#v0.3.1
 ```
 
 팀과 CI 가 한 버전을 고정해 쓰는 방식(프로젝트 모드)이다. `pnpm exec e2e-rail …`(npm·yarn 이면 `npx e2e-rail …`)로
@@ -46,9 +46,13 @@ pnpm add -D github:sh5623/e2e-rail#v0.3.0
 파일을 바꿨는데 그 코드로 통과한 실행이 원장에 없으면, 턴당 한 번 에이전트에게 E2E 흐름을 돌리라고 요청한다. 같은 턴의
 두 번째 정지는 통과시킨다. Bash 에 대한 PostToolUse(`hook post-bash`)는 직접 돌린 `playwright test` 가 검증이 아님을
 알린다. 훅은 읽고 판정만 하며(150 spec 앱에서 회당 약 0.2초) 테스트를 시작하지 않는다. 설정의 `autopilot: false` 로
-끈다. 설정은 JavaScript 라 레포를 여는 것만으로 실행돼서는 안 된다: 훅은 명시적인 e2e-rail 명령이 이 기계에서 같은
-바이트를 이미 실행한 프로젝트 설정만 읽는다(`~/.e2e-rail/trusted-configs.json` 에 기록). pull 로 설정이 바뀌면 다음 명시적
-명령 전까지 훅은 조용하다. PATH 사본은 git 작업 트리 안에서, toplevel 까지만, `package.json` 이 e2e-rail 을 명시한 곳에서만
+끈다.
+
+무엇이 실행되나: 훅은 레포 코드를 실행하지 않는다. 설정은 JavaScript 이므로, 명시적인 e2e-rail 명령이 설정이 만든 데이터를
+기록하고(`~/.e2e-rail/recorded-configs.json`, 설정 파일의 sha256 과 함께) 훅은 파일이 그 바이트일 때만 그 데이터로 설정을
+다시 만든다. pull 로 설정이 바뀌면 다음 명시적 명령 전까지 훅은 조용하다. 명시적 명령은 레포 코드를 실행한다: 설정, 레포의
+TypeScript, Playwright 와 그 설정, 그리고 PATH 사본이 넘겨주는 고정본 e2e-rail(stderr 로 알린다). 레포 자체 테스트를 돌릴
+만한 곳에서만 돌린다. PATH 사본은 git 작업 트리 안에서, toplevel 까지만, `package.json` 이 e2e-rail 을 명시한 곳에서만
 고정본을 찾는다.
 
 ### Codex
@@ -83,7 +87,7 @@ Playwright 실행 산출물은 레포 자신의 `.git/info/exclude` 에 적는�
 
 레포 하나에 약 30분.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.3.0`(개인 모드는 건너뛰고 3단계에서 `e2e-rail init --personal`)
+1. `pnpm add -D github:sh5623/e2e-rail#v0.3.1`(개인 모드는 건너뛰고 3단계에서 `e2e-rail init --personal`)
 2. Claude Code 또는 Codex 플러그인을 설치한다(위).
 3. `init` 스킬을 돌린다. 손으로는 `pnpm exec e2e-rail init`: `e2e-rail.config.mjs` 를 쓰고(찾은
    `playwright.config.*` 마다 앱 하나), `paths` 를 가진 tsconfig 를 고르고, `.gitignore` 에 `.e2e-rail/`,

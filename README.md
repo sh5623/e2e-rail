@@ -16,7 +16,7 @@ It is a zero-dependency Node CLI (`e2e-rail`) that your scripts and CI call, plu
 **Codex** that make agents use it honestly: no selected, rerun or filtered run reported as a full pass, a selection
 block with reasons for every selected run, and `verify` before any claim.
 
-**Status:** v0.3.0 (git tag `v0.3.0`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
+**Status:** v0.3.1 (git tag `v0.3.1`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
 `--test-list`; e2e-rail refuses an older one) and `typescript` ≥ 5 in the host repository (borrowed, not bundled).
 
 ## Install
@@ -24,7 +24,7 @@ block with reasons for every selected run, and `verify` before any claim.
 ### The CLI (every runtime and CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.3.0
+pnpm add -D github:sh5623/e2e-rail#v0.3.1
 ```
 
 This pins one version for the team and CI (project mode): they call it as `pnpm exec e2e-rail …` (`npx e2e-rail …`
@@ -46,11 +46,15 @@ is one, else the plugin's own) and four hooks. SessionStart injects the doctrine
 the agent once per turn to run the E2E flow when the turn changed files E2E can reach and no run in the ledger passed
 for that code; a second stop in the same turn goes through. PostToolUse on Bash (`hook post-bash`) says that a
 direct `playwright test` is not a verification. The hooks only read and judge (about 0.2 s each on a 150-spec app);
-they never start a test, and `autopilot: false` in the config turns them off. A config is JavaScript, so opening a
-repository must not run it: a hook loads a project config only when an explicit e2e-rail command already ran those
-exact bytes on this machine (recorded in `~/.e2e-rail/trusted-configs.json`). After a pull that changes the config,
-the hooks stay silent until the next explicit command. The PATH copy looks for a pinned copy only inside a git work
-tree, up to its toplevel, and only where `package.json` names e2e-rail.
+they never start a test, and `autopilot: false` in the config turns them off.
+
+What runs: a hook runs no repository code. A config is JavaScript, so every explicit e2e-rail command records the data
+its config produced (`~/.e2e-rail/recorded-configs.json`, with the config file's sha256), and a hook rebuilds the
+config from that data, only while the file still holds those bytes; after a pull that changes the config the hooks stay
+silent until the next explicit command. Explicit commands do run repository code: the config, the repository's
+TypeScript, Playwright and its config, and a pinned e2e-rail the PATH copy defers to (said on stderr). Run them where
+you would run the repository's own tests. The PATH copy looks for a pinned copy only inside a git work tree, up to its
+toplevel, where `package.json` names e2e-rail.
 
 ### Codex
 
@@ -85,7 +89,7 @@ existing in-repository ledger.
 
 About 30 minutes per repository.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.3.0` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
+1. `pnpm add -D github:sh5623/e2e-rail#v0.3.1` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
 2. Install the Claude Code or the Codex plugin (above).
 3. Run the `init` skill, or by hand `pnpm exec e2e-rail init`: it writes `e2e-rail.config.mjs` (one app per
    `playwright.config.*` found), picks the tsconfig that holds your `paths`, adds `.e2e-rail/`, `test-results/`,

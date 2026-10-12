@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -154,9 +154,10 @@ test('post-bash: a direct `playwright test` gets a note; e2e-rail runs, listings
   }
 }));
 
-// A config is JavaScript. Opening a repository and typing a prompt must not run it: a hook loads a project config only
-// when an explicit e2e-rail command (which the user's permission rules cover) already ran those exact bytes.
-test('hooks never run a project config no explicit command ran, byte for byte', () => withRepo(({ hook, cli, at }) => {
+// A config is JavaScript. Opening a repository and typing a prompt must not run it, nor anything it imports: a hook
+// runs no repository code at all. It reads the config data an explicit e2e-rail command recorded, and only while the
+// config file still holds the bytes that command ran.
+test('hooks run no repository code: they read the data an explicit command recorded, while the bytes match', () => withRepo(({ hook, cli, at }) => {
   const cfg = at('e2e-rail.config.mjs');
   const marker = at('config-ran.txt');
   const planted = `import { writeFileSync } from 'node:fs';\nwriteFileSync(new URL('./config-ran.txt', import.meta.url), 'x');\n${readFileSync(cfg, 'utf8')}`;
@@ -167,12 +168,48 @@ test('hooks never run a project config no explicit command ran, byte for byte', 
     assert.ok(!existsSync(marker), `${name} ran an untrusted config`);
   }
   assert.ok(!existsSync(at('.e2e-rail/turns')), 'no snapshot either');
-  assert.equal(cli(['status']).code, 0); // explicit: runs it, and records its bytes
+  assert.equal(cli(['status']).code, 0); // explicit: runs it, and records its data
   rmSync(marker);
   hook('turn-start', { session_id: 'sess-1' });
-  assert.ok(existsSync(marker), 'trusted now');
-  rmSync(marker);
+  assert.ok(existsSync(at('.e2e-rail/turns')), 'the hook works from the recorded data');
+  writeFileSync(at('src/components/Table.ts'), TABLE_EDIT);
+  assert.equal(hook('stop', S).json.decision, 'block');
+  assert.ok(!existsSync(marker), 'and never ran the config');
   writeFileSync(cfg, `${planted}// pulled a change\n`);
   hook('turn-start', { session_id: 'sess-2' });
-  assert.ok(!existsSync(marker), 'changed bytes are not trusted');
+  assert.ok(!existsSync(at('.e2e-rail/turns/sess-2.json')), 'changed bytes: silent until an explicit command');
+  assert.ok(!existsSync(marker));
+}));
+
+test('turn snapshots never follow a link: a linked turns dir, a planted temp link, a forged snapshot', () => withRepo(({ hook, root, at }) => {
+  const outside = realpathSync(mkdtempSync(path.join(tmpdir(), 'e2e-rail-hook-outside-')));
+  try {
+    const old = path.join(outside, 'keep.json');
+    writeFileSync(old, 'precious');
+    const weekAgo = new Date(Date.now() - 8 * 24 * 3600 * 1000);
+    utimesSync(old, weekAgo, weekAgo);
+    mkdirSync(at('.e2e-rail'), { recursive: true });
+    symlinkSync(outside, at('.e2e-rail/turns'));
+    hook('turn-start', { session_id: 'sess-1' });
+    assert.equal(readFileSync(old, 'utf8'), 'precious', 'nothing outside the ledger is pruned');
+    assert.deepEqual(readdirSync(outside), ['keep.json'], 'nothing is written through the link');
+    rmSync(at('.e2e-rail/turns'));
+
+    mkdirSync(at('.e2e-rail/turns'));
+    const target = path.join(outside, 'target.txt');
+    writeFileSync(target, 'precious');
+    for (const name of readdirSync(at('.e2e-rail/turns'))) rmSync(at(`.e2e-rail/turns/${name}`));
+    symlinkSync(target, at('.e2e-rail/turns/sess-2.json'));
+    hook('turn-start', { session_id: 'sess-2' });
+    assert.equal(readFileSync(target, 'utf8'), 'precious', 'a planted link is replaced, never written through');
+
+    // a snapshot whose head is an option, not a commit, never reaches git
+    const pwned = path.join(outside, 'pwned.txt');
+    writeFileSync(at('.e2e-rail/turns/sess-3.json'), JSON.stringify({ head: `--output=${pwned}`, files: {} }));
+    writeFileSync(at('src/components/Table.ts'), TABLE_EDIT);
+    const s = hook('stop', { ...S, session_id: 'sess-3' });
+    assert.equal(s.code, 0);
+    assert.ok(!existsSync(pwned));
+    void root;
+  } finally { rmSync(outside, { recursive: true, force: true }); }
 }));
