@@ -6,6 +6,14 @@ import { execCapture } from '../src/util/exec.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// No test touches the real ~/.e2e-rail (personal configs, the record of trusted configs): this process and every CLI it
+// spawns with its environment use a private home unless a test sets its own.
+if (!process.env.E2E_RAIL_HOME) {
+  process.env.E2E_RAIL_HOME = mkdtempSync(path.join(tmpdir(), 'e2e-rail-test-home-'));
+  const home = process.env.E2E_RAIL_HOME;
+  process.on('exit', () => rmSync(home, { recursive: true, force: true }));
+}
+
 export function fixtureDir(name) {
   return path.join(__dirname, 'fixtures', name);
 }

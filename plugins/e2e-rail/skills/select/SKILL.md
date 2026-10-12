@@ -5,13 +5,14 @@ description: Use when a code change needs its E2E scope decided — before runni
 
 # e2e-rail:select — decide the E2E scope and record why
 
-Run every command from the repository root (where `e2e-rail.config.mjs` lives). npm or yarn repos: `npx e2e-rail`
-instead of `pnpm exec e2e-rail`. Without `--app`, `select` covers every app of the config; `--add`, `run` and
+Run every command from the repository root. The CLI: `e2e-rail` (Claude Code puts the plugin's copy on PATH; it runs the copy the repository pins in
+`node_modules` when there is one). Not on PATH (Codex, CI): `pnpm exec e2e-rail`, or `npx e2e-rail` in npm and yarn
+repositories. Without `--app`, `select` covers every app of the config; `--add`, `run` and
 `verify` need `--app <app>` when there are several.
 
 ## 1. Pick the base
 The base is the last commit that passed a full verification on a clean tree. In this order:
-1. `pnpm exec e2e-rail verify --app <app> --mode <mode>` — `verified:` means this exact code already passed in full:
+1. `e2e-rail verify --app <app> --mode <mode>` — `verified:` means this exact code already passed in full:
    nothing to select, report it through `e2e-rail:gate`. A `stale:` line that ends with `last verified head <sha>`:
    use it. `no full pass of a committed tree yet` (every pass had uncommitted changes), or
    `run <id> was recorded under an older e2e-rail verification policy` (only an older e2e-rail passed it): go on to 2.
@@ -28,7 +29,7 @@ No base → leave `--base` out and accept a full selection. Never pick a base to
 
 ## 2. Compute
 ```sh
-pnpm exec e2e-rail select --app <app> --base <sha>   # or --base last-green
+e2e-rail select --app <app> --base <sha>   # or --base last-green
 ```
 The selection stores the commit the base named (header line `base <sha7> (<ref>)..HEAD`), never the name: later
 commits on HEAD or the branch cannot move it.
@@ -52,19 +53,25 @@ climbs to the app entry: shell, stores, layout). A full app is a correct answer;
 
 ## 3. Check what the script cannot see (partial apps only)
 - Claude Code: delegate to the `e2e-impact-analyst` agent with the diff (`git diff <base>` plus `git status --short`)
-  and `.e2e-rail/selection.json`.
+  and the selection file (the `selection:` line of `select` prints its path: `.e2e-rail/` in project mode,
+  `~/.e2e-rail/<repo>/ledger/<worktree>/` in personal mode).
 - Codex: read `references/impact-analyst.md` of this plugin (`../../references/impact-analyst.md` from this file)
   and run its checklist yourself.
 
 It returns `- add e2e/<spec>.spec.ts — <reason>` lines or `no additions`. Apply each addition:
 ```sh
-pnpm exec e2e-rail select --app <app> --add e2e/<spec>.spec.ts --reason "<one sentence>"
+e2e-rail select --app <app> --add e2e/<spec>.spec.ts --reason "<one sentence>"
 ```
 `--add` amends the current selection and rewrites its test list; it does not take `--base`/`--head`. Spec paths are
 app-relative, as `map --explain` prints them. One call per addition keeps each reason (several `--add` in one call
-share one `--reason`).
+share one `--reason`). After the last addition, record the check (a partial selection only):
+```sh
+e2e-rail select --review-done --reason "impact-analyst: <no additions | n additions>"
+```
+It binds the check to this code and this list: a later `--add`, or any code change, makes it stale, and
+`run --selection` and `status` print `review: …`. The record says the check was made, not that it found everything.
 
-Never `--remove` while `pnpm exec e2e-rail shadow status` prints `trust shadow` (the CLI refuses it anyway). After a
+Never `--remove` while `e2e-rail shadow status` prints `trust shadow` (the CLI refuses it anyway). After a
 human ran `shadow promote`: `select --remove <spec> --reason "<why>"`, and the removal goes into your report.
 
 ## 4. Write the selection block (paste it into your report verbatim)
@@ -73,6 +80,7 @@ change:   <what changed, one line> (<top files> +<n> more)
 selected: <spec slugs> (reasons: route:… · api:… · import:… · unmapped · always-run)
 added:    <slug — reason> | none      removed: <slug — reason> | none
 mobile:   <slugs whose test-list lines include a mobile project (a project with a mobile device)> | none
+review:   <the review line run --selection prints: ok (<reason>) | none | stale (<why>) | not needed>
 unmapped: <the unmapped column of the select table> (map --check lists them)
 final:    full run in the integration step · trust <shadow|selected> (as shadow status prints it)
 ```

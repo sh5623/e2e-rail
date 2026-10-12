@@ -12,6 +12,7 @@ import { inCI } from './util/ci.mjs';
 import { loadOrBuildSpecIndex, routeMatches, slugOf } from './spec-index.mjs';
 import { affectedEntries, apiLiterals, findMain, loadOrBuildGraph } from './graph.mjs';
 import { getAdapter } from './adapters/index.mjs';
+import { VERSION } from './version.mjs';
 
 // The selector (spec §6): which Playwright specs a change can reach, and why. It may select too much, never too little
 // by a guess: whatever it cannot attribute (no base, a file outside every rule, an unreadable route table, a blind spot
@@ -395,3 +396,55 @@ export function amendSelection(config, { app, add = [], remove = [], allowRemove
 }
 
 export const selectionExitCode = (sel) => (Object.values(sel.apps).some((a) => a.mode === 'full') ? 10 : 0);
+
+// What a selection runs, as one hash: per app its mode and, for a partial app, the test list it writes. A review is
+// bound to it, so an `--add` or `--remove` after the review makes the review stale.
+export function selectionListSha(sel) {
+  const lists = Object.keys(sel.apps ?? {}).sort().map((name) => {
+    const a = sel.apps[name];
+    if (a.mode === 'full') return [name, 'full'];
+    let text;
+    try { text = testListText(a); } catch { text = JSON.stringify((a.specs ?? []).map((s) => [s.file, s.projects])); }
+    return [name, 'partial', text];
+  });
+  return sha256(JSON.stringify(lists));
+}
+
+// The impact check of a selection (e2e-rail:select step 3), recorded by `select --review-done`:
+//   not-needed  every app runs in full: there is nothing the check could add;
+//   none        no review was recorded;
+//   stale       recorded for other code (`why: 'code'`: the selection's or the work tree's code moved), for another list
+//               (`'list'`: an --add or --remove came after it) or by another e2e-rail version (`'version'`);
+//   ok          `reason` is what the check found.
+// A record says the check was made for this code and list, not that its reasoning was right: the shadow counts misses.
+export function reviewState(sel, codeId) {
+  const apps = Object.values(sel.apps ?? {});
+  if (apps.length && apps.every((a) => a.mode === 'full')) return { state: 'not-needed' };
+  const r = sel.review;
+  if (!r || typeof r !== 'object') return { state: 'none' };
+  if (r.codeId !== sel.codeId || r.codeId !== codeId) return { state: 'stale', why: 'code' };
+  if (r.listSha !== selectionListSha(sel)) return { state: 'stale', why: 'list' };
+  if (r.version !== VERSION) return { state: 'stale', why: 'version' };
+  return { state: 'ok', reason: r.reason };
+}
+
+// Records the impact check on the current selection. Refused when the work tree no longer holds the code the selection
+// was computed for: the check read other code.
+export function markReviewed(config, { reason }) {
+  const sel = readSelection(config);
+  if (sel.codeId !== codeIdOf(config)) {
+    throw new Error(`the code changed since selection ${sel.id} was computed; select again, check it, then record the review`);
+  }
+  sel.review = { codeId: sel.codeId, listSha: selectionListSha(sel), version: VERSION, ts: new Date().toISOString(), reason };
+  writeSelection(config, sel);
+  return sel;
+}
+
+// A review line for `run --selection` and reports.
+export function reviewLine(sel, codeId) {
+  const r = reviewState(sel, codeId);
+  if (r.state === 'ok') return `review: ok (${r.reason})`;
+  if (r.state === 'not-needed') return 'review: not needed (every app runs in full)';
+  const lead = r.state === 'none' ? 'review: none — no impact check was recorded' : `review: stale (${r.why}) — the impact check was recorded for another ${r.why}`;
+  return `${lead} for selection ${sel.id} (e2e-rail:select step 3, then select --review-done)`;
+}

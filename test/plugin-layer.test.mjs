@@ -9,7 +9,7 @@ import { assertPassthrough } from '../src/run.mjs';
 import { MIN_PLAYWRIGHT } from '../src/util/playwright.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SKILLS = ['init', 'select', 'gate', 'measure', 'shadow'];
+const SKILLS = ['autopilot', 'init', 'select', 'gate', 'measure', 'shadow'];
 const CI = ['templates/ci/github-actions-shard.yml', 'templates/ci/codebuild-batch.yml', 'templates/ci/buildspec-snippet.yml'];
 const read = (rel) => readFileSync(path.join(root, rel), 'utf8');
 const sync = () => execFileSync('node', [path.join(root, 'scripts/sync-codex.mjs')], { encoding: 'utf8' });
@@ -30,11 +30,21 @@ function tree(rel) {
 
 // ── brief ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('every skill has frontmatter with name/description and calls the CLI via pnpm exec', () => {
+// The CLI line every skill carries: `e2e-rail` is the plugin's copy on PATH (Claude Code), which defers to a copy the
+// repository pins; without it on PATH (Codex, CI) the pinned copy through the package manager.
+const CLI_LINE = 'The CLI: `e2e-rail` (Claude Code puts the plugin\'s copy on PATH; it runs the copy the repository pins in `node_modules` when there is one). Not on PATH (Codex, CI): `pnpm exec e2e-rail`, or `npx e2e-rail` in npm and yarn repositories.';
+
+test('every skill has frontmatter with name/description, the CLI line, and calls the CLI as `e2e-rail`', () => {
   for (const s of SKILLS) {
     const md = readFileSync(path.join(root, 'skills', s, 'SKILL.md'), 'utf8');
     assert.match(md, new RegExp(`^---\\nname: ${s}\\ndescription: `), s);
-    assert.match(md, /pnpm exec e2e-rail|npx e2e-rail/, s);
+    assert.ok(md.replace(/\n/g, ' ').includes(CLI_LINE), `${s}: the CLI line`);
+    // Outside the CLI line (and the project-mode install), commands are written `e2e-rail <command>`.
+    const rest = md.replace(/\n/g, ' ').replace(CLI_LINE, '').replace(/pnpm exec e2e-rail --version/g, '');
+    assert.doesNotMatch(rest, /pnpm exec e2e-rail|npx e2e-rail/, s);
+  }
+  for (const rel of ['hooks/doctrine.md', 'references/impact-analyst.md', 'agents/e2e-impact-analyst.md']) {
+    assert.doesNotMatch(read(rel).replace(/`pnpm exec e2e-rail` where it is not/, ''), /pnpm exec e2e-rail (?!where)/, rel);
   }
   assert.match(readFileSync(path.join(root, 'skills/gate/SKILL.md'), 'utf8'), /--last-failed[\s\S]*never/i);
 });
@@ -96,6 +106,21 @@ test('hook commands: Claude reads ${CLAUDE_PLUGIN_ROOT}, Codex reads $PLUGIN_ROO
   assert.equal(claude.type, 'command'); assert.equal(codex.type, 'command');
 });
 
+// Autopilot (Claude Code only): the plugin's own CLI judges each turn. Codex installs no CLI with its plugin and runs a
+// plugin hook only after a human trusts it in /hooks, so its package keeps the doctrine alone.
+test('Claude hooks: UserPromptSubmit snapshots, Stop checks, PostToolUse(Bash) notes a direct playwright test; Codex has only SessionStart', () => {
+  const h = JSON.parse(read('hooks/hooks.json')).hooks;
+  const cmd = (name) => `node "\${CLAUDE_PLUGIN_ROOT}/bin/e2e-rail.mjs" hook ${name}`;
+  const only = (entries) => { assert.equal(entries.length, 1); assert.equal(entries[0].hooks.length, 1); return entries[0]; };
+  assert.equal(only(h.UserPromptSubmit).hooks[0].command, cmd('turn-start'));
+  assert.equal(only(h.Stop).hooks[0].command, cmd('stop'));
+  const post = only(h.PostToolUse);
+  assert.equal(post.matcher, 'Bash');
+  assert.equal(post.hooks[0].command, cmd('post-bash'));
+  for (const e of [h.UserPromptSubmit[0], h.Stop[0], post]) assert.ok(e.hooks[0].timeout > 0 && e.hooks[0].timeout <= 30);
+  assert.deepEqual(Object.keys(JSON.parse(read('plugins/e2e-rail/hooks/hooks.json')).hooks), ['SessionStart']);
+});
+
 test('package.json, the Claude plugin and the Codex plugin carry one version', () => {
   const v = JSON.parse(read('package.json')).version;
   assert.equal(JSON.parse(read('.claude-plugin/plugin.json')).version, v);
@@ -129,13 +154,14 @@ test('skills: trigger-rich description, short body', () => {
 
 test('gate: verify in the run mode, fixed report tokens, shadowed and filtered runs never reported as full', () => {
   const md = read('skills/gate/SKILL.md');
-  assert.match(md, /pnpm exec e2e-rail verify --app <app> --mode <mode> --require full/);
+  assert.match(md, /^e2e-rail verify --app <app> --mode <mode> --require full$/m);
+
   for (const token of ['run-id', 'kind full (filtered)', 'shadowed:', 'nothing selected (partial, 0 specs)', 'verified:', 'stale:', 'insufficient:']) {
     assert.ok(md.includes(token), token);
   }
 });
 
-test('E: the shadow skill and both READMEs carry the seeded-failure drill: break a selected spec, a planted unrelated failure, a scratch branch, never recorded', () => {
+test('E: the shadow skill and both READMEs carry the seeded-failure drill: break a selected spec, a planted unrelated failure, a scratch worktree, never recorded', () => {
   const sections = {
     'skills/shadow/SKILL.md': /^## \d+\. Seeded-failure drill/m,
     'README.md': /^### Seeded-failure drill/m,
@@ -148,14 +174,24 @@ test('E: the shadow skill and both READMEs carry the seeded-failure drill: break
     const nl = md.indexOf('\n', at);
     const next = md.slice(nl).search(/^##+ /m); // the drill runs to the next heading, or to the end
     const drill = next < 0 ? md.slice(at) : md.slice(at, nl + next);
-    for (const token of ['select --app <app> --base', 'run --app <app> --selection', 'shadow record', 'revert', 'git switch -c']) {
+    // A scratch worktree holds the break, the drill's selection and its ledger; the work tree and index are never
+    // switched, stashed, reset or checked out (a branch switch carries uncommitted edits both ways).
+    for (const token of ['git worktree add --detach', 'git diff HEAD --binary', 'git worktree remove --force', 'git worktree prune',
+      'select --app <app> --base', 'run --app <app> --selection', 'shadow record']) {
       assert.ok(drill.includes(token), `${rel}: ${token}`);
+    }
+    for (const banned of ['git switch', 'git checkout', 'git stash', 'git reset', 'git branch -D']) {
+      assert.ok(!drill.includes(banned), `${rel}: no ${banned}`);
     }
   }
   const skill = read('skills/shadow/SKILL.md');
-  assert.match(skill, /scratch branch/);
+  assert.match(skill, /scratch worktree/);
   assert.match(skill, /UNRELATED spec/);
   assert.match(skill, /never `shadow record` a drill/i);
+  assert.match(skill, /git worktree list/); // a drill an interrupted session left behind is found and removed
+  // the original tree's state is hashed before the drill and compared after the cleanup
+  assert.ok(skill.includes('> "${TMPDIR:-/tmp}/e2e-rail-drill.before"') && skill.includes('| diff - "${TMPDIR:-/tmp}/e2e-rail-drill.before"'));
+
 });
 
 test('G5: on Playwright 1.56–1.57 a title a list line cannot spell is a documented limit, with ≥ 1.58 recommended', () => {
@@ -196,7 +232,24 @@ test('G6: .claude-plugin/marketplace.json makes the repo a single-plugin marketp
   for (const ref of plugin.description.match(/e2e-rail#v[^\s)]+/g) ?? []) assert.equal(ref, `e2e-rail#v${v}`);
 });
 
+// The entry point: a development request alone (no skill named) leads here, through the description, the doctrine and
+// the Stop hook. It reuses select, gate and shadow; it never installs, promotes, narrows by guess or relaxes a test.
+test('autopilot: triggers on a code change, walks status → select → review → run → verify, bounded diagnosis, no silent skip', () => {
+  const md = read('skills/autopilot/SKILL.md');
+  const description = /^description: (.+)$/m.exec(md)[1];
+  for (const t of ['changed', 'without the user naming', 'Stop hook']) assert.ok(description.includes(t), t);
+  for (const t of ['explaining', 'docs-only']) assert.ok(description.includes(t), t);
+  for (const t of ['e2e-rail status', 'e2e-rail:select', 'select --review-done', 'run --app <app> --selection', 'verify --app <app>',
+    'e2e-rail:gate', 'E2E: not verified — <why>', '--last-failed', 'test-results', 'review:']) {
+    assert.ok(md.includes(t), t);
+  }
+  assert.match(md, /never[^.\n]*(skip|relax|retr)/i);
+  assert.match(md, /never[^.\n]*(install|package\.json)/i);
+  assert.match(md, /at most 2/);
+});
+
 test('select: the selection block carries change, selected, added/removed, mobile, unmapped and final', () => {
+
   const md = read('skills/select/SKILL.md');
   for (const field of ['change:', 'selected:', 'added:', 'removed:', 'mobile:', 'unmapped:', 'final:']) assert.ok(md.includes(field), field);
   assert.match(md, /e2e-impact-analyst/);
@@ -375,7 +428,7 @@ test('README.ko.md follows README.md section by section; Limits names the known 
 
 test('F: the release names one version: package, lockfile root, both plugins, the newest CHANGELOG entry, every install ref and the status lines', () => {
   const v = JSON.parse(read('package.json')).version;
-  assert.equal(v, '0.2.3');
+  assert.equal(v, '0.3.0');
   const lock = JSON.parse(read('package-lock.json'));
   assert.equal(lock.version, v);
   assert.equal(lock.packages[''].version, v);

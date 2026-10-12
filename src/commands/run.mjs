@@ -3,7 +3,7 @@ import path from 'node:path';
 import { appDir, findApp, ledgerDir, loadConfig } from '../config.mjs';
 import { LAST_GREEN_DIRTY } from '../ledger.mjs';
 import { filteredBy, runTests } from '../run.mjs';
-import { amendSelection, codeIdOf, isCommitId, ledgerRel, readSelection, select, testListLines, testListText, writeSelection } from '../select.mjs';
+import { amendSelection, codeIdOf, isCommitId, ledgerRel, readSelection, reviewLine, select, testListLines, testListText, writeSelection } from '../select.mjs';
 import { gitResolveCommit, gitTreeClean } from '../util/git.mjs';
 import { oneOf, parse, positiveInt, printUsage, UsageError } from './_args.mjs';
 
@@ -69,6 +69,8 @@ async function reselect(config, sel, { current, why }) {
   if (carried) console.log(`carried over ${carried} --add spec(s) from selection ${sel.id}`);
   const removed = Object.values(sel.apps ?? {}).reduce((n, a) => n + (a.removed?.length ?? 0), 0);
   if (removed) console.log(`not carried over: ${removed} --remove of selection ${sel.id} (decide them again for this code)`);
+  // The impact check read the old code: the new selection needs its own.
+  if (sel.review) console.log(`not carried over: the review of selection ${sel.id} (check the new selection: e2e-rail:select step 3)`);
   return readSelection(config, fresh.id);
 }
 
@@ -106,6 +108,7 @@ async function fromSelection(config, app, id) {
     console.log(`${app.name}: nothing selected (partial, ${a.specs.length ? `${a.specs.length} spec(s), 0 test-list lines` : '0 specs'})`);
     return { skip: true };
   }
+  console.log(reviewLine(sel, sel.codeId));
   const abs = path.join(ledgerDir(config), 'reports', `${sel.id}.${app.name}.${process.pid}.test-list.txt`);
   mkdirSync(path.dirname(abs), { recursive: true });
   writeFileSync(abs, testListText(a));

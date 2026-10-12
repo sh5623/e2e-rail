@@ -5,15 +5,16 @@ description: Use when E2E tests must run and their result be reported — after 
 
 # e2e-rail:gate — run, verify, report
 
-From the repository root. npm or yarn repos: `npx e2e-rail` instead of `pnpm exec e2e-rail`. `--app <app>` when the
-config has several apps. `<mode>` is the repo's E2E mode: `preview` tests the built dist (a missing or stale dist is
-rebuilt with `run.preview.build` first) and `dev` is the default. Take the mode the repo's gate uses (its scripts or
-CI pass `--mode`); an app with `run.preview` in `e2e-rail.config.mjs` is usually gated in `preview`. Use the same
-`<mode>` in every command below.
+From the repository root. The CLI: `e2e-rail` (Claude Code puts the plugin's copy on PATH; it runs the copy the
+repository pins in `node_modules` when there is one). Not on PATH (Codex, CI): `pnpm exec e2e-rail`, or `npx e2e-rail`
+in npm and yarn repositories. `--app <app>` when the config has several apps. `<mode>` is the repo's E2E mode:
+`preview` tests the built dist (a missing or stale dist is rebuilt with `run.preview.build` first) and `dev` is the
+default. Take the mode the repo's gate uses (its scripts or CI pass `--mode`); an app with `run.preview` in its config is
+usually gated in `preview`. Use the same `<mode>` in every command below.
 
 ## 0. Already tested?
 ```sh
-pnpm exec e2e-rail verify --app <app> --mode <mode> --require full
+e2e-rail verify --app <app> --mode <mode> --require full
 ```
 `verified: full@<run-id> (<age>)` or `verified: shards×<n>@<run-id> (<age>)` (exit 0): this exact code — commit,
 uncommitted diff, untracked files, both configs, Playwright version, and in preview mode the dist — already passed in
@@ -22,11 +23,11 @@ full. Report that line; do not rerun. Anything else: run.
 ## 1. Run
 Selected, with the selection block from `e2e-rail:select`:
 ```sh
-pnpm exec e2e-rail run --app <app> --selection --mode <mode>
+e2e-rail run --app <app> --selection --mode <mode>
 ```
 Full:
 ```sh
-pnpm exec e2e-rail run --app <app> --full --mode <mode>
+e2e-rail run --app <app> --full --mode <mode>
 ```
 The exit code is Playwright's. The summary line is the record:
 `run-id <id> · kind <full|selected|rerun|shard> · rc <rc> · <ms>ms · failures <n>`, then up to ten
@@ -64,7 +65,7 @@ Full and shard runs, and runs without a worker count, take the machine-wide excl
 
 ## 2. Verify (always, in the run's mode)
 ```sh
-pnpm exec e2e-rail verify --app <app> --mode <mode> --require full
+e2e-rail verify --app <app> --mode <mode> --require full
 ```
 - exit 0 `verified: full@<run-id> …` / `verified: shards×<n>@<run-id> …` — a full pass of this code.
 - exit 20 `stale: …` — no passing run for this code: `differing: <fields>` names what moved since the last full pass,
@@ -108,7 +109,7 @@ A selected run also carries the selection block from `e2e-rail:select` and says 
 ## 4. On failure
 1. Diagnose with the failed tests only:
    ```sh
-   pnpm exec e2e-rail run --app <app> --last-failed --mode <mode>
+   e2e-rail run --app <app> --last-failed --mode <mode>
    ```
    `--last-failed` is a diagnostic (`kind rerun`). It is **never** reported as a pass, never as a full pass, and never
    satisfies `verify --require full`. Report it as `rerun <run-id>: <one-line cause>`.

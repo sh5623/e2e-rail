@@ -3,10 +3,11 @@ import { parseArgs } from 'node:util';
 
 // One usage line per command. `e2e-rail --help` prints them all; the README and the skills quote them.
 export const USAGES = {
-  init: '[--force]',
+  init: '[--personal] [--force]',
+  status: '[--app <name>] [--json]',
   map: '[--app <name>] [--check] [--explain <spec>]',
   select: '[--app <name>] [--base <ref>|last-green] [--head <ref>] [--no-uncommitted] [--json]'
-    + ' | [--app <name>] (--add <spec> | --remove <spec>)… --reason <text>',
+    + ' | [--app <name>] (--add <spec> | --remove <spec>)… --reason <text> | --review-done --reason <text>',
   run: '[--app <name>] (--full | --selection [id] | --test-list <file> | --last-failed) [--mode dev|preview]'
     + ' [--workers N] [--project <name>] [--shard i/n] [--blob] [--no-lock] [--no-build] [-- <playwright args>]',
   verify: '[--app <name>] [--mode dev|preview] [--require full|selected] [--max-age <min>] [--json]',
@@ -14,6 +15,7 @@ export const USAGES = {
   measure: '[--app <name>] slowest [-n N] | retries [--last N] | workers <1,2,4> --test-list <file> [--mode dev|preview]',
   shard: '[--app <name>] plan --count N [--from-run <run-id>] [--include <spec>]… [--mode dev|preview] | merge --dir <blob dir> [--mode dev|preview]',
   lock: 'status | reap | run <heavy|light> -- <command…>',
+  hook: 'turn-start | stop | post-bash   (runtime hooks: the event as JSON on stdin; always exit 0)',
 };
 
 // Bad command-line input: printed with the command's usage line, exit 2.

@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import { USAGES } from './commands/_args.mjs';
 
 const require = createRequire(import.meta.url);
-const NAMES = ['init', 'map', 'select', 'run', 'verify', 'shadow', 'measure', 'shard', 'lock'];
+const NAMES = ['init', 'status', 'map', 'select', 'run', 'verify', 'shadow', 'measure', 'shard', 'lock', 'hook'];
 
 // name -> async (argv) => exitCode. Looked up with Object.hasOwn only, so `constructor` or `__proto__` is no command.
 export const COMMANDS = Object.fromEntries(NAMES.map((n) => [n, async (argv) => (await import(`./commands/${n}.mjs`)).default(argv)]));

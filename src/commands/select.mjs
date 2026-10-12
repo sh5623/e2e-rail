@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { ledgerDir, loadConfig } from '../config.mjs';
 import { LAST_GREEN } from '../ledger.mjs';
-import { amendSelection, isCommitId, select, selectionExitCode, writeSelection } from '../select.mjs';
+import { amendSelection, isCommitId, markReviewed, select, selectionExitCode, writeSelection } from '../select.mjs';
 import { readState } from '../shadow.mjs';
 import { parse, printUsage, shown, table, UsageError } from './_args.mjs';
 
@@ -14,6 +14,7 @@ const OPTIONS = {
   add: { type: 'string', multiple: true },
   remove: { type: 'string', multiple: true },
   reason: { type: 'string' },
+  'review-done': { type: 'boolean' },
   json: { type: 'boolean' },
 };
 
@@ -69,6 +70,18 @@ export default async function selectCommand(argv) {
   const { values, help } = parse(argv, OPTIONS);
   if (help) return printUsage('select');
   const amending = Boolean(values.add || values.remove);
+  if (values['review-done']) {
+    if (amending || values.base !== undefined || values.head !== undefined || values['no-uncommitted']) {
+      throw new UsageError('--review-done records the impact check of the current selection; it takes only --reason (and --json)');
+    }
+    if (!values.reason?.trim()) throw new UsageError('--review-done needs --reason <what the impact check found>');
+    const config = await loadConfig(process.cwd());
+    const sel = markReviewed(config, { reason: values.reason.trim() });
+    if (values.json) console.log(JSON.stringify(sel, null, 2));
+    else console.log(`reviewed: selection ${sel.id} · ${sel.review.reason}`);
+    return 0;
+  }
+
   if (amending && (values.base !== undefined || values.head !== undefined || values['no-uncommitted'])) {
     throw new UsageError('--add/--remove amend the current selection; compute it first (`e2e-rail select --base …`), then amend it in a second call');
   }

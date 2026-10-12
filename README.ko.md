@@ -16,7 +16,7 @@
 **Claude Code** · **Codex** 스킬 층으로 이뤄진다. 선택·재실행·필터 실행을 전수 통과로 보고하지 않고, 선택 실행마다
 근거가 담긴 선택 블록을 붙이고, 어떤 주장 전에도 `verify` 를 거친다.
 
-**상태:** v0.2.3 (git 태그 `v0.2.3`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
+**상태:** v0.3.0 (git 태그 `v0.3.0`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
 `--test-list` 를 쓰므로 더 낮으면 e2e-rail 이 거부한다), `typescript` ≥ 5 가 필요하다(번들하지 않고 빌려 쓴다).
 
 ## 설치
@@ -24,11 +24,12 @@
 ### CLI (모든 런타임과 CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.2.3
+pnpm add -D github:sh5623/e2e-rail#v0.3.0
 ```
 
-스킬과 CI 는 항상 레포에 설치된 사본(`pnpm exec e2e-rail …`, npm·yarn 이면 `npx e2e-rail …`)을 부른다. 세션과 CI 가
-같은 코어를 돌아야 원장이 서로 비교된다.
+팀과 CI 가 한 버전을 고정해 쓰는 방식(프로젝트 모드)이다. `pnpm exec e2e-rail …`(npm·yarn 이면 `npx e2e-rail …`)로
+부른다. 세션과 CI 가 같은 코어를 돌아야 원장이 서로 비교된다. 혼자 쓰는 사람은 레포에 설치할 필요가 없다: 아래 개인
+모드를 본다.
 
 ### Claude Code
 
@@ -38,8 +39,17 @@ pnpm add -D github:sh5623/e2e-rail#v0.2.3
 /reload-plugins
 ```
 
-스킬 5개(`/e2e-rail:init`, `select`, `gate`, `measure`, `shadow`), 읽기 전용 에이전트 `e2e-impact-analyst`, 그리고
-doctrine 을 주입하는 SessionStart 훅이 들어온다.
+스킬 6개(`/e2e-rail:autopilot`, `init`, `select`, `gate`, `measure`, `shadow`), 읽기 전용 에이전트
+`e2e-impact-analyst`, PATH 의 CLI `e2e-rail`(`bin/e2e-rail`: 레포가 `node_modules` 에 고정한 사본이 있으면 그것을,
+없으면 플러그인 사본을 돌린다), 훅 4개가 들어온다. SessionStart 는 doctrine 을 주입한다. UserPromptSubmit
+(`e2e-rail hook turn-start`)는 턴마다 시작 시점의 작업 트리 파일을 적어 둔다. Stop(`hook stop`)은 그 턴이 E2E 가 닿는
+파일을 바꿨는데 그 코드로 통과한 실행이 원장에 없으면, 턴당 한 번 에이전트에게 E2E 흐름을 돌리라고 요청한다. 같은 턴의
+두 번째 정지는 통과시킨다. Bash 에 대한 PostToolUse(`hook post-bash`)는 직접 돌린 `playwright test` 가 검증이 아님을
+알린다. 훅은 읽고 판정만 하며(150 spec 앱에서 회당 약 0.2초) 테스트를 시작하지 않는다. 설정의 `autopilot: false` 로
+끈다. 설정은 JavaScript 라 레포를 여는 것만으로 실행돼서는 안 된다: 훅은 명시적인 e2e-rail 명령이 이 기계에서 같은
+바이트를 이미 실행한 프로젝트 설정만 읽는다(`~/.e2e-rail/trusted-configs.json` 에 기록). pull 로 설정이 바뀌면 다음 명시적
+명령 전까지 훅은 조용하다. PATH 사본은 git 작업 트리 안에서, toplevel 까지만, `package.json` 이 e2e-rail 을 명시한 곳에서만
+고정본을 찾는다.
 
 ### Codex
 
@@ -49,14 +59,31 @@ codex plugin add e2e-rail@e2e-rail-codex
 ```
 
 새 Codex 세션을 열고 `/hooks` 에서 SessionStart 명령(`cat "$PLUGIN_ROOT/hooks/doctrine.md"`)을 검토해 신뢰한다.
-설치만으로는 훅이 신뢰되지 않는다. 같은 스킬 5개가 `$e2e-rail:init` … `$e2e-rail:shadow` 다. Codex 에는 에이전트가
-없으므로 `select` 스킬이 `references/impact-analyst.md` 를 읽어 그 점검 목록을 직접 수행한다.
+설치만으로는 훅이 신뢰되지 않는다. 같은 스킬 6개가 `$e2e-rail:autopilot` … `$e2e-rail:shadow` 다. Codex 에는
+에이전트가 없으므로 `select` 스킬이 `references/impact-analyst.md` 를 읽어 그 점검 목록을 직접 수행한다. Codex 플러그인은
+CLI 와 Stop 훅을 싣지 않는다(플러그인 훅은 사람이 신뢰한 뒤에만, 바뀔 때마다 다시 신뢰해야 돈다). 그래서 레포가 CLI 를
+고정하고, autopilot 흐름은 스킬 설명과 doctrine 만으로 시작한다.
+
+### 개인 모드
+
+혼자 쓰고 레포는 아무것도 바뀌지 않는다: `package.json` 항목도, 작업 트리 안 설정·원장도, `.gitignore` 줄도 없다.
+Claude Code 플러그인을 설치한 상태에서:
+
+```sh
+e2e-rail init --personal
+```
+
+`~/.e2e-rail/<repo>/e2e-rail.config.mjs` 를 쓴다(`E2E_RAIL_HOME` 이 `~/.e2e-rail` 을 옮긴다. `<repo>` 는 메인
+worktree 의 디렉터리 이름이라 연결된 worktree 도 모두 같은 설정을 찾는다). 원장은 작업 트리마다
+`~/.e2e-rail/<repo>/ledger/<worktree>`(`main`, 연결된 worktree 는 `<dir>-<sha8>`)에 둔다. git 이 아직 무시하지 않는
+Playwright 실행 산출물은 레포 자신의 `.git/info/exclude` 에 적는다. 작업 트리 루트의 설정(프로젝트 모드)이 있으면
+언제나 그쪽이 이긴다. 기존 레포 안 원장을 계속 쓰려면 개인 설정에 `ledger: { dir: '.e2e-rail' }` 를 남겨 둔다.
 
 ## 세팅
 
 레포 하나에 약 30분.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.2.3`
+1. `pnpm add -D github:sh5623/e2e-rail#v0.3.0`(개인 모드는 건너뛰고 3단계에서 `e2e-rail init --personal`)
 2. Claude Code 또는 Codex 플러그인을 설치한다(위).
 3. `init` 스킬을 돌린다. 손으로는 `pnpm exec e2e-rail init`: `e2e-rail.config.mjs` 를 쓰고(찾은
    `playwright.config.*` 마다 앱 하나), `paths` 를 가진 tsconfig 를 고르고, `.gitignore` 에 `.e2e-rail/`,
@@ -149,15 +176,17 @@ base 로 내놓지 않는다.
 
 | 명령 | 옵션 | 출력 · 종료 |
 | --- | --- | --- |
-| `init` | `--force` | `e2e-rail.config.mjs` 작성 · `.gitignore` 줄 · 제안 스크립트 · 0 |
+| `init` | `--personal` · `--force` | `e2e-rail.config.mjs` 작성 · `.gitignore` 줄 · 제안 스크립트 · 0(`--personal`: 설정은 `~/.e2e-rail/<repo>/`, `.git/info/exclude` 줄) |
+| `status` | `--app <name>` · `--json` | 설정과 원장 · `code <id> · head <sha> · clean · trust <t> · streak <s>/<n>` · 앱마다 모드별 검증과 `reach`(마지막 green 이후 E2E 가 닿는 파일) · 선택과 그 검토 · 0 |
 | `map` | `--app <name>` · `--check` · `--explain <spec>` | `app <name>: <n> specs indexed · …` · `--check` 면 `graph:`, `verdict:`, `unmapped: <u>/<n> (<p>%)` · 0 |
-| `select` | `--app <name>` · `--base <ref>`(또는 `last-green`) · `--head <ref>` · `--no-uncommitted` · `--json` · `--add <spec>` · `--remove <spec>` · `--reason <text>` | 표 `app  mode  specs  unmapped  reasons` · `selection.json` · `test-list.<app>.txt` · 0 partial · 10 full |
+| `select` | `--app <name>` · `--base <ref>`(또는 `last-green`) · `--head <ref>` · `--no-uncommitted` · `--json` · `--add <spec>` · `--remove <spec>` · `--reason <text>` · `--review-done` | 표 `app  mode  specs  unmapped  reasons` · `selection.json` · `test-list.<app>.txt` · 0 partial · 10 full · `--review-done --reason <text>`: `reviewed: selection <id> · <text>` · 0 |
 | `run` | `--app <name>` · `--full` · `--selection [id]` · `--test-list <file>` · `--last-failed` · `--mode dev\|preview` · `--workers N` · `--project <name>` · `--shard i/n` · `--blob` · `--no-lock` · `--no-build` · `-- <playwright args>` | `run-id <id> · kind <kind> · rc <rc> · <ms>ms · failures <n>` · `failed:` 줄 · `filtered: …` · `shadowed: …` · Playwright 종료 코드(test list 가 아무것도 맞히지 못하면 1) |
 | `verify` | `--app <name>` · `--mode dev\|preview` · `--require full\|selected` · `--max-age <min>` · `--json` | `verified: …` 0 · `stale: …` 20 · `insufficient: …` 21 |
 | `shadow` | `record --run <run-id> [--app <name>]` · `status` · `promote` · `demote` | `shadow: <run-id> hit\|miss\|trivial\|unpaired · streak <s>/<n>` · `trust <t> · streak <s>/<n> · promotable <yes\|no>` · 0 |
 | `measure` | `--app <name>` · `slowest [-n N]` · `retries [--last N]` · `workers <1,2,4> --test-list <file> [--mode dev\|preview]` | 표 · 0 |
 | `shard` | `--app <name>` · `plan --count N [--from-run <run-id>] [--include <spec>] [--mode dev\|preview]` · `merge --dir <blob dir> [--mode dev\|preview]` | `manifest:` 와 `shard <i>/<n>` 줄 · `merge: rc <rc> · html … · complete: yes\|no` · merge-reports 종료 코드 |
 | `lock` | `status` · `reap` · `run <heavy\|light> -- <command…>` | 보유자 · 지운 락 · 명령의 종료 코드(시작 못 하면 127) |
+| `hook` | `turn-start` · `stop` · `post-bash` | 런타임 훅용: 이벤트 JSON 을 stdin 으로 읽고 훅 결정을 출력하거나 아무것도 출력하지 않는다 · 항상 0 |
 
 공통: `--version`, `--help`, `<command> --help`. 모든 오류는 stderr 의 `e2e-rail: <message>` 한 줄이고, 사용법 오류는
 2, 그 밖은 1 로 끝난다. 실행 모양을 바꾸는 옵션은 CLI 자체 플래그다. `--` 뒤의 `--shard`, `--test-list`,
@@ -188,6 +217,11 @@ HEAD 가 아닌 head 까지로 만들어졌거나(`selection <old> was made up t
 파일(`.e2e-rail/reports/<selection>.<app>.<pid>.test-list.txt`, 실행 뒤 삭제)을 Playwright 에 넘긴다. 락을 기다리는 동안 코드가 바뀌면
 `the code changed while waiting for the lock (selection <id> no longer matches); run it again` 으로 멈추고 아무것도
 기록하지 않는다.
+`select --review-done --reason "<영향 점검 결과>"` 는 현재 선택에 점검을 기록하며, 그 기록은 선택의 코드와 test list 에
+묶인다. 그 뒤의 `--add` 나 코드 변경은 기록을 stale 로 만든다. `run --selection` 은 `review: ok (<reason>)`,
+`review: none — …`, `review: stale (<code|list|version>) — …` 를 출력하고, 재선택은
+`not carried over: the review of selection <old> …` 를 출력한다. 이 기록은 이 코드에 대해 점검했다는 뜻이지 놓친 것이
+없다는 뜻이 아니다: 놓침은 섀도가 센다.
 
 ## 섀도 모드
 
@@ -207,13 +241,18 @@ spec 을 적는다. `trivial`(선택이 전수)과 `unpaired`(이 코드의 선�
 
 ### 씨앗 실패 훈련 (seeded-failure drill)
 
-streak 는 선택이 잡아낸 것을 셀 뿐이고, 훈련은 선택이 진짜 고장을 잡는지 보여 준다. 섀도 기간에 임시 브랜치
-(`git switch -c e2e-drill`)에서 최근 변경 하나를 골라, 그 변경이 건드리는 코드를 일부러 망가뜨려 선택돼야 할 spec 이
-실패하게 만든다. `select --app <app> --base <base>` 를 돌려 그 spec 이 고장 낸 파일을 가리키는 근거와 함께 선택에
-들어 있는지 확인하고, `run --app <app> --selection` 이 실패하는지 본다. 그 spec 이 빠진 선택이나 통과한 실행은 섀도
-miss 처럼 고칠 선택기의 놓침이다. 관계없는(UNRELATED) spec 에도 실패를 하나 심는다: 전수는 실패하고, 선택과 짝지으면
-miss 로 보인다. 예상된 결과다. miss 가 streak 를 되돌리는 것은 실패가 진짜일 때뿐이므로, 훈련의 전수 실행은 절대
-`shadow record` 로 기록하지 않는다. 끝나면 revert 한다: 임시 브랜치에서 나와 그 브랜치를 지운다.
+streak 는 선택이 잡아낸 것을 셀 뿐이고, 훈련은 선택이 진짜 고장을 잡는지 보여 준다. 섀도 기간에, 작업 중인 트리가 아닌
+임시 worktree 에서 한다: 브랜치 전환은 미커밋 편집을 양쪽으로 옮겨(고장이 내 파일에 남고, 내 미커밋 작업은 덮어써진다)
+훈련의 `select`·`run` 이 실제 선택과 원장을 덮어쓴다. 원본 상태의 해시(HEAD, `git diff HEAD --binary`, staged diff,
+미추적 목록)를 남긴 뒤 `git worktree add --detach "$DRILL" HEAD` 로 임시 트리를 만들고, 미커밋 작업은 패치
+(`git diff HEAD --binary`)로 적용하고 미추적 파일은 복사한다(미추적 config 포함 — 훈련의 원장이 따로 생긴다). 임시
+트리에서 최근 변경 하나를 골라, 그 변경이 건드리는 코드를 일부러 망가뜨려 선택돼야 할 spec 이 실패하게 만든다.
+`select --app <app> --base <base>` 를 돌려 그 spec 이 고장 낸 파일을 가리키는 근거와 함께 선택에 들어 있는지 확인하고,
+`run --app <app> --selection` 이 실패하는지 본다. 그 spec 이 빠진 선택이나 통과한 실행은 섀도 miss 처럼 고칠 선택기의
+놓침이다. 관계없는(UNRELATED) spec 에도 실패를 하나 심는다: 전수는 실패하고, 선택과 짝지으면 miss 로 보인다. 예상된
+결과다. miss 가 streak 를 되돌리는 것은 실패가 진짜일 때뿐이므로, 훈련의 실행은 절대 `shadow record` 로 기록하지
+않는다. 실패나 중단 뒤에도 정리한다: `git worktree remove --force "$DRILL"`, `git worktree prune` 뒤 원본 상태를 처음
+해시와 비교한다. 명령 전체는 `e2e-rail:shadow` 스킬에 있다.
 
 ## 락 · 워커 · 분산
 
@@ -307,6 +346,9 @@ export default {
 정적 분석은 아래 경우에 여전히 잘못 좁힐 수 있다. 각각 완화책이 있고, 누군가 선택을 믿기 전에 섀도 모드가 새어 나간
 것을 센다.
 
+- **autopilot 은 요청이지 보장이 아니다.** Stop 훅은 턴당 한 번 요청할 뿐이고, 그 뒤 흐름을 돌릴지는 모델에 달렸으며 훅이
+  직접 테스트를 돌리지 않는다. Codex 에는 이 훅이 없다. 강제되는 것은 원장 밖 실행이 인정되지 않는다는 것과 통과 여부를
+  `verify` 가 정한다는 것이다.
 - **런타임 문자열 이동과 클릭으로만 가는 흐름**(`navigate('/x')`, 클릭으로만 닿는 페이지): import 그래프가 따라가지
   못한다. 셸과 라우터를 `tiers.full` 에 넣고, impact-analyst 점검 목록이 이를 찾는다.
 - **`import.meta.glob(…, { base })` 와 `(import.meta as any).glob`**: 간선으로 풀리지 않는다. 글롭을 쓰는 모듈의
@@ -362,7 +404,8 @@ Playwright 1.56–1.57 에서는 `--test-list` 줄이 테스트의 제목 경로
 
 | 스킬 | 언제 | 무엇을 강제하나 |
 | --- | --- | --- |
-| `e2e-rail:init` | e2e-rail 이 없는 레포 | 설치, `init`, 설정 검토, `map --check`, unmapped 비율 |
+| `e2e-rail:autopilot` | 코드 변경 뒤, 요청 없이(또는 Stop 훅이 물을 때) | `status`, 영향 점검과 `--review-done` 을 포함한 선택, `run --selection`, 증거를 보존하는 진단·수정 최대 2회, `verify`, 보고. 또는 한 줄 `E2E: not verified — <why>` |
+| `e2e-rail:init` | e2e-rail 이 없는 레포 | 개인·프로젝트 모드, `init`, 설정 검토, `map --check`, unmapped 비율 |
 | `e2e-rail:select` | 변경에 E2E 를 돌리기 전 | `select`, impact-analyst 점검, `--add` 와 `--reason`, 선택 블록 |
 | `e2e-rail:gate` | 돌리고 보고할 때 | `run` 다음 같은 모드의 `verify`, 고정 보고 형식, 재실행·필터 실행은 절대 전수 통과가 아님 |
 | `e2e-rail:measure` | 느리거나 흔들리는 스위트 | 느린 spec·재시도, trace 분해, `measure workers`, 그다음 샤드 |
@@ -375,6 +418,7 @@ change:   order search filter (src/features/orders/OrderSearchFilter.tsx +2 more
 selected: orders · order-detail (reasons: route:orders ← OrdersPage.tsx · api:**/api/orders/** ← /api/orders/list)
 added:    none      removed: none
 mobile:   orders
+review:   ok (impact-analyst: no additions)
 unmapped: 1 (map --check lists them)
 final:    full run in the integration step · trust shadow
 ```
@@ -382,7 +426,8 @@ final:    full run in the integration step · trust shadow
 `e2e-impact-analyst`(Claude Code, 읽기 전용: Read, Grep, Glob, Bash)는 그래프가 못 보는 것 — 문자열 이동, 모달
 오프너, API 리터럴 없는 서비스, `supportDirs` 밖 픽스처, 런타임 라우트, URL 상태, 모바일 분기 — 을 점검하고 근거와 함께
 `--add` 후보만 돌려준다. 삭제는 제안하지 않는다. Codex 는 같은 점검 목록을 `references/impact-analyst.md` 에서 읽어
-수행한다. SessionStart doctrine(`hooks/doctrine.md`)이 여섯 규칙을 모든 세션에 둔다.
+수행한다. SessionStart doctrine(`hooks/doctrine.md`)이 일곱 규칙을 모든 세션에 두며, 그 첫 규칙이 코드 변경 뒤
+autopilot 흐름을 시작한다.
 
 ## 개발
 

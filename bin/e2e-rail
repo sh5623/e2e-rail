@@ -1,0 +1,20 @@
+#!/bin/sh
+# `e2e-rail` on PATH: Claude Code puts a plugin's bin/ there. Inside a git work tree, a repository that pins its own
+# e2e-rail (a package.json that names it, with node_modules/.bin/e2e-rail beside it, in the current directory or a
+# parent up to the toplevel) runs that copy, so a session and the repository's CI run one version. Anywhere else, and
+# with E2E_RAIL_SHIM=plugin, this plugin's copy runs: nothing outside the work tree is looked for (a shared /tmp is
+# no repository).
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ "${E2E_RAIL_SHIM:-}" != plugin ] && top=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$top" ]; then
+  top=$(CDPATH= cd -- "$top" && pwd -P)
+  dir=$(pwd -P)
+  while :; do
+    case "$dir/" in "$top"/*) ;; *) break ;; esac
+    if [ -x "$dir/node_modules/.bin/e2e-rail" ] && [ -f "$dir/package.json" ] && grep -q '"e2e-rail"' "$dir/package.json"; then
+      exec "$dir/node_modules/.bin/e2e-rail" "$@"
+    fi
+    if [ "$dir" = "$top" ]; then break; fi
+    dir=$(dirname -- "$dir")
+  done
+fi
+exec node "$here/e2e-rail.mjs" "$@"

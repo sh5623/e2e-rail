@@ -5,7 +5,7 @@ Input: the change (`git diff <base>` plus uncommitted files, or the changed file
 spec: answer `no additions` for it.
 
 Read-only. Allowed: reading files, `git diff` / `git log` / `git show`, `grep` / `rg`, and
-`pnpm exec e2e-rail map --explain <spec>` (a spec's routes, apis, imports and projects; it only refreshes the spec-index
+`e2e-rail map --explain <spec>` (a spec's routes, apis, imports and projects; it only refreshes the spec-index
 cache). Never run `select`, `run`, `shadow`, `shard`, `measure` or `lock`, and never edit a file. You never propose
 removing a spec: removal is a human decision, and only after `shadow promote`.
 

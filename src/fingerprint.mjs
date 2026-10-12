@@ -106,7 +106,8 @@ export function computeFingerprint({ config, app, mode }) {
   const diff = sha256(tracked.text);
   const untrackedFiles = gitUntracked(config.root, ledger ? [`${ledger}/`] : []);
   const untracked = hashFiles(gitLocation(config.root).top, untrackedFiles); // = gitUntrackedHash, listed once
-  const cfg = sha256(`${readFileSync(path.join(dirAbs, app.playwrightConfig), 'utf8')}\0${readFileSync(path.join(config.root, CONFIG_FILE), 'utf8')}`);
+  // the e2e-rail config wherever loadConfig found it (personal mode: outside the repository)
+  const cfg = sha256(`${readFileSync(path.join(dirAbs, app.playwrightConfig), 'utf8')}\0${readFileSync(config.configPath ?? path.join(config.root, CONFIG_FILE), 'utf8')}`);
   const playwright = playwrightVersion(dirAbs);
   const dist = mode === 'preview' ? distHash({ config, app }) : null;
   const codeId = codeIdOf(config);

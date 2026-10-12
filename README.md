@@ -16,7 +16,7 @@ It is a zero-dependency Node CLI (`e2e-rail`) that your scripts and CI call, plu
 **Codex** that make agents use it honestly: no selected, rerun or filtered run reported as a full pass, a selection
 block with reasons for every selected run, and `verify` before any claim.
 
-**Status:** v0.2.3 (git tag `v0.2.3`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
+**Status:** v0.3.0 (git tag `v0.3.0`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
 `--test-list`; e2e-rail refuses an older one) and `typescript` ≥ 5 in the host repository (borrowed, not bundled).
 
 ## Install
@@ -24,11 +24,12 @@ block with reasons for every selected run, and `verify` before any claim.
 ### The CLI (every runtime and CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.2.3
+pnpm add -D github:sh5623/e2e-rail#v0.3.0
 ```
 
-Skills and CI always call the copy installed in the repository (`pnpm exec e2e-rail …`, or `npx e2e-rail …` with npm
-or yarn), so sessions and CI run the same core and their ledgers compare.
+This pins one version for the team and CI (project mode): they call it as `pnpm exec e2e-rail …` (`npx e2e-rail …`
+with npm or yarn), so sessions and CI run the same core and their ledgers compare. A person who runs e2e-rail alone
+needs no install in the repository: see personal mode below.
 
 ### Claude Code
 
@@ -38,8 +39,18 @@ or yarn), so sessions and CI run the same core and their ledgers compare.
 /reload-plugins
 ```
 
-Five skills (`/e2e-rail:init`, `select`, `gate`, `measure`, `shadow`), the read-only `e2e-impact-analyst` agent and a
-SessionStart hook that injects the doctrine.
+Six skills (`/e2e-rail:autopilot`, `init`, `select`, `gate`, `measure`, `shadow`), the read-only `e2e-impact-analyst`
+agent, the CLI on PATH as `e2e-rail` (`bin/e2e-rail`: it runs the copy a repository pins in `node_modules` when there
+is one, else the plugin's own) and four hooks. SessionStart injects the doctrine. UserPromptSubmit
+(`e2e-rail hook turn-start`) notes which files the work tree holds at the start of each turn. Stop (`hook stop`) asks
+the agent once per turn to run the E2E flow when the turn changed files E2E can reach and no run in the ledger passed
+for that code; a second stop in the same turn goes through. PostToolUse on Bash (`hook post-bash`) says that a
+direct `playwright test` is not a verification. The hooks only read and judge (about 0.2 s each on a 150-spec app);
+they never start a test, and `autopilot: false` in the config turns them off. A config is JavaScript, so opening a
+repository must not run it: a hook loads a project config only when an explicit e2e-rail command already ran those
+exact bytes on this machine (recorded in `~/.e2e-rail/trusted-configs.json`). After a pull that changes the config,
+the hooks stay silent until the next explicit command. The PATH copy looks for a pinned copy only inside a git work
+tree, up to its toplevel, and only where `package.json` names e2e-rail.
 
 ### Codex
 
@@ -49,14 +60,32 @@ codex plugin add e2e-rail@e2e-rail-codex
 ```
 
 Start a new Codex session, open `/hooks`, review the SessionStart command (`cat "$PLUGIN_ROOT/hooks/doctrine.md"`) and
-trust it; installing does not trust hooks. The same five skills are `$e2e-rail:init` … `$e2e-rail:shadow`. Codex has
-no agent: the `select` skill reads `references/impact-analyst.md` and runs that checklist itself.
+trust it; installing does not trust hooks. The same six skills are `$e2e-rail:autopilot` … `$e2e-rail:shadow`. Codex
+has no agent: the `select` skill reads `references/impact-analyst.md` and runs that checklist itself. The Codex plugin
+carries no CLI and no Stop hook (a plugin hook runs only after a human trusts it, and again after every change), so
+the repository pins the CLI and the autopilot flow starts from the skill description and the doctrine alone.
+
+### Personal mode
+
+One person, nothing in the repository changes: no `package.json` entry, no config or ledger in the work tree, no
+`.gitignore` line. With the Claude Code plugin installed:
+
+```sh
+e2e-rail init --personal
+```
+
+It writes `~/.e2e-rail/<repo>/e2e-rail.config.mjs` (`E2E_RAIL_HOME` moves `~/.e2e-rail`; `<repo>` is the main
+worktree's directory name, so every linked worktree finds the same config) and keeps each work tree's ledger in
+`~/.e2e-rail/<repo>/ledger/<worktree>` (`main`, or `<dir>-<sha8>` for a linked worktree). Playwright run output that git
+does not ignore yet goes to the repository's own `.git/info/exclude`. A config at the root of the work tree (project
+mode) always wins over a personal one. A personal config may still name `ledger: { dir: '.e2e-rail' }` to keep an
+existing in-repository ledger.
 
 ## Setup
 
 About 30 minutes per repository.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.2.3`
+1. `pnpm add -D github:sh5623/e2e-rail#v0.3.0` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
 2. Install the Claude Code or the Codex plugin (above).
 3. Run the `init` skill, or by hand `pnpm exec e2e-rail init`: it writes `e2e-rail.config.mjs` (one app per
    `playwright.config.*` found), picks the tsconfig that holds your `paths`, adds `.e2e-rail/`, `test-results/`,
@@ -152,15 +181,17 @@ new run); an ad-hoc `--test-list` run or a `measure workers` run does not count.
 
 | Command | Options | Prints · exit |
 | --- | --- | --- |
-| `init` | `--force` | writes `e2e-rail.config.mjs` · `.gitignore` lines · suggested scripts · 0 |
+| `init` | `--personal` · `--force` | writes `e2e-rail.config.mjs` · `.gitignore` lines · suggested scripts · 0 (`--personal`: the config in `~/.e2e-rail/<repo>/`, `.git/info/exclude` lines) |
+| `status` | `--app <name>` · `--json` | config and ledger · `code <id> · head <sha> · clean · trust <t> · streak <s>/<n>` · per app the verification per mode and `reach` (files E2E can reach since its last green) · the selection and its review · 0 |
 | `map` | `--app <name>` · `--check` · `--explain <spec>` | `app <name>: <n> specs indexed · …` · with `--check`: `graph:`, `verdict:`, `unmapped: <u>/<n> (<p>%)` · 0 |
-| `select` | `--app <name>` · `--base <ref>` (or `last-green`) · `--head <ref>` · `--no-uncommitted` · `--json` · `--add <spec>` · `--remove <spec>` · `--reason <text>` | the table `app  mode  specs  unmapped  reasons` · `selection.json` · `test-list.<app>.txt` · 0 partial · 10 full |
+| `select` | `--app <name>` · `--base <ref>` (or `last-green`) · `--head <ref>` · `--no-uncommitted` · `--json` · `--add <spec>` · `--remove <spec>` · `--reason <text>` · `--review-done` | the table `app  mode  specs  unmapped  reasons` · `selection.json` · `test-list.<app>.txt` · 0 partial · 10 full · `--review-done --reason <text>`: `reviewed: selection <id> · <text>` · 0 |
 | `run` | `--app <name>` · `--full` · `--selection [id]` · `--test-list <file>` · `--last-failed` · `--mode dev\|preview` · `--workers N` · `--project <name>` · `--shard i/n` · `--blob` · `--no-lock` · `--no-build` · `-- <playwright args>` | `run-id <id> · kind <kind> · rc <rc> · <ms>ms · failures <n>` · `failed:` lines · `filtered: …` · `shadowed: …` · Playwright's exit code (1 when a test list matched nothing) |
 | `verify` | `--app <name>` · `--mode dev\|preview` · `--require full\|selected` · `--max-age <min>` · `--json` | `verified: …` 0 · `stale: …` 20 · `insufficient: …` 21 |
 | `shadow` | `record --run <run-id> [--app <name>]` · `status` · `promote` · `demote` | `shadow: <run-id> hit\|miss\|trivial\|unpaired · streak <s>/<n>` · `trust <t> · streak <s>/<n> · promotable <yes\|no>` · 0 |
 | `measure` | `--app <name>` · `slowest [-n N]` · `retries [--last N]` · `workers <1,2,4> --test-list <file> [--mode dev\|preview]` | tables · 0 |
 | `shard` | `--app <name>` · `plan --count N [--from-run <run-id>] [--include <spec>] [--mode dev\|preview]` · `merge --dir <blob dir> [--mode dev\|preview]` | `manifest:` and `shard <i>/<n>` lines · `merge: rc <rc> · html … · complete: yes\|no` · merge-reports' exit code |
 | `lock` | `status` · `reap` · `run <heavy\|light> -- <command…>` | holders · reaped locks · the command's exit code (127 if it cannot start) |
+| `hook` | `turn-start` · `stop` · `post-bash` | for runtime hooks: reads the event as JSON on stdin, prints a hook decision or nothing · always 0 |
 
 Global: `--version`, `--help`, `<command> --help`. Every error is one `e2e-rail: <message>` line on stderr: exit 2 for
 bad usage, 1 for anything else. Run-shaping options are first-class flags; after `--` the CLI refuses `--shard`,
@@ -195,6 +226,11 @@ run hands Playwright a list file of its own (`.e2e-rail/reports/<selection>.<app
 afterwards). If the code changes while the run waits for the lock,
 it stops with `the code changed while waiting for the lock (selection <id> no longer matches); run it again` and
 records nothing.
+`select --review-done --reason "<what the impact check found>"` records the check on the current selection, bound to
+its code and its test list; an `--add` after it, or any code change, makes it stale. `run --selection` prints
+`review: ok (<reason>)`, `review: none — …` or `review: stale (<code|list|version>) — …`, and a reselection prints
+`not carried over: the review of selection <old> …`. The record says the check was made for this code, not that it
+missed nothing: the shadow counts misses.
 
 ## Shadow mode
 
@@ -215,14 +251,20 @@ Shadow mode costs nothing: the full run happens anyway.
 
 ### Seeded-failure drill
 
-A streak counts what the selection caught; a drill shows that it catches a real break. During the shadow period, on a
-scratch branch (`git switch -c e2e-drill`), pick a recent change and break the code it touches so that a spec that
-should be selected fails. Run `select --app <app> --base <base>` and check that the spec is in the selection, with a
-reason naming the broken file; then `run --app <app> --selection` must fail. A selection without the spec, or a passing
-run, is a selector miss to fix like a shadow miss. Plant a failure in an UNRELATED spec as well: the full run fails
-and, paired with the selection, shows as a miss. That is expected; a miss resets the streak only when the failure is
-genuine, so a drill's full runs are never recorded with `shadow record`. Then revert: leave the scratch branch and
-delete it.
+A streak counts what the selection caught; a drill shows that it catches a real break. During the shadow period, in a
+scratch worktree, never in the tree you work in: a branch switch carries uncommitted edits both ways (the break stays in
+your files and your own uncommitted work is overwritten), and a drill's `select` and `run` would overwrite the real
+selection and ledger. Note a hash of the original state (HEAD, `git diff HEAD --binary`, the staged diff, the untracked
+list), then `git worktree add --detach "$DRILL" HEAD`, apply your uncommitted work there as a patch
+(`git diff HEAD --binary`) and copy the untracked files (an untracked config included, so the drill's ledger is its
+own). In the scratch tree, pick a recent change and break the code it touches so that a spec that should be selected
+fails. Run `select --app <app> --base <base>` and check that the spec is in the selection, with a reason naming the
+broken file; then `run --app <app> --selection` must fail. A selection without the spec, or a passing run, is a
+selector miss to fix like a shadow miss. Plant a failure in an UNRELATED spec as well: the full run fails and, paired
+with the selection, shows as a miss. That is expected; a miss resets the streak only when the failure is genuine, so a
+drill's runs are never recorded with `shadow record`. Clean up, also after a failure or an interrupt:
+`git worktree remove --force "$DRILL"` and `git worktree prune`, then compare the original state with the hash from
+before. The `e2e-rail:shadow` skill spells out every command.
 
 ## Locks, workers and sharding
 
@@ -319,6 +361,9 @@ export default {
 Static analysis can still narrow wrongly in these cases. Each has a mitigation, and shadow mode counts what slips
 through before anyone trusts a selection.
 
+- **Autopilot is a request, not a guarantee.** The Stop hook asks once per turn; whether the agent then runs the flow
+  is up to the model, and the hook does not run a test itself. Codex has no such hook. What is enforced is that no
+  run outside the ledger counts and that `verify` decides what passed.
 - **Runtime string navigation and click-only flows** (`navigate('/x')`, a page reached only by clicking): the import
   graph does not follow them. Put the shell and router in `tiers.full`; the impact-analyst checklist looks for them.
 - **`import.meta.glob(…, { base })` and `(import.meta as any).glob`**: not resolved as edges. Add the globbing
@@ -376,7 +421,8 @@ Playwright ≥ 1.58, where a line names the file, or rename the test.
 
 | Skill | When | What it enforces |
 | --- | --- | --- |
-| `e2e-rail:init` | a repo without e2e-rail | install, `init`, a config review, `map --check`, the unmapped share |
+| `e2e-rail:autopilot` | after a code change, unasked (or when the Stop hook asks) | `status`, then select with the impact check and `--review-done`, `run --selection`, at most two diagnose-and-fix rounds that keep the evidence, `verify`, the report; or one line `E2E: not verified — <why>` |
+| `e2e-rail:init` | a repo without e2e-rail | personal or project mode, `init`, a config review, `map --check`, the unmapped share |
 | `e2e-rail:select` | before running E2E on a change | `select`, the impact-analyst check, `--add` with `--reason`, the selection block |
 | `e2e-rail:gate` | running and reporting | `run`, then `verify` in the same mode; the fixed report; reruns and filtered runs are never a full pass |
 | `e2e-rail:measure` | slow or flaky suites | slowest and retries, a trace split, `measure workers`, then shards |
@@ -389,6 +435,7 @@ change:   order search filter (src/features/orders/OrderSearchFilter.tsx +2 more
 selected: orders · order-detail (reasons: route:orders ← OrdersPage.tsx · api:**/api/orders/** ← /api/orders/list)
 added:    none      removed: none
 mobile:   orders
+review:   ok (impact-analyst: no additions)
 unmapped: 1 (map --check lists them)
 final:    full run in the integration step · trust shadow
 ```
@@ -396,7 +443,8 @@ final:    full run in the integration step · trust shadow
 `e2e-impact-analyst` (Claude Code, read-only: Read, Grep, Glob, Bash) checks what the graph cannot see — string
 navigation, modal openers, services without API literals, fixtures outside `supportDirs`, runtime routes, URL state,
 mobile branches — and returns only `--add` candidates with reasons, never removals. Codex runs the same checklist
-from `references/impact-analyst.md`. The SessionStart doctrine (`hooks/doctrine.md`) keeps six rules in every session.
+from `references/impact-analyst.md`. The SessionStart doctrine (`hooks/doctrine.md`) keeps seven rules in every
+session, the first of which starts the autopilot flow after a code change.
 
 ## Development
 

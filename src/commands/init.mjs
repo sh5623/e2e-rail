@@ -1,7 +1,7 @@
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CONFIG_FILE, loadConfig } from '../config.mjs';
+import { CONFIG_FILE, loadConfig, personalPaths } from '../config.mjs';
 import { execCapture } from '../util/exec.mjs';
 import { matchGlob, walk } from '../util/glob.mjs';
 import { loadTypeScript } from '../util/ts.mjs';
@@ -9,6 +9,7 @@ import { parse, printUsage } from './_args.mjs';
 
 const TEMPLATE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'templates', CONFIG_FILE);
 const TSCONFIG_LINE = "tsconfig: 'tsconfig.json'";
+const LEDGER_LINE = /^ {2}ledger: \{ dir: '\.e2e-rail' \},.*$/m;
 const ROUTE_FILES = /routeFiles: \[([^\]]*)\]/;
 const PW_CONFIG = /(^|\/)playwright\.config\.(ts|js|mjs|cjs)$/;
 // The ledger, and what every Playwright run writes next to the app. Left un-ignored, run output changes the untracked
@@ -68,7 +69,9 @@ function pruneRouteFiles(text, appFiles) {
   return { text: text.replace(m[0], () => `routeFiles: [${kept.map((g) => `'${quote(g)}'`).join(', ')}]`), note: `adapter.routeFiles: ${kept.join(', ')} (template globs that match no file were left out)` };
 }
 
-async function writeConfig(root, files, apps) {
+// `target`: where the config goes (project mode: `<root>/e2e-rail.config.mjs`). `personal`: the ledger line is left
+// out, so the run history stays in the personal dir, outside the repository.
+async function writeConfig(root, files, apps, { target = path.join(root, CONFIG_FILE), personal = false } = {}) {
   if (!apps.length) throw new Error('no playwright.config.{ts,js,mjs,cjs} found below this directory (node_modules excluded); run init from the repository root');
   const [first, ...more] = apps;
   const { tsconfig, note } = await pickTsconfig(path.join(root, first.root));
@@ -83,8 +86,14 @@ async function writeConfig(root, files, apps) {
   const routes = pruneRouteFiles(text, files.filter((rel) => rel.startsWith(prefix)).map((rel) => rel.slice(prefix.length)));
   text = routes.text;
   if (more.length) text += `\n// Other Playwright configs found; add the ones that are apps to apps[]: ${JSON.stringify(more)}\n`;
-  writeFileSync(path.join(root, CONFIG_FILE), text);
-  console.log(`wrote ${CONFIG_FILE} (app ${first.name} at ${first.root}, ${first.playwrightConfig})`);
+  if (personal) {
+    if (!LEDGER_LINE.test(text)) throw new Error('the config template has no `ledger: { dir: \'.e2e-rail\' }` line');
+    text = text.replace(LEDGER_LINE, () => `  // ledger: personal mode keeps the run history in ${path.join(path.dirname(target), 'ledger', '<worktree>')}, outside the repository`);
+    text = text.replace('Keep this file at the repository root.', () => `Personal config of ${root} (found by its main worktree's directory name).`);
+  }
+  mkdirSync(path.dirname(target), { recursive: true });
+  writeFileSync(target, text);
+  console.log(`wrote ${personal ? target : CONFIG_FILE} (app ${first.name} at ${first.root}, ${first.playwrightConfig})`);
   for (const line of [note, routes.note]) if (line) console.log(line);
   if (more.length) console.log(`${more.length} more playwright config(s) found; they are listed at the end of ${CONFIG_FILE}`);
 }
@@ -107,6 +116,41 @@ function ensureIgnored(root, apps) {
   console.log(`added to .gitignore: ${missing.join(', ')}`);
 }
 
+// Personal mode edits no file of the repository: the Playwright run output that git does not ignore yet goes to the
+// repository's own `.git/info/exclude` (never committed, shared by its worktrees). The ledger is outside the repository.
+function ensureExcluded(root, apps) {
+  const missing = IGNORED.filter((x) => x.pattern !== '.e2e-rail/')
+    .filter(({ pattern, under }) => !under(apps.length ? apps : [{ root: '.' }]).every((dir) => execCapture('git', ['check-ignore', '-q', '--no-index', '--', path.posix.join(dir, pattern, 'e2e-rail-probe')], { cwd: root }).status === 0))
+    .map((x) => x.pattern);
+  if (!missing.length) return;
+  const common = execCapture('git', ['rev-parse', '--git-common-dir'], { cwd: root }).stdout.trim();
+  const abs = path.join(path.resolve(root, common), 'info', 'exclude');
+  mkdirSync(path.dirname(abs), { recursive: true });
+  const text = existsSync(abs) ? readFileSync(abs, 'utf8') : '';
+  appendFileSync(abs, `${text && !text.endsWith('\n') ? '\n' : ''}# e2e-rail (personal): Playwright run output, which would change the fingerprint after every run\n${missing.join('\n')}\n`);
+  console.log(`added to ${abs}: ${missing.join(', ')}`);
+}
+
+async function initPersonal(force) {
+  const p = personalPaths(process.cwd());
+  if (!p) throw new Error('init --personal needs a git work tree: the personal config is found by the repository\'s main worktree');
+  for (const dir of new Set([process.cwd(), p.root])) {
+    const project = path.join(dir, CONFIG_FILE);
+    if (existsSync(project)) throw new Error(`a project config at ${project} wins over a personal one; remove it first, or run \`e2e-rail init\` without --personal`);
+  }
+  const files = walk(p.root);
+  const apps = detectApps(p.root, files);
+  if (existsSync(p.configPath) && !force) console.log(`${p.configPath} exists; left unchanged (use --force to overwrite)`);
+  else await writeConfig(p.root, files, apps, { target: p.configPath, personal: true });
+  ensureExcluded(p.root, apps);
+  console.log([
+    '',
+    `personal mode: nothing in ${p.root} was edited; the ledger is ${p.ledgerDefault}`,
+    'next: e2e-rail map --check',
+  ].join('\n'));
+  return 0;
+}
+
 // Does the config's entry for app `name` (else its first app) declare a preview build? Then the suggested scripts run
 // and verify in preview mode: verify only matches runs of its own mode. A config that cannot be loaded yet suggests dev.
 async function declaresPreview(root, name) {
@@ -117,8 +161,10 @@ async function declaresPreview(root, name) {
 }
 
 export default async function init(argv) {
-  const { values, help } = parse(argv, { force: { type: 'boolean' } });
+  const { values, help } = parse(argv, { force: { type: 'boolean' }, personal: { type: 'boolean' } });
   if (help) return printUsage('init');
+  if (values.personal) return initPersonal(Boolean(values.force));
+
   const root = process.cwd();
   const files = walk(root);
   const apps = detectApps(root, files);

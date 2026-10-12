@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.3.0 — 2026-10-12
+
+### Autopilot (Claude Code)
+
+- **A development request alone now leads to the E2E flow.** The new `e2e-rail:autopilot` skill walks status →
+  select with the impact check → run → at most two diagnose-and-fix rounds that keep the evidence → verify → report,
+  or ends the reply with `E2E: not verified — <why>`. The doctrine's first rule points there after any code change.
+- **Hooks that judge, never run.** UserPromptSubmit (`e2e-rail hook turn-start`) snapshots the work tree per session
+  as git blob ids; Stop (`hook stop`) asks once per turn when this turn changed files E2E can reach and no run in the
+  ledger passed for the code the work tree holds (`stop_hook_active` lets the second stop through); PostToolUse on
+  Bash (`hook post-bash`) notes that a direct `playwright test` is not a verification. A hook always exits 0 and stays
+  silent in a repository without e2e-rail; `autopilot: false` in the config turns them off. A config is JavaScript:
+  a hook loads a project config only when an explicit e2e-rail command already ran those exact bytes on this machine
+  (`~/.e2e-rail/trusted-configs.json`, written by every explicit command), so opening a repository never runs it.
+  About 0.2 s per hook on a 150-spec app. The Codex package keeps SessionStart only (it ships no CLI, and Codex runs a
+  plugin hook only after a human trusts it).
+- **`e2e-rail status`** (read-only, `--json`): config and ledger, the code id, per app the verification per mode and
+  `reach` (the changed files E2E can reach since its last green), the current selection and its review.
+- **`select --review-done --reason <text>`** records the impact check on the current selection, bound to its code
+  and test list. An `--add`, any code change or another e2e-rail version makes it stale; `run --selection` prints
+  `review: …`; a reselection says the review was not carried over.
+
+### Personal mode
+
+- **No file in the repository.** Without a config in the directory, e2e-rail reads
+  `$E2E_RAIL_HOME/<repo>/e2e-rail.config.mjs` (default `~/.e2e-rail`; `<repo>` is the main worktree's directory name)
+  with the work tree's toplevel as root, and keeps the ledger in `~/.e2e-rail/<repo>/ledger/<worktree>`, one per work
+  tree. A project config always wins. `init --personal` writes that config and puts Playwright run output into
+  `.git/info/exclude`, never `package.json` or `.gitignore`. The fingerprint hashes the config wherever it was found.
+- **`e2e-rail` on PATH.** The Claude Code plugin's `bin/e2e-rail` runs the copy a repository pins in `node_modules`
+  only inside a git work tree, up to its toplevel, where `package.json` names e2e-rail; elsewhere it runs its own
+  (`E2E_RAIL_SHIM=plugin` skips the lookup). Skills now write commands as `e2e-rail <command>`, with
+  `pnpm exec e2e-rail` where it is not on PATH (Codex, CI).
+
+### Fixes
+
+- **The seeded-failure drill could lose uncommitted work.** Its branch switch carried uncommitted edits both ways:
+  the planted break stayed in the work tree and overwrote the user's own uncommitted change to the same file, and the
+  drill's `select` and `run` overwrote the real selection and ledger. The drill now runs in a scratch worktree
+  (`git worktree add --detach`), copies uncommitted work there as a patch, hashes the original state before and
+  compares it after `git worktree remove --force`, and finds a scratch tree an interrupted session left behind.
+
+### Upgrading
+
+- Verification policy stays 2: no ledger or shadow reset. What a passing run verifies is unchanged.
+- A project config keeps working as before. To move a personal setup out of the repository, put the config in
+  `~/.e2e-rail/<repo>/` and remove the copy at the root; keep `ledger: { dir: '.e2e-rail' }` in it to go on using the
+  in-repository ledger, or drop the line to start one in `~/.e2e-rail/<repo>/ledger/`.
+
 ## 0.2.3 — 2026-10-12
 
 ### Fixes
