@@ -369,6 +369,15 @@ for (let i = 0; i < Number(rounds); i++) {
   held.release();
 }
 `;
+// True once a holder printed `held`, i.e. its acquire returned, and by then it has removed its queue ticket. Killing it
+// as soon as lockStatus shows its lock can land while it is still removing that ticket (owner moved aside, dir not yet
+// gone): the ownerless ticket then blocks the next request for OWNERLESS_GRACE_MS (10 s), past a 5 s acquire timeout.
+// Reproduced 1 in 300 tight kills under full CPU load; 0 in 300 when the kill waits for `held`.
+const saysHeld = (child) => {
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; });
+  return () => out.includes('held');
+};
 const exitOf = (child, ms = 30_000) => new Promise((resolve) => {
   let err = '';
   child.stderr?.on('data', (d) => { err += d; });
@@ -457,8 +466,10 @@ test('a holder killed with SIGKILL leaves an orphan the next acquire reaps', { s
     console.log('held');
     setInterval(() => {}, 1000);
   `, dir], { env: { ...process.env, LOCK_URL }, stdio: ['ignore', 'pipe', 'ignore'] });
+  const held = saysHeld(holder);
   try {
-    await until(() => lockStatus(dir).heavy?.pid === holder.pid);
+    await until(held);
+    assert.equal(lockStatus(dir).heavy?.pid, holder.pid);
     holder.kill('SIGKILL');
     await exitOf(holder);
     const h = await acquire({ dir, cls: 'heavy', pollMs: 10, timeoutMs: 5000 });
@@ -565,8 +576,10 @@ test('without the boot clock (a sandbox denies os.uptime): heavy still excludes,
     console.log('held');
     setInterval(() => {}, 1000);
   `, [dir]);
+  const held = saysHeld(holder);
   try {
-    await until(() => lockStatus(dir).heavy?.pid === holder.pid);
+    await until(held);
+    assert.equal(lockStatus(dir).heavy?.pid, holder.pid);
     const second = sandboxed(`
       const { acquire } = await import(process.env.LOCK_URL);
       try { await acquire({ dir: process.argv[1], cls: 'heavy', pollMs: 5, timeoutMs: 700 }); console.log('ACQUIRED'); }
