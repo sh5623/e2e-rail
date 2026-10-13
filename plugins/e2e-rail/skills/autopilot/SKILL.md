@@ -37,7 +37,8 @@ e2e-rail run --app <app> --selection --mode <mode>
 ```
 - `review: none — …` or `review: stale (…) — …` before the run: the check was not made for this code and list. Go
   back to step 1 before you report the run.
-- `waiting for the heavy lock (…)` — another run holds the machine lock: wait; never kill it.
+- `waiting for the heavy lock (…)` — another run holds the machine lock: wait; never kill it. When an identical run
+  finishes first, this one prints `reused: run <id> …` and takes its result (nothing runs again): report that run-id.
 - While `trust shadow`, a selected run is `shadowed` and never replaces a full run. The full run stays where the
   project puts it (an integration step, CI); start one yourself only when the selection is full or the project asks.
 

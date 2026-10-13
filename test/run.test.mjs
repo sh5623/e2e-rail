@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { MEASURE_TAG } from '../src/measure.mjs';
 import { runTests, parsePlaywrightReport, parseTestList, testListShortfall, kindOf, isFiltered, filteredBy, assertPassthrough } from '../src/run.mjs';
 import { verify } from '../src/verify.mjs';
 import { computeFingerprint } from '../src/fingerprint.mjs';
@@ -16,7 +17,7 @@ import { loadTypeScript } from '../src/util/ts.mjs';
 import { loadConfig, findApp } from '../src/config.mjs';
 import { execCapture } from '../src/util/exec.mjs';
 import { sha256 } from '../src/util/hash.mjs';
-import { makeTempRepo, readJson, fixtureDir, stubReport } from './helpers.mjs';
+import { GATED_STUB, makeTempRepo, readJson, fixtureDir, stubReport } from './helpers.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(fn, ms = 15_000) {
@@ -26,7 +27,7 @@ async function until(fn, ms = 15_000) {
     await sleep(20);
   }
 }
-const ENTRY_FIELDS = ['app', 'mode', 'kind', 'fingerprint', 'selectionId', 'testListSha', 'shard', 'workers', 'filtered', 'shadowed', 'command', 'lock', 'rc', 'durationMs', 'rootDir', 'specs', 'failures', 'flaky'];
+const ENTRY_FIELDS = ['app', 'mode', 'kind', 'fingerprint', 'selectionId', 'testListSha', 'shard', 'workers', 'project', 'blob', 'passthrough', 'filtered', 'shadowed', 'command', 'lock', 'build', 'rc', 'durationMs', 'wallMs', 'rootDir', 'specs', 'failures', 'flaky'];
 const stubCli = (root) => path.join(root, 'node_modules/@playwright/test/cli.js');
 
 // Temp repo + loaded config + an argv capture file + a private lock dir (E2E_RAIL_LOCK_DIR, so the suite never touches
@@ -859,5 +860,163 @@ test('SIGTERM while a heavy run waits for lights to drain gives the heavy lock b
       assert.equal(existsSync(path.join(markers, 'started')), false);
       assert.deepEqual(readRuns(config), []);
     } finally { light.release(); child.kill('SIGKILL'); killStub(markers); rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+test('0.4.0 timing: the ledger line keeps the request as given and where the time went (build, Playwright, wall)', async () => {
+  await withRepo(async ({ config, app }) => {
+    const plain = await runTests({ config, app, workers: 1, lock: false, passthrough: ['--repeat-each', '2', '--e2e-rail-purpose=x'] });
+    assert.deepEqual(plain.entry.passthrough, ['--repeat-each', '2', '--e2e-rail-purpose=x'], 'as given, e2e-rail tags included');
+    assert.equal(plain.entry.blob, false);
+    assert.equal(plain.entry.build, null, 'dev mode builds nothing');
+    assert.equal(typeof plain.entry.wallMs, 'number');
+    assert.ok(plain.entry.wallMs >= plain.entry.durationMs, 'wall time holds the Playwright time');
+    const blob = await runTests({ config, app, workers: 1, lock: false, blob: true });
+    assert.equal(blob.entry.blob, true);
+    assert.deepEqual(blob.entry.passthrough, []);
+    const built = await runTests({ config, app, workers: 1, lock: false, mode: 'preview' });
+    assert.equal(built.entry.build.rc, 0, 'the stale dist was built');
+    assert.equal(typeof built.entry.build.ms, 'number');
+    assert.ok(built.entry.wallMs >= built.entry.build.ms + built.entry.durationMs);
+    const fresh = await runTests({ config, app, workers: 1, lock: false, mode: 'preview' });
+    assert.equal(fresh.entry.build, null, 'a dist that is not stale is not built again');
+  });
+});
+
+async function withGatedStub(fn) {
+  const error = mock.method(console, 'error', () => {});
+  try {
+    await withRepo(async (ctx) => {
+      const markers = mkdtempSync(path.join(tmpdir(), 'e2e-rail-markers-'));
+      process.env.STUB_MARKERS = markers;
+      writeFileSync(stubCli(ctx.root), GATED_STUB);
+      const runsFile = path.join(markers, 'runs');
+      const openFile = path.join(markers, 'open');
+      const dir = lockDir(ctx.config);
+      try {
+        await fn({
+          ...ctx, dir, error,
+          starts: () => (existsSync(runsFile) ? readFileSync(runsFile, 'utf8').length : 0),
+          open: (rc = 0) => writeFileSync(openFile, String(rc)),
+          shut: () => rmSync(openFile, { force: true }),
+          queued: () => lockStatus(dir).waiting?.length ?? 0,
+        });
+      } finally {
+        writeFileSync(openFile, '0'); // let a stub a failed assertion left waiting go
+        await sleep(100);
+        delete process.env.STUB_MARKERS;
+        rmSync(markers, { recursive: true, force: true });
+      }
+    });
+  } finally { error.mock.restore(); }
+}
+
+test('W1 (0.4.0): requests that waited for the lock behind an identical run take its result: Playwright once, one ledger line, its rc', async () => {
+  await withGatedStub(async ({ config, app, dir, error, starts, open, shut, queued }) => {
+    const producer = runTests({ config, app, workers: 1 });
+    await until(() => starts() === 1);
+    const followers = [runTests({ config, app, workers: 1 }), runTests({ config, app, workers: 1 })];
+    await until(() => queued() === 2);
+    open(0);
+    const [p, ...f] = await Promise.all([producer, ...followers]);
+    assert.equal(p.rc, 0);
+    assert.equal(p.reused, undefined, 'the producer ran');
+    for (const r of f) {
+      assert.equal(r.rc, 0);
+      assert.equal(r.reused, true);
+      assert.equal(r.entry.id, p.entry.id, 'the follower names the run it took');
+    }
+    assert.equal(starts(), 1, 'Playwright ran once');
+    assert.deepEqual(readRuns(config).map((r) => r.id), [p.entry.id], 'one ledger line: no copy, no new full run');
+    assert.equal(verify({ config, app }).run.id, p.entry.id);
+    assert.deepEqual(lockStatus(dir), { heavy: null, light: [] });
+    assert.match(error.mock.calls.map((c) => c.arguments.join(' ')).join('\n'), /waiting for the heavy lock/);
+
+    // a failure is passed on as it is: the identical run the request waited behind failed
+    shut();
+    const failing = runTests({ config, app, workers: 1, passthrough: ['--repeat-each', '2'] });
+    await until(() => starts() === 2);
+    const follower = runTests({ config, app, workers: 1, passthrough: ['--repeat-each', '2'] });
+    await until(() => queued() === 1);
+    open(1);
+    const [a, b] = await Promise.all([failing, follower]);
+    assert.equal(a.rc, 1);
+    assert.equal(b.rc, 1);
+    assert.equal(b.reused, true);
+    assert.equal(b.entry.id, a.entry.id);
+    assert.equal(starts(), 2);
+  });
+});
+
+test('W1 (0.4.0): a waiting request runs itself when the run that finished was another request or tested other code', async () => {
+  await withGatedStub(async ({ root, config, app, starts, open, shut, queued }) => {
+    const producer = runTests({ config, app, workers: 1 });
+    await until(() => starts() === 1);
+    const others = [
+      runTests({ config, app, workers: 2 }),
+      runTests({ config, app, workers: 1, passthrough: ['--repeat-each', '2'] }),
+      runTests({ config, app, workers: 1, blob: true }),
+    ];
+    await until(() => queued() === 3);
+    open(0);
+    const [p, ...o] = await Promise.all([producer, ...others]);
+    for (const r of o) {
+      assert.equal(r.reused, undefined);
+      assert.notEqual(r.entry.id, p.entry.id);
+    }
+    assert.equal(starts(), 4, 'workers, passthrough and blob are part of the request');
+
+    // the code changed while the request waited: its fingerprint is not the one that ran
+    shut();
+    const before = runTests({ config, app, workers: 1 });
+    await until(() => starts() === 5);
+    const after = runTests({ config, app, workers: 1 });
+    await until(() => queued() === 1);
+    writeFileSync(path.join(root, 'src/main.ts'), '// changed while waiting\n', { flag: 'a' });
+    open(0);
+    const [x, y] = await Promise.all([before, after]);
+    assert.equal(y.reused, undefined);
+    assert.notEqual(y.entry.fingerprint.id, x.entry.fingerprint.id);
+    assert.equal(starts(), 6);
+  });
+});
+
+test('W1 (0.4.0): an interrupted run, a run that finished before the request, a rerun and a measurement are never taken', async () => {
+  await withGatedStub(async ({ root, config, app, starts, open, shut, queued }) => {
+    // interrupted (rc 130): the waiting request runs itself
+    const cut = runTests({ config, app, workers: 1 });
+    await until(() => starts() === 1);
+    const waiting = runTests({ config, app, workers: 1 });
+    await until(() => queued() === 1);
+    open(130);
+    const [c, w] = await Promise.all([cut, waiting]);
+    assert.equal(c.rc, 130);
+    assert.equal(w.reused, undefined);
+    assert.notEqual(w.entry.id, c.entry.id);
+    assert.equal(starts(), 2);
+
+    // a request made after an identical run finished runs again (an explicit second run)
+    open(0);
+    const first = await runTests({ config, app, workers: 1 });
+    const second = await runTests({ config, app, workers: 1 });
+    assert.equal(second.reused, undefined);
+    assert.notEqual(second.entry.id, first.entry.id);
+    assert.equal(starts(), 4);
+
+    // a --last-failed rerun and a worker measurement wait like any heavy run but always run themselves
+    const list = writeList(root);
+    for (const opts of [{ lastFailed: true }, { testList: list, passthrough: [MEASURE_TAG] }]) {
+      shut();
+      const n = starts();
+      const one = runTests({ config, app, workers: 1, lockClass: 'heavy', ...opts });
+      await until(() => starts() === n + 1);
+      const two = runTests({ config, app, workers: 1, lockClass: 'heavy', ...opts });
+      await until(() => queued() === 1);
+      open(0);
+      const [r1, r2] = await Promise.all([one, two]);
+      assert.equal(r2.reused, undefined, JSON.stringify(opts));
+      assert.notEqual(r2.entry.id, r1.entry.id);
+      assert.equal(starts(), n + 2);
+    }
   });
 });

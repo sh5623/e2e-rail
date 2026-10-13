@@ -1,5 +1,6 @@
 import { completeShardSet, readRuns } from './ledger.mjs';
 import { runTests } from './run.mjs';
+import { gitTreeOf } from './util/git.mjs';
 
 // Measurements come from the ledger; e2e-rail never decides a worker count (spec §9): on the first adopter's machine
 // raising workers 5→8 made runs slower and timed 10 tests out, so the value has to be measured where it is used.
@@ -76,6 +77,54 @@ export function retryRates({ config, app, last = 10 }) {
   return [...acc.values()]
     .map((c) => ({ ...c, rate: c.retried / c.runs }))
     .sort((a, b) => b.rate - a.rate || b.retried - a.retried || byFileProject(a, b));
+}
+
+// 0.4.0: where the time of the last `last` runs of the app went, one row per ledger line in order: lock wait, preview
+// build, Playwright and wall time (call to line). null means the line does not say (unknown, never 0): a line written
+// before 0.4.0 has no build or wall time, and a run that took no e2e-rail lock (`--no-lock`, under another lock) may
+// have waited elsewhere. `buildMs` 0 means the line records that no build ran.
+const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+export function timeRows({ config, app, last = 20 }) {
+  assertCount(last, 'last');
+  return readRuns(config, { app: app.name }).slice(-last).map((r) => ({
+    id: r.id, kind: r.kind, filtered: Boolean(r.filtered), mode: r.mode, rc: r.rc ?? null,
+    waitMs: num(r.lock?.waitMs),
+    buildMs: 'build' in r ? (r.build === null ? 0 : num(r.build?.ms)) : null,
+    testMs: num(r.durationMs),
+    wallMs: num(r.wallMs),
+  }));
+}
+
+// 0.4.0: how much of the app's full-run time a reuse could have saved, from the ledger. Over unfiltered full runs that
+// are not measurements, per mode: `repeatAfterPass` — runs of code (fingerprint) that had already passed in full (what
+// verify before a run, and joining a waiting request to the identical run, save); `sameTreeOtherHead` — runs of a clean
+// tree whose commit's tree an earlier clean full pass had tested under another commit, with the same configs and
+// Playwright (what reusing a result across commits would save; e2e-rail does not reuse it). `ms` adds up Playwright
+// time. `unknownHeads`: heads of clean full runs whose tree this clone cannot tell (those runs are not counted).
+export function reuseDemand({ config, app }) {
+  const root = config.root;
+  const runs = readRuns(config, { app: app.name }).filter((r) => r.kind === 'full' && !r.filtered && !isMeasure(r) && r.fingerprint?.id);
+  const trees = new Map();
+  const treeOf = (head) => {
+    if (typeof head !== 'string' || !head) return null;
+    if (!trees.has(head)) trees.set(head, gitTreeOf(root, head));
+    return trees.get(head);
+  };
+  const out = { fullRuns: runs.length, repeatAfterPass: { runs: 0, ms: 0 }, sameTreeOtherHead: { runs: 0, ms: 0 }, unknownHeads: 0 };
+  const add = (bucket, r) => { bucket.runs += 1; bucket.ms += num(r.durationMs) ?? 0; };
+  const passes = [];
+  for (const r of runs) {
+    const f = r.fingerprint;
+    const earlier = passes.filter((p) => p.mode === r.mode);
+    if (earlier.some((p) => p.fingerprint.id === f.id)) add(out.repeatAfterPass, r);
+    else if (f.clean === true && treeOf(f.head) && earlier.some((p) => p.fingerprint.clean === true && p.fingerprint.head !== f.head
+      && p.fingerprint.config === f.config && p.fingerprint.playwright === f.playwright && treeOf(p.fingerprint.head) === treeOf(f.head))) {
+      add(out.sameTreeOtherHead, r);
+    }
+    if (r.rc === 0) passes.push(r);
+  }
+  out.unknownHeads = new Set(runs.filter((r) => r.fingerprint.clean === true && !treeOf(r.fingerprint.head)).map((r) => r.fingerprint.head)).size;
+  return out;
 }
 
 // Runs `testList` once per worker count, one after another, each as an ordinary ledger line tagged as a measurement.

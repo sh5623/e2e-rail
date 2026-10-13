@@ -16,7 +16,7 @@
 **Claude Code** · **Codex** 스킬 층으로 이뤄진다. 선택·재실행·필터 실행을 전수 통과로 보고하지 않고, 선택 실행마다
 근거가 담긴 선택 블록을 붙이고, 어떤 주장 전에도 `verify` 를 거친다.
 
-**상태:** v0.3.3 (git 태그 `v0.3.3`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
+**상태:** v0.4.0 (git 태그 `v0.4.0`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
 `--test-list` 를 쓰므로 더 낮으면 e2e-rail 이 거부한다), `typescript` ≥ 5 가 필요하다(번들하지 않고 빌려 쓴다).
 
 ## 설치
@@ -24,7 +24,7 @@
 ### CLI (모든 런타임과 CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.3.3
+pnpm add -D github:sh5623/e2e-rail#v0.4.0
 ```
 
 팀과 CI 가 한 버전을 고정해 쓰는 방식(프로젝트 모드)이다. `pnpm exec e2e-rail …`(npm·yarn 이면 `npx e2e-rail …`)로
@@ -89,7 +89,7 @@ Playwright 실행 산출물은 레포 자신의 `.git/info/exclude` 에 적는�
 
 레포 하나에 약 30분.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.3.3`(개인 모드는 건너뛰고 3단계에서 `e2e-rail init --personal`)
+1. `pnpm add -D github:sh5623/e2e-rail#v0.4.0`(개인 모드는 건너뛰고 3단계에서 `e2e-rail init --personal`)
 2. Claude Code 또는 Codex 플러그인을 설치한다(위).
 3. `init` 스킬을 돌린다. 손으로는 `pnpm exec e2e-rail init`: `e2e-rail.config.mjs` 를 쓰고(찾은
    `playwright.config.*` 마다 앱 하나), `paths` 를 가진 tsconfig 를 고르고, `.gitignore` 에 `.e2e-rail/`,
@@ -153,7 +153,10 @@ Playwright 버전, preview 모드면 빌드된 `dist` 해시. `id` 는 그 전�
 실행을 짝짓는다. `clean`(`id` 에는 들어가지 않는다)은 작업 트리가 HEAD 그 자체였는지, 즉 추적 파일 변경도 원장 디렉터리
 밖의 untracked(무시되지 않은) 파일도 없었는지를 말한다. `.e2e-rail/ledger.jsonl` 에는 실행 1회가 append-only 한 줄로
 남는다: `policy`, `kind`(`full` · `selected` · `rerun` · `shard`), `mode`, 지문, `testListSha`(읽은 test list 의
-sha256), shard, workers, `filtered`, `shadowed`, 락 시각, rc, spec 별 결과, 실패, flaky. 깨끗한 트리에서 필터 없이
+sha256), shard, workers, `project`, `blob`, `passthrough`(`--` 뒤 인자, 받은 그대로), `filtered`, `shadowed`, 락 시각,
+`build`(그 실행이 한 preview 빌드의 `{ ms, rc }`, 없으면 null), rc, `durationMs`(Playwright), `wallMs`(호출부터 줄을 쓸
+때까지: 락 대기·빌드·Playwright 포함), spec 별 결과, 실패, flaky. 실행마다 Playwright JSON 리포트는
+`.e2e-rail/reports/<run-id>.json` 에 남는다. 깨끗한 트리에서 필터 없이
 통과한 전수 실행(또는 깨끗한 트리에서 돈 샤드로 `complete: yes` 를 찍은 `shard merge`)이 `select --base last-green` 이
 diff 하는 출발점이다. 그 실행은 자기 head 를 `.e2e-rail/last-green.<app>` 에도 쓰지만 참고용일 뿐이다: e2e-rail 이
 안내하는 어떤 것도 더는 그 파일을 읽지 않는다(0.1.0 은 미커밋·완화 통과에도 그 파일을 썼고, 맨 sha 한 줄로는 어느 것인지
@@ -186,10 +189,10 @@ base 로 내놓지 않는다.
 | `status` | `--app <name>` · `--json` | 설정과 원장 · `code <id> · head <sha> · clean · trust <t> · streak <s>/<n>` · 앱마다 모드별 검증과 `reach`(마지막 green 이후 E2E 가 닿는 파일) · 선택과 그 검토 · 0 |
 | `map` | `--app <name>` · `--check` · `--explain <spec>` | `app <name>: <n> specs indexed · …` · `--check` 면 `graph:`, `verdict:`, `unmapped: <u>/<n> (<p>%)` · 0 |
 | `select` | `--app <name>` · `--base <ref>`(또는 `last-green`) · `--head <ref>` · `--no-uncommitted` · `--json` · `--add <spec>` · `--remove <spec>` · `--reason <text>` · `--review-done` | 표 `app  mode  specs  unmapped  reasons` · `selection.json` · `test-list.<app>.txt` · 0 partial · 10 full · `--review-done --reason <text>`: `reviewed: selection <id> · <text>` · 0 |
-| `run` | `--app <name>` · `--full` · `--selection [id]` · `--test-list <file>` · `--last-failed` · `--mode dev\|preview` · `--workers N` · `--project <name>` · `--shard i/n` · `--blob` · `--no-lock` · `--no-build` · `-- <playwright args>` | `run-id <id> · kind <kind> · rc <rc> · <ms>ms · failures <n>` · `failed:` 줄 · `filtered: …` · `shadowed: …` · Playwright 종료 코드(test list 가 아무것도 맞히지 못하면 1) |
+| `run` | `--app <name>` · `--full` · `--selection [id]` · `--test-list <file>` · `--last-failed` · `--mode dev\|preview` · `--workers N` · `--project <name>` · `--shard i/n` · `--blob` · `--no-lock` · `--no-build` · `-- <playwright args>` | `run-id <id> · kind <kind> · rc <rc> · <ms>ms · failures <n>` · `failed:` 줄 · `filtered: …` · `shadowed: …` · `reused: run <id> — …`(아무것도 돌지 않음: 락 절 참고) · Playwright 종료 코드(test list 가 아무것도 맞히지 못하면 1) |
 | `verify` | `--app <name>` · `--mode dev\|preview` · `--require full\|selected` · `--max-age <min>` · `--json` | `verified: …` 0 · `stale: …` 20 · `insufficient: …` 21 |
 | `shadow` | `record --run <run-id> [--app <name>]` · `status` · `promote` · `demote` | `shadow: <run-id> hit\|miss\|trivial\|unpaired · streak <s>/<n>` · `trust <t> · streak <s>/<n> · promotable <yes\|no>` · 0 |
-| `measure` | `--app <name>` · `slowest [-n N]` · `retries [--last N]` · `workers <1,2,4> --test-list <file> [--mode dev\|preview]` | 표 · 0 |
+| `measure` | `--app <name>` · `slowest [-n N]` · `retries [--last N]` · `time [--last N]` · `workers <1,2,4> --test-list <file> [--mode dev\|preview]` | 표 · `time`: `full runs: … · repeat after a pass: … · same tree, other head: …` · 0 |
 | `shard` | `--app <name>` · `plan --count N [--from-run <run-id>] [--include <spec>] [--mode dev\|preview]` · `merge --dir <blob dir> [--mode dev\|preview]` | `manifest:` 와 `shard <i>/<n>` 줄 · `merge: rc <rc> · html … · complete: yes\|no` · merge-reports 종료 코드 |
 | `lock` | `status` · `reap` · `run <heavy\|light> -- <command…>` | 보유자 · 지운 락 · 명령의 종료 코드(시작 못 하면 127) |
 | `hook` | `turn-start` · `stop` · `post-bash` | 런타임 훅용: 이벤트 JSON 을 stdin 으로 읽고 훅 결정을 출력하거나 아무것도 출력하지 않는다 · 항상 0 |
@@ -273,6 +276,23 @@ heavy 드라이버가 해제 즉시 다시 요청해도 이미 기다리는 요�
 같은 10초 유예). 공정성을 보장하려면 모든 요청자가 0.2.3 이상이어야 한다. 구버전도 같은 배타 락을 쓰지만 대기열을
 따르지 않는다. 쉬고 있는 러너부터 갱신하고 살아 있는 락은 지우지 않는다. `pnpm exec e2e-rail lock status` 는
 보유자와 대기 요청을, `lock reap` 은 고아 락과 번호표를 지우고, `lock run heavy -- <command>` 는 다른 명령을 같은 락으로 감싼다.
+
+**같은 실행에 합류(0.4.0).** 락을 기다린 실행은 락을 잡은 뒤 원장을 한 번 읽는다. 기다리는 동안 똑같은 요청 — 같은
+앱·mode·kind, 같은 코드(지문)·test list·selection·shard·project·workers·`--blob`·passthrough — 이 끝났으면 아무것도
+돌리지 않고 그 실행의 요약 줄 위에
+`reused: run <id> — an identical run (same code, mode and options) finished while this one waited for the lock; nothing ran again`
+을 찍고 그 실행의 rc 로 끝난다. 아무것도 쓰지 않는다: `verify` 는 원장에 있는 그 한 줄을 센다. 실패도 그대로
+전달한다. 중단된 실행(rc 128 이상), 요청 전에 이미 끝난 실행(다시 돌리는 것은 호출자의 선택), `--last-failed` 재실행,
+`measure workers` 실행, filtered 실행은 받지 않는다. 실행은 원장 줄을 쓸 때까지 락을 쥐고 있으므로 다음 실행이 그 줄을
+찾는다. 합류는 이 작업 트리의 원장만 읽고 e2e-rail 락이 있어야 한다: `--no-lock` 실행(다른 락 아래)은 합류하지 않으며,
+passthrough 를 기록하지 않은 0.3.x 의 줄도 받지 않는다.
+
+**시간.** `measure time [--last N]` 은 실행마다 락 대기·preview 빌드·Playwright·전체 시간을 출력하고, 줄에 없는 값은
+`unknown` 이다(0.4.0 이전 줄, 또는 다른 락 아래서 기다렸을 수 있는 `--no-lock` 실행). 표 아래
+`full runs: <n> · repeat after a pass: <n> (<시간>) · same tree, other head: <n> (<시간>)` 는 이미 전수 통과한 코드를
+다시 돈 전수(실행 전 `verify` 와 합류가 아끼는 것)와, 앞선 전수 통과가 다른 커밋으로 검사한 트리와 같은 트리의 커밋을
+돈 전수(커밋을 넘어 결과를 재사용하면 아낄 것 — e2e-rail 은 재사용하지 않는다)를 센다. 실행을 건너뛰는 무언가를
+만들기 전에 먼저 잰다.
 
 **워커.** e2e-rail 은 워커 수를 정하지 않는다. `pnpm exec e2e-rail measure workers 1,2,4 --test-list <file>` 이
 같은 목록을 워커 수마다 한 번씩, 매번 배타 락 아래서 돌리고 벽시계·실패·재시도·부하를 출력한다. 이긴 값은 사람이
@@ -376,6 +396,9 @@ export default {
   있어서, `--mode preview` 로 돌리는 선택이 preview 전용 프로젝트를 놓칠 수 있다(preview 에 없는 프로젝트의 줄은 대신
   실행을 실패시킨다). `shard plan --mode preview` 는 preview 환경에서 나열한다. 프로젝트 구성을 모드와 무관하게 두거나,
   preview 게이트는 `run --full` 로 돌린다.
+- **결과는 커밋을 넘어 재사용하지 않는다.** 앞선 전수 통과가 검사한 트리와 같은 트리의 커밋(빈 커밋, 아무것도 바꾸지
+  않은 rebase)도 자기 실행이 필요하고, 그 통과에서 낸 선택은 아무것도 고르지 않아 아무것도 검증하지 않는다.
+  `measure time` 이 그런 경우가 얼마나 잦은지 센다(`same tree, other head`).
 - **`--base last-green` 은 모드를 가리지 않고(ANY mode) 가장 최근의 깨끗한 전수 통과를 고른다**: dev 에서는 통과했지만
   preview 에서는 실패할 커밋이 `--mode preview` 로 돌릴 선택의 base 가 될 수 있다. 머리 줄이 그 실행과 모드를 밝힌다
   (`base <sha7> (last-green: run <id>, <mode>)`). preview 에서 검증된 커밋에서 diff 하려면 그 커밋의 SHA 를 넘긴다

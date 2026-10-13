@@ -16,7 +16,7 @@ It is a zero-dependency Node CLI (`e2e-rail`) that your scripts and CI call, plu
 **Codex** that make agents use it honestly: no selected, rerun or filtered run reported as a full pass, a selection
 block with reasons for every selected run, and `verify` before any claim.
 
-**Status:** v0.3.3 (git tag `v0.3.3`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
+**Status:** v0.4.0 (git tag `v0.4.0`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
 `--test-list`; e2e-rail refuses an older one) and `typescript` ≥ 5 in the host repository (borrowed, not bundled).
 
 ## Install
@@ -24,7 +24,7 @@ block with reasons for every selected run, and `verify` before any claim.
 ### The CLI (every runtime and CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.3.3
+pnpm add -D github:sh5623/e2e-rail#v0.4.0
 ```
 
 This pins one version for the team and CI (project mode): they call it as `pnpm exec e2e-rail …` (`npx e2e-rail …`
@@ -91,7 +91,7 @@ existing in-repository ledger.
 
 About 30 minutes per repository.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.3.3` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
+1. `pnpm add -D github:sh5623/e2e-rail#v0.4.0` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
 2. Install the Claude Code or the Codex plugin (above).
 3. Run the `init` skill, or by hand `pnpm exec e2e-rail init`: it writes `e2e-rail.config.mjs` (one app per
    `playwright.config.*` found), picks the tsconfig that holds your `paths`, adds `.e2e-rail/`, `test-results/`,
@@ -157,8 +157,11 @@ ledger dir), a hash of both configs, the Playwright version and, in preview mode
 covers all of it; `codeId` covers head, diff and untracked files and pairs selections with runs; `clean` (not part of
 `id`) says the tree was HEAD itself: no tracked change and no untracked, non-ignored file outside the ledger dir.
 `.e2e-rail/ledger.jsonl` gets one append-only line per run: `policy`, `kind` (`full` · `selected` · `rerun` ·
-`shard`), `mode`, fingerprint, `testListSha` (the sha256 of the test list it read), shard, workers, `filtered`,
-`shadowed`, lock times, rc, per-spec results, failures and flaky tests. An unfiltered passing full run of a clean tree
+`shard`), `mode`, fingerprint, `testListSha` (the sha256 of the test list it read), shard, workers, `project`,
+`blob`, `passthrough` (the arguments after `--`, as given), `filtered`, `shadowed`, lock times, `build` (`{ ms, rc }`
+of the preview build the run made, null when none), rc, `durationMs` (Playwright), `wallMs` (from the call to the line:
+lock wait, build and Playwright), per-spec results, failures and flaky tests. The Playwright JSON report of each run
+stays in `.e2e-rail/reports/<run-id>.json`. An unfiltered passing full run of a clean tree
 (or a `shard merge` that prints `complete: yes` for shards that ran on a clean tree) is what `select --base last-green`
 diffs from. It also writes its head to `.e2e-rail/last-green.<app>`, for information only: nothing e2e-rail documents
 reads that file any more (0.1.0 wrote it for dirty and relaxed passes too, and a bare sha cannot say which). A pass
@@ -191,10 +194,10 @@ new run); an ad-hoc `--test-list` run or a `measure workers` run does not count.
 | `status` | `--app <name>` · `--json` | config and ledger · `code <id> · head <sha> · clean · trust <t> · streak <s>/<n>` · per app the verification per mode and `reach` (files E2E can reach since its last green) · the selection and its review · 0 |
 | `map` | `--app <name>` · `--check` · `--explain <spec>` | `app <name>: <n> specs indexed · …` · with `--check`: `graph:`, `verdict:`, `unmapped: <u>/<n> (<p>%)` · 0 |
 | `select` | `--app <name>` · `--base <ref>` (or `last-green`) · `--head <ref>` · `--no-uncommitted` · `--json` · `--add <spec>` · `--remove <spec>` · `--reason <text>` · `--review-done` | the table `app  mode  specs  unmapped  reasons` · `selection.json` · `test-list.<app>.txt` · 0 partial · 10 full · `--review-done --reason <text>`: `reviewed: selection <id> · <text>` · 0 |
-| `run` | `--app <name>` · `--full` · `--selection [id]` · `--test-list <file>` · `--last-failed` · `--mode dev\|preview` · `--workers N` · `--project <name>` · `--shard i/n` · `--blob` · `--no-lock` · `--no-build` · `-- <playwright args>` | `run-id <id> · kind <kind> · rc <rc> · <ms>ms · failures <n>` · `failed:` lines · `filtered: …` · `shadowed: …` · Playwright's exit code (1 when a test list matched nothing) |
+| `run` | `--app <name>` · `--full` · `--selection [id]` · `--test-list <file>` · `--last-failed` · `--mode dev\|preview` · `--workers N` · `--project <name>` · `--shard i/n` · `--blob` · `--no-lock` · `--no-build` · `-- <playwright args>` | `run-id <id> · kind <kind> · rc <rc> · <ms>ms · failures <n>` · `failed:` lines · `filtered: …` · `shadowed: …` · `reused: run <id> — …` (nothing ran: see Locks) · Playwright's exit code (1 when a test list matched nothing) |
 | `verify` | `--app <name>` · `--mode dev\|preview` · `--require full\|selected` · `--max-age <min>` · `--json` | `verified: …` 0 · `stale: …` 20 · `insufficient: …` 21 |
 | `shadow` | `record --run <run-id> [--app <name>]` · `status` · `promote` · `demote` | `shadow: <run-id> hit\|miss\|trivial\|unpaired · streak <s>/<n>` · `trust <t> · streak <s>/<n> · promotable <yes\|no>` · 0 |
-| `measure` | `--app <name>` · `slowest [-n N]` · `retries [--last N]` · `workers <1,2,4> --test-list <file> [--mode dev\|preview]` | tables · 0 |
+| `measure` | `--app <name>` · `slowest [-n N]` · `retries [--last N]` · `time [--last N]` · `workers <1,2,4> --test-list <file> [--mode dev\|preview]` | tables · `time`: `full runs: … · repeat after a pass: … · same tree, other head: …` · 0 |
 | `shard` | `--app <name>` · `plan --count N [--from-run <run-id>] [--include <spec>] [--mode dev\|preview]` · `merge --dir <blob dir> [--mode dev\|preview]` | `manifest:` and `shard <i>/<n>` lines · `merge: rc <rc> · html … · complete: yes\|no` · merge-reports' exit code |
 | `lock` | `status` · `reap` · `run <heavy\|light> -- <command…>` | holders · reaped locks · the command's exit code (127 if it cannot start) |
 | `hook` | `turn-start` · `stop` · `post-bash` | for runtime hooks: reads the event as JSON on stdin, prints a hook decision or nothing · always 0 |
@@ -287,6 +290,24 @@ holder (an ownerless ticket gets the same 10-second grace). All contenders need 
 processes share the same exclusion locks but do not observe the queue. Update idle runners; do not delete live locks.
 `pnpm exec e2e-rail lock status` shows the holders and waiting requests, `lock reap` removes orphan locks and tickets, and
 `lock run heavy -- <command>` wraps any other command in the same lock.
+
+**Joining an identical run (0.4.0).** A run that waited for the lock reads the ledger once it holds it. When an
+identical request — same app, mode and kind, the same code (fingerprint), test list, selection, shard, project,
+workers, `--blob` and passthrough — finished while it waited, it runs nothing, prints
+`reused: run <id> — an identical run (same code, mode and options) finished while this one waited for the lock; nothing ran again`
+above that run's summary line, and exits with that run's rc. It writes nothing: `verify` counts the one line there
+is. A failure is passed on as it is. An interrupted run (rc 128 or more), a run that finished before the request was
+made (running it again is the caller's choice), a `--last-failed` rerun, a `measure workers` run and a filtered run are
+never taken. A run holds the lock until its ledger line is written, so the next one finds it. Joining reads this work
+tree's ledger only and needs the e2e-rail lock: `--no-lock` runs (under another lock) never join, nor do lines from
+0.3.x, which do not record the passthrough.
+
+**Time.** `measure time [--last N]` prints, per run, the lock wait, the preview build, Playwright and the total, and
+`unknown` where a line does not say (written before 0.4.0, or a `--no-lock` run that may have waited under another
+lock). Below the table, `full runs: <n> · repeat after a pass: <n> (<time>) · same tree, other head: <n> (<time>)`
+counts full runs of code that had already passed in full (what `verify` before a run and joining save) and full runs
+of a commit whose tree an earlier full pass had tested under another commit (what reusing a result across commits
+would save; e2e-rail does not reuse it). Measure before you build anything that skips a run.
 
 **Workers.** e2e-rail never chooses a worker count. `pnpm exec e2e-rail measure workers 1,2,4 --test-list <file>`
 runs the same list once per count, each under the exclusive lock, and prints wall time, failures, retries and load.
@@ -393,6 +414,9 @@ through before anyone trusts a selection.
   other projects in preview, so a selection run with `--mode preview` may miss a preview-only project (a line for a
   project preview does not have fails the run instead). `shard plan --mode preview` lists in the preview env. Keep the
   project set independent of the mode, or gate preview with `run --full`.
+- **A result is never reused across commits.** A commit whose tree is the one an earlier full pass tested (an empty
+  commit, a rebase that changed nothing) still needs its own run, and a selection from that pass selects nothing, which
+  verifies nothing. `measure time` counts how often that happens (`same tree, other head`).
 - **`--base last-green` takes the newest clean full pass in ANY mode**: a commit that passed in dev but would fail in
   preview can become the base of a selection you then run with `--mode preview`. The header names the run and its
   mode (`base <sha7> (last-green: run <id>, <mode>)`). To diff from a commit verified in preview, pass that commit's

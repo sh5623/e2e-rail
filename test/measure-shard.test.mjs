@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { measureWorkers, retryRates, slowest } from '../src/measure.mjs';
+import { measureWorkers, retryRates, reuseDemand, slowest, timeRows } from '../src/measure.mjs';
 import { mergeReports, planShards } from '../src/shard.mjs';
 import { runTests } from '../src/run.mjs';
 import { appendRun, readLastGreen, readRuns } from '../src/ledger.mjs';
 import { verify } from '../src/verify.mjs';
 import { codeIdOf } from '../src/select.mjs';
 import { findApp, loadConfig } from '../src/config.mjs';
+import { execCapture } from '../src/util/exec.mjs';
 import { sha256 } from '../src/util/hash.mjs';
 import { makeTempRepo, readJson } from './helpers.mjs';
 
@@ -102,6 +103,56 @@ test('a complete shard set is one full run for slowest and retryRates; partial, 
     synthShard(config, { index: 2, count: 2, plan: 'native' }, [row(CART, 'chromium', 700), row(ORDERS, 'chromium', 100)]);
     assert.deepEqual(slowest({ config, app }), [{ file: CART, project: 'chromium', durationMs: 5700 }, { file: ORDERS, project: 'chromium', durationMs: 100 }]);
     assert.deepEqual(retryRates({ config, app }).find((x) => x.file === CART && x.project === 'chromium'), { file: CART, project: 'chromium', runs: 2, retried: 1, rate: 0.5 });
+  });
+});
+
+test('measure time (0.4.0): wait, build, Playwright and wall per run; what a line did not record is null (unknown), never 0', async () => {
+  await withRepo(async ({ config, app }) => {
+    const old = appendRun(config, {
+      app: 'web', mode: 'dev', kind: 'full', filtered: false, rc: 0, fingerprint: { id: 'old' }, durationMs: 5000, specs: [], failures: [], flaky: [], command: 'playwright test',
+    });
+    const free = await run(config, app); // no e2e-rail lock
+    const locked = await runTests({ config, app, workers: 1 });
+    const narrowed = await run(config, app, { passthrough: ['--grep', 'x'] });
+    const rows = timeRows({ config, app });
+    assert.deepEqual(rows.map((r) => r.id), [old.id, free.entry.id, locked.entry.id, narrowed.entry.id]);
+    assert.deepEqual(rows[0], { id: old.id, kind: 'full', filtered: false, mode: 'dev', rc: 0, waitMs: null, buildMs: null, testMs: 5000, wallMs: null });
+    assert.equal(rows[1].waitMs, null, 'a run without the e2e-rail lock may have waited elsewhere: unknown');
+    assert.equal(rows[1].buildMs, 0, 'recorded: no build ran');
+    assert.equal(rows[1].wallMs, free.entry.wallMs);
+    assert.equal(rows[2].waitMs, locked.entry.lock.waitMs);
+    assert.equal(rows[3].filtered, true);
+    assert.deepEqual(timeRows({ config, app, last: 2 }).map((r) => r.id), [locked.entry.id, narrowed.entry.id]);
+    assert.throws(() => timeRows({ config, app, last: 0 }), /last must be a whole number/);
+  });
+});
+
+test('measure time (0.4.0): counts the full runs a reuse could have saved — code that had passed in full, a tree that had passed under another commit', async () => {
+  await withRepo(async ({ root, config, app }) => {
+    const git = (...args) => execCapture('git', args, { cwd: root });
+    failing(root);
+    await run(config, app);
+    passing();
+    await run(config, app); // after a failure: a fix or a flake check, not a repeat
+    const none = reuseDemand({ config, app });
+    assert.deepEqual(none, { fullRuns: 2, repeatAfterPass: { runs: 0, ms: 0 }, sameTreeOtherHead: { runs: 0, ms: 0 }, unknownHeads: 0 });
+    const again = await run(config, app); // the same code after its full pass
+    git('commit', '-q', '--allow-empty', '-m', 'empty');
+    const moved = await run(config, app); // the same tree under another commit
+    touch(root, 'src/main.ts');
+    git('commit', '-qam', 'change');
+    await run(config, app); // another tree
+    await run(config, app, { passthrough: ['--grep', 'x'] }); // filtered: not a full run
+    await run(config, app, { testList: writeList(root) }); // selected: not a full run
+    appendRun(config, {
+      app: 'web', mode: 'dev', kind: 'full', filtered: false, rc: 0, durationMs: 1, specs: [], failures: [], flaky: [], command: 'playwright test',
+      fingerprint: { ...again.entry.fingerprint, id: 'elsewhere', head: '0'.repeat(40) },
+    }); // a head this clone does not have
+    const d = reuseDemand({ config, app });
+    assert.equal(d.fullRuns, 6);
+    assert.deepEqual(d.repeatAfterPass, { runs: 1, ms: again.entry.durationMs });
+    assert.deepEqual(d.sameTreeOtherHead, { runs: 1, ms: moved.entry.durationMs });
+    assert.equal(d.unknownHeads, 1);
   });
 });
 
