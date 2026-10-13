@@ -3,7 +3,7 @@ import { constants } from 'node:os';
 import path from 'node:path';
 import { appDir, ledgerDir, runEnv } from './config.mjs';
 import { computeFingerprint, distStale } from './fingerprint.mjs';
-import { appendRun, currentPolicy, passGreen, readRuns } from './ledger.mjs';
+import { appendRun, currentPolicy, ledgerMark, passGreen, runsSince } from './ledger.mjs';
 import { acquire, describeHolders, lockDir } from './lock.mjs';
 import { readState } from './shadow.mjs';
 import { inCI } from './util/ci.mjs';
@@ -298,15 +298,16 @@ const requestKey = (r) => JSON.stringify([
 ]);
 const interrupted = (rc) => typeof rc !== 'number' || rc >= 128; // no result, or ended by a signal
 
-// W1 (0.4.0): the run an identical request finished while this one waited for the lock (`since`: when this one asked
-// for it), or null. Only a line appended after the request counts: that run was running, or queued ahead, while this
-// one waited. A run that finished before the request is a result the caller chose to run again, and an interrupted run
-// is no result. Lines of an older verification policy never count. Nothing is copied: the caller gets that line.
-function finishedWhileWaiting(config, request, since) {
+// W1 (0.4.0): the run an identical request finished while this one waited for the lock, or null. Only a line appended
+// after `mark` (the ledger's end when this one was called) counts: that run was running, or queued ahead, while this
+// one waited. Its place in the ledger says so, never its timestamp: a clock step, or a run that ended in the same
+// millisecond as the request, cannot make an earlier run look later. A run that finished before the request is a
+// result the caller chose to run again, and an interrupted run is no result. Lines of an older verification policy
+// never count. Nothing is copied: the caller gets that line.
+function finishedWhileWaiting(config, request, mark) {
   const key = requestKey(request);
-  const t = Date.parse(since);
-  return readRuns(config, { app: request.app }).reverse().find((r) => Array.isArray(r.passthrough) && typeof r.blob === 'boolean'
-    && currentPolicy(r) && !r.filtered && Date.parse(r.ts) >= t && !interrupted(r.rc) && requestKey(r) === key) ?? null;
+  return runsSince(config, mark, { app: request.app }).reverse().find((r) => Array.isArray(r.passthrough) && typeof r.blob === 'boolean'
+    && currentPolicy(r) && !r.filtered && !interrupted(r.rc) && requestKey(r) === key) ?? null;
 }
 
 // Spec §8: a selected run made while the selector is still in shadow mode is no stand-in for a full run, and its ledger
@@ -338,6 +339,7 @@ export async function runTests({
   blob = false, lock = true, lockClass, build = true, selectionId = null, expectCodeId = null, passthrough = [],
 }) {
   const called = Date.now();
+  const mark = ledgerMark(config); // W1: the runs that finish after this line are the ones this request may join
   if (!MODES.includes(mode)) throw new Error(`e2e-rail: unknown mode "${mode}" (expected ${MODES.join(' or ')})`);
   if (lockClass !== undefined && lockClass !== 'heavy' && lockClass !== 'light') {
     throw new Error(`e2e-rail: lockClass must be heavy or light (or left out), got ${JSON.stringify(lockClass)}`);
@@ -417,7 +419,7 @@ export async function runTests({
       project: project ?? null, blob, passthrough: [...passthrough],
     };
     const purpose = passthrough.some((a) => a.startsWith('--e2e-rail-purpose='));
-    const joined = held && kind !== 'rerun' && !filtered && !purpose ? finishedWhileWaiting(config, request, held.requestedAt) : null;
+    const joined = held && kind !== 'rerun' && !filtered && !purpose ? finishedWhileWaiting(config, request, mark) : null;
     if (joined) return { rc: joined.rc, entry: joined, reused: true };
     const shadowed = kind === 'selected' && shadowTrust(config);
     mkdirSync(path.dirname(reportAbs), { recursive: true });

@@ -1,7 +1,7 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { appendRun, readRuns, ledgerPath, latestFull, completeShardSet, writeLastGreen, readLastGreen, lastGreenRun, VERIFY_POLICY } from '../src/ledger.mjs';
+import { appendRun, readRuns, ledgerPath, ledgerMark, runsSince, latestFull, completeShardSet, writeLastGreen, readLastGreen, lastGreenRun, VERIFY_POLICY } from '../src/ledger.mjs';
 import { ledgerDir, loadConfig } from '../src/config.mjs';
 import { makeTempRepo } from './helpers.mjs';
 
@@ -108,6 +108,25 @@ test('a partially written last line is not glued to the next append and earlier 
     writeFileSync(ledgerPath(config), '');
     appendRun(config, run({ id: 'run-2' }));
     assert.ok(readFileSync(ledgerPath(config), 'utf8').startsWith('{"id":"run-2"'));
+  });
+});
+
+test('W1 (0.4.0): ledgerMark and runsSince read exactly the lines appended after a mark, per app, whatever their timestamps', async () => {
+  await withLedger(async (config, warn) => {
+    assert.equal(ledgerMark(config), 0, 'no ledger yet');
+    assert.deepEqual(runsSince(config, 0), []);
+    appendRun(config, run({ id: 'run-before', ts: '2099-01-01T00:00:00.000Z' })); // a later clock, appended earlier
+    const mark = ledgerMark(config);
+    assert.equal(mark, readFileSync(ledgerPath(config)).length);
+    assert.deepEqual(runsSince(config, mark), []);
+    appendRun(config, run({ id: 'run-web', ts: '2000-01-01T00:00:00.000Z' }));
+    appendFileSync(ledgerPath(config), 'not json\n');
+    appendRun(config, run({ id: 'run-other', app: 'other' }));
+    assert.deepEqual(runsSince(config, mark).map((r) => r.id), ['run-web', 'run-other']);
+    assert.deepEqual(runsSince(config, mark, { app: 'web' }).map((r) => r.id), ['run-web']);
+    assert.deepEqual(warnings(warn), [], 'skipped quietly');
+    writeFileSync(ledgerPath(config), ''); // replaced: shorter than the mark
+    assert.deepEqual(runsSince(config, mark), []);
   });
 });
 

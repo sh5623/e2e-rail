@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import path from 'node:path';
 import { ledgerDir } from './config.mjs';
 import { newId } from './util/id.mjs';
@@ -53,6 +53,27 @@ export function readRuns(config, { app } = {}) {
     if (!e || typeof e !== 'object' || Array.isArray(e)) { console.warn(`ledger: skipping corrupt line ${i + 1}`); return; }
     if (!app || e.app === app) out.push(e);
   });
+  return out;
+}
+
+// W1 (0.4.0): where the ledger ends now (its size in bytes, 0 when there is none). The ledger is append-only, so the
+// lines after a mark are exactly the runs that finished after it was taken: their place says so, not their clock.
+export function ledgerMark(config) {
+  try { return statSync(ledgerPath(config)).size; } catch { return 0; }
+}
+
+// The entries appended after `mark` (a ledgerMark), for one app. A ledger shorter than the mark (replaced) has none;
+// lines that are not a JSON object are skipped.
+export function runsSince(config, mark, { app } = {}) {
+  let buf;
+  try { buf = readFileSync(ledgerPath(config)); } catch { return []; }
+  if (buf.length <= mark) return [];
+  const out = [];
+  for (const line of buf.subarray(mark).toString('utf8').split('\n')) {
+    let e = null;
+    try { e = JSON.parse(line); } catch { continue; }
+    if (e && typeof e === 'object' && !Array.isArray(e) && (!app || e.app === app)) out.push(e);
+  }
   return out;
 }
 

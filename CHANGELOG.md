@@ -9,8 +9,9 @@
   workers, `--blob` and passthrough finished while it waited, it runs nothing, prints
   `reused: run <id> — an identical run (same code, mode and options) finished while this one waited for the lock; nothing ran again`
   above that run's summary and exits with its rc (a failure is passed on as it is). Nothing is written; `verify` counts
-  the line that is there. An interrupted run (rc 128 or more), a run that finished before the request, a rerun, a
-  worker measurement and a filtered run are never taken. It needs the e2e-rail lock (`--no-lock` never joins) and reads
+  the line that is there. "Finished while it waited" is read from the ledger's own order (lines appended after the
+  request), never from timestamps. An interrupted run (rc 128 or more), a run that finished before the request, a
+  rerun, a worker measurement and a filtered run are never taken. It needs the e2e-rail lock (`--no-lock` never joins) and reads
   this work tree's ledger only.
 - **`measure time [--last N]`** prints, per run, the lock wait, the preview build, Playwright and the total time
   (`unknown` where a line does not say), then `full runs: <n> · repeat after a pass: <n> (<time>) · same tree, other

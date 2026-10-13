@@ -9,7 +9,7 @@ import { runTests, parsePlaywrightReport, parseTestList, testListShortfall, kind
 import { verify } from '../src/verify.mjs';
 import { computeFingerprint } from '../src/fingerprint.mjs';
 import { acquire, lockDir, lockStatus } from '../src/lock.mjs';
-import { readLastGreen, readRuns } from '../src/ledger.mjs';
+import { appendRun, readLastGreen, readRuns } from '../src/ledger.mjs';
 import { promote, statePath } from '../src/shadow.mjs';
 import { planShards } from '../src/shard.mjs';
 import { loadOrBuildSpecIndex } from '../src/spec-index.mjs';
@@ -978,6 +978,19 @@ test('W1 (0.4.0): a waiting request runs itself when the run that finished was a
     assert.equal(y.reused, undefined);
     assert.notEqual(y.entry.fingerprint.id, x.entry.fingerprint.id);
     assert.equal(starts(), 6);
+  });
+});
+
+test('W1 (0.4.0): a line already in the ledger when the request was made is never taken, whatever its timestamp says', async () => {
+  await withRepo(async ({ config, app }) => {
+    const first = await runTests({ config, app, workers: 1 });
+    // the same request recorded with a later clock (a clock step, or two runs in one millisecond look alike)
+    const { id: _id, ts: _ts, policy: _p, ...same } = first.entry;
+    const future = appendRun(config, { ...same, ts: new Date(Date.now() + 3_600_000).toISOString() });
+    const again = await runTests({ config, app, workers: 1 });
+    assert.equal(again.reused, undefined);
+    assert.notEqual(again.entry.id, future.id);
+    assert.equal(readRuns(config).length, 3);
   });
 });
 
