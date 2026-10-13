@@ -282,7 +282,7 @@ heavy 드라이버가 해제 즉시 다시 요청해도 이미 기다리는 요�
 돌리지 않고 그 실행의 요약 줄 위에
 `reused: run <id> — an identical run (same code, mode and options) finished while this one waited for the lock; nothing ran again`
 을 찍고 그 실행의 rc 로 끝난다. 아무것도 쓰지 않는다: `verify` 는 원장에 있는 그 한 줄을 센다. 실패도 그대로
-전달한다. 중단된 실행(rc 128 이상), 요청 전에 이미 끝난 실행(다시 돌리는 것은 호출자의 선택), `--last-failed` 재실행,
+전달한다. 중단된 실행(rc 128 이상), 요청 전에 이미 끝난 실행(다시 돌리는 것은 호출자의 선택 · 시각이 아니라 원장 순서로 가른다), `--last-failed` 재실행,
 `measure workers` 실행, filtered 실행은 받지 않는다. 실행은 원장 줄을 쓸 때까지 락을 쥐고 있으므로 다음 실행이 그 줄을
 찾는다. 합류는 이 작업 트리의 원장만 읽고 e2e-rail 락이 있어야 한다: `--no-lock` 실행(다른 락 아래)은 합류하지 않으며,
 passthrough 를 기록하지 않은 0.3.x 의 줄도 받지 않는다.

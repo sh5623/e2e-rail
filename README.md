@@ -297,7 +297,7 @@ workers, `--blob` and passthrough — finished while it waited, it runs nothing,
 `reused: run <id> — an identical run (same code, mode and options) finished while this one waited for the lock; nothing ran again`
 above that run's summary line, and exits with that run's rc. It writes nothing: `verify` counts the one line there
 is. A failure is passed on as it is. An interrupted run (rc 128 or more), a run that finished before the request was
-made (running it again is the caller's choice), a `--last-failed` rerun, a `measure workers` run and a filtered run are
+made (running it again is the caller's choice; the ledger's order decides that, never a timestamp), a `--last-failed` rerun, a `measure workers` run and a filtered run are
 never taken. A run holds the lock until its ledger line is written, so the next one finds it. Joining reads this work
 tree's ledger only and needs the e2e-rail lock: `--no-lock` runs (under another lock) never join, nor do lines from
 0.3.x, which do not record the passthrough.

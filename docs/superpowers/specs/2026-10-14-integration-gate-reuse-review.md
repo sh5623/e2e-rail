@@ -49,7 +49,11 @@
   결과보다 먼저 들어왔다. 실측 빈도는 0 이지만(BFM 은 워크트리마다 원장이 따로이고 라운드 전수는 `--no-lock`), 비용이 전수
   한 번(15분)이라 1회만 일어나도 구현 비용을 넘는다.
 - 결정: 0.4.0 W1 — 락을 잡은 직후 원장에서 «이 요청 이후에 끝난, 같은 요청 키의, 중단되지 않은 실행»을 찾으면 실행하지
-  않고 그 줄과 rc 를 돌려준다(`src/run.mjs` `finishedWhileWaiting` L305). 락은 원장 줄을 쓴 뒤 놓는다.
+  않고 그 줄과 rc 를 돌려준다(`src/run.mjs` `finishedWhileWaiting`). 락은 원장 줄을 쓴 뒤 놓는다.
+- «요청 이후»는 시각이 아니라 **원장 위치**로 가른다: 호출 시점의 원장 크기(`ledgerMark`) 뒤에 붙은 줄만 본다
+  (`src/ledger.mjs` `runsSince`). 첫 구현은 `ts >= requestedAt` 이었고, PR CI(Linux)에서 기존 R50 테스트가 «같은
+  밀리초에 끝난 요청 전 실행»을 받아들이는 것으로 드러났다 — 시계 비교는 같은 ms·시계 보정에 약하다. 미래 시각을 단
+  기존 줄로 결정적 회귀 테스트를 만들고 고쳤다.
 
 ### Q2 큐를 코어와 조정자에 나누는 경계 — **채택(코어 쪽 최소 구현만)**
 - 코어: 같은 머신·같은 원장의 동일 요청 합류(W1). 이미 있는 FIFO 번호표(`src/lock.mjs` L238 `ourTurn`)가 «A+B 검사 중 C
@@ -112,15 +116,15 @@
 
 | 무엇 | 위치 | 검증 |
 | --- | --- | --- |
-| W1 대기 중 동일 실행 합류 | `src/run.mjs` `requestKey`·`finishedWhileWaiting`, `src/commands/run.mjs` `reused:` 줄 | 단위 3(생산자 1회·추종자 2·실패 전달 / 다른 workers·passthrough·blob·대기 중 코드 변경은 합류 안 함 / 중단(130)·요청 전 종료·rerun·measure 는 안 받음) · CLI 1 · **실제 Playwright 계약 1** |
+| W1 대기 중 동일 실행 합류 | `src/run.mjs` `requestKey`·`finishedWhileWaiting`, `src/ledger.mjs` `ledgerMark`·`runsSince`, `src/commands/run.mjs` `reused:` 줄 | 단위 5(생산자 1회·추종자 2·실패 전달 / 다른 workers·passthrough·blob·대기 중 코드 변경은 합류 안 함 / 중단(130)·요청 전 종료·rerun·measure 는 안 받음 / 미래 시각의 기존 줄도 안 받음 / 원장 위치 읽기) · CLI 1 · **실제 Playwright 계약 1** |
 | 원장 줄을 쓴 뒤 락 해제 | `src/run.mjs` | 위 계약 테스트(추종자가 원장 줄을 봄) |
 | 원장 필드 `blob`·`passthrough`·`build`·`wallMs` | `src/run.mjs` | 단위 1(dev·blob·preview 빌드·재빌드 없음) |
 | `measure time` | `src/measure.mjs` `timeRows`·`reuseDemand`, `src/util/git.mjs` `gitTreeOf` | 단위 2(unknown ≠ 0, 반복·같은 트리·clone 밖 head) · CLI 1 · BFM 실물 원장 읽기 |
 
-변이 검사(구현을 일부러 망가뜨려 테스트가 잡는지): 요청 키에서 workers·blob·passthrough 제거, 요청 시각 조건 제거,
-중단 실행 수용, rerun·measure 합류 허용 — 4개 모두 해당 테스트가 실패했다.
+변이 검사(구현을 일부러 망가뜨려 테스트가 잡는지): 요청 키에서 workers·blob·passthrough 제거, 요청 이후 조건 제거(시각
+조건, 이후 원장 위치 0), 중단 실행 수용, rerun·measure 합류 허용 — 모두 해당 테스트가 실패했다.
 
-테스트: 단위 358(기존 350 + 8) · 실제 Playwright 계약 5(기존 4 + 1). 문서: README·README.ko(락 절 «같은 실행에 합류»·
+테스트: 단위 360(기존 350 + 10) · 실제 Playwright 계약 5(기존 4 + 1). 문서: README·README.ko(락 절 «같은 실행에 합류»·
 «시간», Limits 1항), CHANGELOG 0.4.0, 스킬 gate·autopilot·measure·init(+ Codex 미러).
 
 ## 4 보류 항목의 재개 조건
