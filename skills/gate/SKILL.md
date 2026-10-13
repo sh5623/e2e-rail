@@ -53,7 +53,7 @@ The exit code is Playwright's. The summary line is the record:
   ran or was recorded.
 - `e2e-rail: <build command> failed (rc <n>); Playwright was not started.` — nothing ran or was recorded.
 - `last-green not moved: the working tree had uncommitted changes` — the pass verifies this exact code, not HEAD.
-- `reused: run <id> — an identical run (same code, mode and options) finished while this one waited for the lock; nothing ran again` — nothing ran: the summary under it is that run's, and its rc is this one's. Report that run-id; verify as below.
+- `reused: run <id> — an identical run (same code, mode, options and environment) finished while this one waited for the lock; nothing ran again` — nothing ran: the summary under it is that run's, and its rc is this one's. Report that run-id; verify as below.
 
 Run-shaping options never go after `--`. Only `--shard`, `--test-list`, `--last-failed` and `--project` have e2e-rail
 flags (use those); `--reporter`, `--config`, `--list`, `--only-changed`, `--output`, `--test-list-invert`,

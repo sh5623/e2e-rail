@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.4.1 — 2026-10-14
+
+### Fixes
+
+- **A run under another environment no longer joins the run it waited behind.** 0.4.0 compared the code, the options
+  and the test list, not the environment Playwright inherits: a request with another target server, account or feature
+  flag took a pass made under the first one and ran nothing (reproduced with the real runner: the joined request
+  reported rc 0, the same request alone rc 1; found by a Codex cross-review). The request now also covers every
+  inherited variable, the app's `run.env` and mode env (also when the config computes them from the environment) and
+  the Node binary, compared as an HMAC under a random key kept in the private lock dir (`<lock dir>/env.key`, 0600): no
+  value reaches the ledger, and the digest means nothing on another machine. Without a usable key nothing joins. The
+  message reads `… an identical run (same code, mode, options and environment) …`.
+- Ledger lines carry `envDigest` and `joinPolicy: 1`. A line without them (0.3.x, 0.4.0) is never joined.
+
+### Documentation
+
+- README Limits: the fingerprint, and so `verify`, does not cover the process environment; run the suite again after
+  changing a target, an account or a flag. `measure time` counts ledger lines only (a failed preview build and a joined
+  run write none).
+- The integration-gate review's Q3 ruling (the environment as "the same limit as verify, over a short window") was
+  wrong for joining, which skips a run that was asked for; the review records the correction.
+
+### Upgrading
+
+- Verification policy stays 2. A 0.4.1 run never joins a 0.4.0 line; a 0.4.0 run waiting behind a 0.4.1 run still
+  joins without comparing the environment, so update every e2e-rail that shares a machine and work tree.
+
 ## 0.4.0 — 2026-10-14
 
 ### Features

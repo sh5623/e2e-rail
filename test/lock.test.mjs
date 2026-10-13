@@ -5,7 +5,7 @@ import fs, { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileS
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir, uptime } from 'node:os';
 import path from 'node:path';
-import { acquire, reap, lockStatus, isHeavyShape, lockDir } from '../src/lock.mjs';
+import { acquire, reap, lockStatus, isHeavyShape, lockDir, machineKey } from '../src/lock.mjs';
 
 const LOCK_URL = new URL('../src/lock.mjs', import.meta.url).href;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -622,4 +622,33 @@ test('without the boot clock: a lock from a previous boot (monotonic clock ahead
     assert.equal(r.code, 0, r.err);
     assert.deepEqual(JSON.parse(out), ['light-0.lock']);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('W1 (0.4.1): machineKey makes one private 32-byte key per lock dir and reuses it; a link, a short file or a lock dir others can write gives null', { skip: process.platform === 'win32' }, () => {
+  const root = tempDir();
+  try {
+    const dir = path.join(root, 'machine');
+    const key = machineKey(dir);
+    assert.ok(Buffer.isBuffer(key));
+    assert.equal(key.length, 32);
+    assert.equal(statSync(path.join(dir, 'env.key')).mode & 0o777, 0o600);
+    assert.deepEqual(machineKey(dir), key, 'made once, then read');
+    assert.deepEqual(reap(dir), [], 'not a lock: reap leaves it');
+    assert.ok(existsSync(path.join(dir, 'env.key')));
+    rmSync(path.join(dir, 'env.key'));
+    writeFileSync(path.join(root, 'planted'), Buffer.alloc(32, 7));
+    symlinkSync(path.join(root, 'planted'), path.join(dir, 'env.key'));
+    assert.equal(machineKey(dir), null, 'a link is never followed');
+    rmSync(path.join(dir, 'env.key'));
+    writeFileSync(path.join(dir, 'env.key'), 'short', { mode: 0o600 });
+    assert.equal(machineKey(dir), null, 'not 32 bytes');
+    rmSync(path.join(dir, 'env.key'));
+    writeFileSync(path.join(dir, 'env.key'), Buffer.alloc(32, 1), { mode: 0o644 });
+    chmodSync(path.join(dir, 'env.key'), 0o644);
+    assert.equal(machineKey(dir), null, 'readable by others');
+    const open = path.join(root, 'open');
+    mkdirSync(open);
+    chmodSync(open, 0o777);
+    assert.equal(machineKey(open), null, 'a lock dir others can write');
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

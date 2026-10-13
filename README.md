@@ -16,7 +16,7 @@ It is a zero-dependency Node CLI (`e2e-rail`) that your scripts and CI call, plu
 **Codex** that make agents use it honestly: no selected, rerun or filtered run reported as a full pass, a selection
 block with reasons for every selected run, and `verify` before any claim.
 
-**Status:** v0.4.0 (git tag `v0.4.0`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
+**Status:** v0.4.1 (git tag `v0.4.1`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
 `--test-list`; e2e-rail refuses an older one) and `typescript` ≥ 5 in the host repository (borrowed, not bundled).
 
 ## Install
@@ -24,7 +24,7 @@ block with reasons for every selected run, and `verify` before any claim.
 ### The CLI (every runtime and CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.4.0
+pnpm add -D github:sh5623/e2e-rail#v0.4.1
 ```
 
 This pins one version for the team and CI (project mode): they call it as `pnpm exec e2e-rail …` (`npx e2e-rail …`
@@ -91,7 +91,7 @@ existing in-repository ledger.
 
 About 30 minutes per repository.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.4.0` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
+1. `pnpm add -D github:sh5623/e2e-rail#v0.4.1` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
 2. Install the Claude Code or the Codex plugin (above).
 3. Run the `init` skill, or by hand `pnpm exec e2e-rail init`: it writes `e2e-rail.config.mjs` (one app per
    `playwright.config.*` found), picks the tsconfig that holds your `paths`, adds `.e2e-rail/`, `test-results/`,
@@ -291,23 +291,28 @@ processes share the same exclusion locks but do not observe the queue. Update id
 `pnpm exec e2e-rail lock status` shows the holders and waiting requests, `lock reap` removes orphan locks and tickets, and
 `lock run heavy -- <command>` wraps any other command in the same lock.
 
-**Joining an identical run (0.4.0).** A run that waited for the lock reads the ledger once it holds it. When an
-identical request — same app, mode and kind, the same code (fingerprint), test list, selection, shard, project,
-workers, `--blob` and passthrough — finished while it waited, it runs nothing, prints
-`reused: run <id> — an identical run (same code, mode and options) finished while this one waited for the lock; nothing ran again`
+**Joining an identical run (0.4.0, environment since 0.4.1).** A run that waited for the lock reads the ledger once it
+holds it. When an identical request — same app, mode and kind, the same code (fingerprint), test list, selection,
+shard, project, workers, `--blob` and passthrough, and the same environment — finished while it waited, it runs
+nothing, prints
+`reused: run <id> — an identical run (same code, mode, options and environment) finished while this one waited for the lock; nothing ran again`
 above that run's summary line, and exits with that run's rc. It writes nothing: `verify` counts the one line there
 is. A failure is passed on as it is. An interrupted run (rc 128 or more), a run that finished before the request was
 made (running it again is the caller's choice; the ledger's order decides that, never a timestamp), a `--last-failed` rerun, a `measure workers` run and a filtered run are
 never taken. A run holds the lock until its ledger line is written, so the next one finds it. Joining reads this work
-tree's ledger only and needs the e2e-rail lock: `--no-lock` runs (under another lock) never join, nor do lines from
-0.3.x, which do not record the passthrough.
+tree's ledger only and needs the e2e-rail lock: `--no-lock` runs (under another lock) never join. The environment is
+every variable Playwright inherits plus the app's `run.env` and mode env (also when the config computes them from the
+environment) and the Node binary, compared as an HMAC under a random key kept in the private lock dir (`env.key`): no
+value is written, and the digest (`envDigest`) means nothing on another machine. Without that key nothing joins. Lines
+written before 0.4.1 (0.3.x, and 0.4.0, which joined across environments) record no environment and are never taken.
 
 **Time.** `measure time [--last N]` prints, per run, the lock wait, the preview build, Playwright and the total, and
 `unknown` where a line does not say (written before 0.4.0, or a `--no-lock` run that may have waited under another
 lock). Below the table, `full runs: <n> · repeat after a pass: <n> (<time>) · same tree, other head: <n> (<time>)`
 counts full runs of code that had already passed in full (what `verify` before a run and joining save) and full runs
 of a commit whose tree an earlier full pass had tested under another commit (what reusing a result across commits
-would save; e2e-rail does not reuse it). Measure before you build anything that skips a run.
+would save; e2e-rail does not reuse it). Measure before you build anything that skips a run. Only ledger lines are
+measured: a preview build that failed and a run that joined another write none.
 
 **Workers.** e2e-rail never chooses a worker count. `pnpm exec e2e-rail measure workers 1,2,4 --test-list <file>`
 runs the same list once per count, each under the exclusive lock, and prints wall time, failures, retries and load.
@@ -441,7 +446,10 @@ These shapes never narrow wrongly, but they always run the app in full (measured
 The fingerprint's `config` field hashes `e2e-rail.config.mjs` and the app's Playwright config only, not the local
 modules `playwright.config.ts` imports. An edit to such a module still moves `head`, `diff` or `untracked` (so
 `verify` is stale, and `differing` names those, not `config`). A gitignored file it reads (an env file, for example) is not covered at all:
-run the suite again after changing one, since `verify` cannot see it.
+run the suite again after changing one, since `verify` cannot see it. Nor does the fingerprint cover the process
+environment: a pass under one target server, account or feature flag verifies the same code under another. Run the
+suite again after changing them. (Joining a waiting run does compare the environment, since it skips a run that was
+asked for.)
 
 On Playwright 1.56–1.57 a `--test-list` line has to spell a test's whole title path, and a title that holds `›` or a
 line break, starts or ends with whitespace, or is empty cannot be spelled. A spec with such a test never runs from a list: every selected run of

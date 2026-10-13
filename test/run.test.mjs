@@ -9,7 +9,7 @@ import { runTests, parsePlaywrightReport, parseTestList, testListShortfall, kind
 import { verify } from '../src/verify.mjs';
 import { computeFingerprint } from '../src/fingerprint.mjs';
 import { acquire, lockDir, lockStatus } from '../src/lock.mjs';
-import { appendRun, readLastGreen, readRuns } from '../src/ledger.mjs';
+import { appendRun, ledgerPath, readLastGreen, readRuns } from '../src/ledger.mjs';
 import { promote, statePath } from '../src/shadow.mjs';
 import { planShards } from '../src/shard.mjs';
 import { loadOrBuildSpecIndex } from '../src/spec-index.mjs';
@@ -27,7 +27,7 @@ async function until(fn, ms = 15_000) {
     await sleep(20);
   }
 }
-const ENTRY_FIELDS = ['app', 'mode', 'kind', 'fingerprint', 'selectionId', 'testListSha', 'shard', 'workers', 'project', 'blob', 'passthrough', 'filtered', 'shadowed', 'command', 'lock', 'build', 'rc', 'durationMs', 'wallMs', 'rootDir', 'specs', 'failures', 'flaky'];
+const ENTRY_FIELDS = ['app', 'mode', 'kind', 'fingerprint', 'selectionId', 'testListSha', 'shard', 'workers', 'project', 'blob', 'passthrough', 'envDigest', 'joinPolicy', 'filtered', 'shadowed', 'command', 'lock', 'build', 'rc', 'durationMs', 'wallMs', 'rootDir', 'specs', 'failures', 'flaky'];
 const stubCli = (root) => path.join(root, 'node_modules/@playwright/test/cli.js');
 
 // Temp repo + loaded config + an argv capture file + a private lock dir (E2E_RAIL_LOCK_DIR, so the suite never touches
@@ -979,6 +979,62 @@ test('W1 (0.4.0): a waiting request runs itself when the run that finished was a
     assert.notEqual(y.entry.fingerprint.id, x.entry.fingerprint.id);
     assert.equal(starts(), 6);
   });
+});
+
+test('W1 (0.4.1): a waiting request under other environment variables runs itself; the line keeps a keyed digest, never a value', async () => {
+  await withGatedStub(async ({ config, app, starts, open, queued }) => {
+    process.env.E2E_RAIL_PROBE = 'healthy-secret-value';
+    try {
+      const producer = runTests({ config, app, workers: 1 });
+      await until(() => starts() === 1);
+      process.env.E2E_RAIL_PROBE = 'broken'; // the follower's process would see another target
+      const follower = runTests({ config, app, workers: 1 });
+      await until(() => queued() === 1);
+      open(0);
+      const [p, f] = await Promise.all([producer, follower]);
+      assert.equal(f.reused, undefined, 'another environment is another request');
+      assert.notEqual(f.entry.id, p.entry.id);
+      assert.equal(starts(), 2);
+      assert.match(p.entry.envDigest, /^[0-9a-f]{64}$/);
+      assert.notEqual(f.entry.envDigest, p.entry.envDigest);
+      assert.equal(p.entry.joinPolicy, 1);
+      assert.ok(!readFileSync(ledgerPath(config), 'utf8').includes('healthy-secret-value'), 'no value reaches the ledger');
+    } finally { delete process.env.E2E_RAIL_PROBE; }
+  });
+});
+
+test('W1 (0.4.1): a line without an environment digest (0.4.0) is never joined, nor is any line without a usable machine key; the same line with this version\'s digest is', async () => {
+  const error = mock.method(console, 'error', () => {});
+  try {
+    await withRepo(async ({ config, app }) => {
+      const dir = lockDir(config);
+      const first = await runTests({ config, app, workers: 1 });
+      const { id: _id, ts: _ts, policy: _p, ...same } = first.entry;
+      const { envDigest: _e, joinPolicy: _j, ...older } = same;
+      for (const [line, joins] of [[older, false], [same, true]]) {
+        const holder = await acquire({ dir, cls: 'heavy', pollMs: 20, purpose: 'unit' });
+        const waiting = runTests({ config, app, workers: 1 });
+        await until(() => (lockStatus(dir).waiting?.length ?? 0) === 1);
+        const written = appendRun(config, line); // finishes while the request waits
+        holder.release();
+        const r = await waiting;
+        assert.equal(r.reused === true, joins, JSON.stringify({ joins }));
+        assert.equal(r.entry.id === written.id, joins);
+      }
+      // without a usable machine key no digest can be compared: identical lines (both null) still never join
+      rmSync(path.join(dir, 'env.key'));
+      writeFileSync(path.join(dir, 'env.key'), 'short', { mode: 0o600 });
+      const keyless = await runTests({ config, app, workers: 1 });
+      assert.equal(keyless.entry.envDigest, null);
+      const { id: _k, ts: _kt, policy: _kp, ...line } = keyless.entry;
+      const holder = await acquire({ dir, cls: 'heavy', pollMs: 20, purpose: 'unit' });
+      const waiting = runTests({ config, app, workers: 1 });
+      await until(() => (lockStatus(dir).waiting?.length ?? 0) === 1);
+      appendRun(config, line);
+      holder.release();
+      assert.equal((await waiting).reused, undefined);
+    });
+  } finally { error.mock.restore(); }
 });
 
 test('W1 (0.4.0): a line already in the ledger when the request was made is never taken, whatever its timestamp says', async () => {
