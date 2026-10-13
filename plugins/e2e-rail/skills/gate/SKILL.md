@@ -53,6 +53,7 @@ The exit code is Playwright's. The summary line is the record:
   ran or was recorded.
 - `e2e-rail: <build command> failed (rc <n>); Playwright was not started.` — nothing ran or was recorded.
 - `last-green not moved: the working tree had uncommitted changes` — the pass verifies this exact code, not HEAD.
+- `reused: run <id> — an identical run (same code, mode and options) finished while this one waited for the lock; nothing ran again` — nothing ran: the summary under it is that run's, and its rc is this one's. Report that run-id; verify as below.
 
 Run-shaping options never go after `--`. Only `--shard`, `--test-list`, `--last-failed` and `--project` have e2e-rail
 flags (use those); `--reporter`, `--config`, `--list`, `--only-changed`, `--output`, `--test-list-invert`,
@@ -60,8 +61,7 @@ flags (use those); `--reporter`, `--config`, `--list`, `--only-changed`, `--outp
 `--` before anything runs, except `--project`, which there makes the run `filtered`. After `--` only `--headed`,
 `--quiet`, `--trace <mode>`, `--repeat-each <n>`, `--fail-on-flaky-tests`, `--forbid-only`, `--fully-parallel`,
 `--max-failures <n>`, `-x` and `-j`/`--workers <n>` keep a run a verification; anything else makes it `filtered`.
-Full and shard runs, and runs without a worker count, take the machine-wide exclusive lock;
-`waiting for the heavy lock (…)` on stderr means another run holds it. Wait; do not kill and retry.
+Full and shard runs, and runs without a worker count, take the machine-wide exclusive lock; `waiting for the heavy lock (…)` on stderr means another run holds it. Wait; do not kill and retry.
 
 ## 2. Verify (always, in the run's mode)
 ```sh

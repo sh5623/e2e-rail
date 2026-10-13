@@ -10,6 +10,17 @@ From the repository root; `--app <app>` when the config has several apps. The CL
 repositories.
 e2e-rail never picks a worker count or a shard count by itself: it measures, a human decides.
 
+## 0. Where the gate time goes
+```sh
+e2e-rail measure --app <app> time --last 20
+```
+A row per ledger line: `run  kind  mode  rc  wait  build  playwright  total`; `unknown` where the line does not say
+(written before 0.4.0, or a `--no-lock` run that may have waited under another lock). Below it,
+`full runs: <n> · repeat after a pass: <n> (<time>) · same tree, other head: <n> (<time>)`: full runs of code that had
+already passed in full, and of a commit whose tree a full pass had already tested under another commit. Large `wait`
+or `build` → the time is outside the suite. Both counts near 0 → it is in the suite itself (steps 1–4), not in
+repeats. Report only measured savings: e2e-rail reuses no result across commits.
+
 ## 1. Slowest specs and retries
 ```sh
 e2e-rail measure --app <app> slowest -n 20
@@ -67,6 +78,7 @@ passed on this exact code. CI templates for both forms: `node_modules/e2e-rail/t
 ## 5. Report
 ```
 measure <app>
+time:     last full run wait <t> · build <t> · playwright <t> · total <t> | unknown — repeats <n> · same tree <n>
 slowest:  <top 5: spec [project] duration>
 retries:  <specs with a rate above 0%> | none
 time:     <spec> — <page entry | response waits | repeated setup> <seconds> (trace run-id <id>)

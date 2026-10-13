@@ -12,7 +12,7 @@ export const USAGES = {
     + ' [--workers N] [--project <name>] [--shard i/n] [--blob] [--no-lock] [--no-build] [-- <playwright args>]',
   verify: '[--app <name>] [--mode dev|preview] [--require full|selected] [--max-age <min>] [--json]',
   shadow: 'record --run <run-id> [--app <name>] | status | promote | demote',
-  measure: '[--app <name>] slowest [-n N] | retries [--last N] | workers <1,2,4> --test-list <file> [--mode dev|preview]',
+  measure: '[--app <name>] slowest [-n N] | retries [--last N] | time [--last N] | workers <1,2,4> --test-list <file> [--mode dev|preview]',
   shard: '[--app <name>] plan --count N [--from-run <run-id>] [--include <spec>]… [--mode dev|preview] | merge --dir <blob dir> [--mode dev|preview]',
   lock: 'status | reap | run <heavy|light> -- <command…>',
   hook: 'turn-start | stop | post-bash   (runtime hooks: the event as JSON on stdin; always exit 0)',

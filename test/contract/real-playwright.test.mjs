@@ -5,7 +5,7 @@
 // (npm run test:contract). The fixture's specs use no browser fixtures, so no browser download is needed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -218,5 +218,62 @@ test('real playwright (J1, audit scenario moving-base-ref): after `select --base
     assert.deepEqual(fresh.apps.web.specs.map((x) => x.file), ['e2e/a.spec.ts', 'e2e/b.spec.ts']);
     assert.match(r.stdout, /^ {2}failed: e2e\/b\.spec\.ts › b regression \[chromium\]/m);
     assert.notEqual(cli(root, ['verify', '--require', 'selected']).code, 0);
+  });
+});
+
+test('real playwright (W1, 0.4.0): a full run that waited for the lock behind an identical full run takes its result; Playwright ran once', { skip }, async () => {
+  await withContractApp(async ({ root }) => {
+    const markers = mkdtempSync(path.join(tmpdir(), 'e2e-rail-contract-markers-'));
+    const starts = path.join(markers, 'starts');
+    const gate = path.join(markers, 'open');
+    // a test that holds the run until the gate file exists, and counts how often Playwright started it; committed, so
+    // the tree is clean and both runs fingerprint the same code
+    writeFileSync(path.join(root, 'e2e/a.spec.ts'), `import fs from 'node:fs';
+import { test } from '@playwright/test';
+test('a waits for the gate', async () => {
+  fs.appendFileSync(process.env.CONTRACT_STARTS, 'x');
+  while (!fs.existsSync(process.env.CONTRACT_GATE)) await new Promise((r) => setTimeout(r, 20));
+});
+`);
+    execCapture('git', ['commit', '-qam', 'a waits'], { cwd: root });
+    const { CI: _ci, ...base } = process.env;
+    const children = [];
+    const start = () => {
+      const child = spawn(process.execPath, [bin, 'run', '--full', '--workers', '1'], {
+        cwd: root, env: { ...base, CONTRACT_STARTS: starts, CONTRACT_GATE: gate }, stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      children.push(child);
+      const r = { out: '', err: '' };
+      child.stdout.on('data', (d) => { r.out += d; });
+      child.stderr.on('data', (d) => { r.err += d; });
+      r.closed = new Promise((resolve) => child.on('close', (code) => resolve(code)));
+      return r;
+    };
+    const waitFor = async (fn, what) => {
+      for (const t0 = Date.now(); !fn();) {
+        if (Date.now() - t0 > 30_000) throw new Error(`timed out: ${what}`);
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    };
+    try {
+      const first = start();
+      await waitFor(() => existsSync(starts), 'Playwright starts the first run');
+      const second = start();
+      await waitFor(() => /waiting for the heavy lock/.test(second.err), 'the second run waits for the lock');
+      writeFileSync(gate, '');
+      assert.equal(await first.closed, 0, first.out + first.err);
+      assert.equal(await second.closed, 0, second.out + second.err);
+      const runs = readRuns(await loadConfig(root));
+      assert.equal(runs.length, 1, 'one ledger line');
+      assert.equal(readFileSync(starts, 'utf8'), 'x', 'Playwright ran the suite once');
+      assert.match(second.out, new RegExp(`^reused: run ${runs[0].id} — `, 'm'));
+      const v = cli(root, ['verify', '--require', 'full']);
+      assert.equal(v.code, 0, v.out);
+      assert.match(v.stdout, new RegExp(`verified: full@${runs[0].id}`));
+    } finally {
+      writeFileSync(gate, '');
+      for (const c of children) c.kill('SIGKILL');
+      rmSync(markers, { recursive: true, force: true });
+    }
   });
 });

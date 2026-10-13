@@ -3,7 +3,7 @@ import { constants } from 'node:os';
 import path from 'node:path';
 import { appDir, ledgerDir, runEnv } from './config.mjs';
 import { computeFingerprint, distStale } from './fingerprint.mjs';
-import { appendRun, passGreen } from './ledger.mjs';
+import { appendRun, currentPolicy, passGreen, readRuns } from './ledger.mjs';
 import { acquire, describeHolders, lockDir } from './lock.mjs';
 import { readState } from './shadow.mjs';
 import { inCI } from './util/ci.mjs';
@@ -289,6 +289,26 @@ function shardRecord({ app, dirAbs, shard, testList }) {
 
 const refuse = (message) => { console.error(message); return { rc: 1, entry: null }; };
 
+// W1 (0.4.0): what makes two requests the same run: app, mode, kind, the code (fingerprint), the test list as read and
+// the selection it came from, the shard, the project, workers, the reporter (blob) and the passthrough as given. A line
+// written before 0.4.0 has no `passthrough` and is never the same request.
+const requestKey = (r) => JSON.stringify([
+  r.app, r.mode, r.kind, r.fingerprint?.id, r.selectionId ?? null, r.testListSha ?? null, r.shard ?? null,
+  r.project ?? null, r.workers ?? null, r.blob, r.passthrough,
+]);
+const interrupted = (rc) => typeof rc !== 'number' || rc >= 128; // no result, or ended by a signal
+
+// W1 (0.4.0): the run an identical request finished while this one waited for the lock (`since`: when this one asked
+// for it), or null. Only a line appended after the request counts: that run was running, or queued ahead, while this
+// one waited. A run that finished before the request is a result the caller chose to run again, and an interrupted run
+// is no result. Lines of an older verification policy never count. Nothing is copied: the caller gets that line.
+function finishedWhileWaiting(config, request, since) {
+  const key = requestKey(request);
+  const t = Date.parse(since);
+  return readRuns(config, { app: request.app }).reverse().find((r) => Array.isArray(r.passthrough) && typeof r.blob === 'boolean'
+    && currentPolicy(r) && !r.filtered && Date.parse(r.ts) >= t && !interrupted(r.rc) && requestKey(r) === key) ?? null;
+}
+
 // Spec §8: a selected run made while the selector is still in shadow mode is no stand-in for a full run, and its ledger
 // line says so. A state that cannot be read counts as shadow, the least trusting reading.
 function shadowTrust(config) {
@@ -307,10 +327,17 @@ const staleDist = (preview) => `e2e-rail: dist (${preview.dist}) is missing or o
 // code, runTests throws (lock released, no ledger line, Playwright not started) instead of crediting the selection.
 // `lockClass` ('heavy' | 'light') overrides the class derived from what runs (R50: a worker measurement needs the
 // machine to itself); left undefined, full, shard and worker-less runs are heavy and the rest light.
+// W1 (0.4.0): a run that waited for the lock and finds that an identical request finished meanwhile (see
+// finishedWhileWaiting) does not run: it returns `{ rc, entry, reused: true }` with that run's rc and ledger line, and
+// writes nothing. A rerun, a measurement (an `--e2e-rail-purpose=` tag) and a filtered run always run themselves. The
+// lock is held until the ledger line is written, so a request waiting for it finds the line. The line also records
+// the passthrough as given, `blob`, the preview build this run made (`build: { ms, rc }`, null when none) and `wallMs`,
+// from the call to the line (lock wait, build and Playwright included).
 export async function runTests({
   config, app, mode = 'dev', testList = null, lastFailed = false, workers, project, shard = null,
   blob = false, lock = true, lockClass, build = true, selectionId = null, expectCodeId = null, passthrough = [],
 }) {
+  const called = Date.now();
   if (!MODES.includes(mode)) throw new Error(`e2e-rail: unknown mode "${mode}" (expected ${MODES.join(' or ')})`);
   if (lockClass !== undefined && lockClass !== 'heavy' && lockClass !== 'light') {
     throw new Error(`e2e-rail: lockClass must be heavy or light (or left out), got ${JSON.stringify(lockClass)}`);
@@ -353,6 +380,7 @@ export async function runTests({
   let held = null;
   let handed = testList; // what Playwright gets in place of the test list (D)
   let spelled = null; // the spelled-out copy runTests wrote, deleted after the run (H4)
+  let built = null; // the preview build this run made (`build` in the ledger line)
   try {
     if (lock) {
       held = await acquire({
@@ -362,8 +390,10 @@ export async function runTests({
     }
     if (preview && distStale({ config, app })) {
       if (!build) return refuse(staleDist(preview)); // the sources changed while this run waited for the lock
+      const tb = Date.now();
       const b = await execInherit(preview.build, [], { cwd: config.root, shell: true, onSpawn: track });
       child = null;
+      built = { ms: Date.now() - tb, rc: b.status };
       if (b.status !== 0) {
         console.error(`e2e-rail: \`${preview.build}\` failed (rc ${b.status}); Playwright was not started.`);
         return { rc: b.status, entry: null };
@@ -377,14 +407,21 @@ export async function runTests({
       // C: the code moved while this run waited for the lock (or built); its selection no longer describes it
       throw new Error(`e2e-rail: the code changed while waiting for the lock (selection ${selectionId} no longer matches); run it again`);
     }
-    const shadowed = kind === 'selected' && shadowTrust(config);
-    mkdirSync(path.dirname(reportAbs), { recursive: true });
-    // D: what Playwright is handed in place of the test list (the ledger's `command` keeps the list as given)
     // G2: the list is read once, here under the lock: its sha256 goes into the ledger (verify credits a selection's run
     // only while the selection still writes that very list) and R56 checks the report against this text.
     const listAbs = testList ? path.resolve(dirAbs, testList) : null;
     const listText = listAbs ? readListText(listAbs) : null;
     const testListSha = listText === null ? null : sha256(listText);
+    const request = {
+      app: app.name, mode, kind, fingerprint, selectionId, testListSha, shard: shardEntry, workers: workers ?? null,
+      project: project ?? null, blob, passthrough: [...passthrough],
+    };
+    const purpose = passthrough.some((a) => a.startsWith('--e2e-rail-purpose='));
+    const joined = held && kind !== 'rerun' && !filtered && !purpose ? finishedWhileWaiting(config, request, held.requestedAt) : null;
+    if (joined) return { rc: joined.rc, entry: joined, reused: true };
+    const shadowed = kind === 'selected' && shadowTrust(config);
+    mkdirSync(path.dirname(reportAbs), { recursive: true });
+    // D: what Playwright is handed in place of the test list (the ledger's `command` keeps the list as given)
     if (testList && !testListTakesPrefixes(fingerprint.playwright)) {
       const outAbs = path.join(ledgerDir(config), 'reports', `${id}.test-list.txt`);
       handed = wholeTitleList({ dirAbs, app, mode, listAbs, listText, outAbs });
@@ -395,10 +432,6 @@ export async function runTests({
     const { status } = await execInherit(process.execPath, [cli, ...spawnArgs, ...forwarded], { cwd: dirAbs, env, onSpawn: track });
     child = null;
     const durationMs = Date.now() - t0;
-    const lockInfo = held && {
-      class: held.class, requestedAt: held.requestedAt, acquiredAt: held.acquiredAt, releasedAt: held.release(),
-      waitMs: held.waitMs, loadAtStart: held.loadAtStart,
-    };
     const report = readReport(reportAbs);
     const parsed = parsePlaywrightReport(report ?? { suites: [] }, dirAbs);
     // R56: a test list that matched nothing (or lost some of its lines) fails the run, whatever Playwright exited with.
@@ -412,9 +445,14 @@ export async function runTests({
         : `e2e-rail: ${f.error}`);
     }
     const rc = shortfall.length && status === 0 ? 1 : status;
+    // W1: `releasedAt` is when the line is written; the lock is given back right after (finally), not before, so a
+    // request waiting for it finds this run's result.
+    const lockInfo = held && {
+      class: held.class, requestedAt: held.requestedAt, acquiredAt: held.acquiredAt, releasedAt: new Date().toISOString(),
+      waitMs: held.waitMs, loadAtStart: held.loadAtStart,
+    };
     const entry = appendRun(config, {
-      id, app: app.name, mode, kind, fingerprint, selectionId, testListSha, shard: shardEntry, workers: workers ?? null, project: project ?? null,
-      filtered, shadowed, command, lock: lockInfo, rc, durationMs,
+      id, ...request, filtered, shadowed, command, lock: lockInfo, build: built, rc, durationMs, wallMs: Date.now() - called,
       rootDir: report?.config?.rootDir ? toAppRel(dirAbs, report.config.rootDir) : null,
       ...parsed, failures: [...parsed.failures, ...shortfall],
     });

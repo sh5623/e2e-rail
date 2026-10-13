@@ -19,6 +19,12 @@ export function gitResolveCommit(root, ref) {
   return r.status === 0 ? r.stdout.trim() || null : null;
 }
 
+// The tree of the commit `rev`, or null when this clone does not have it.
+export function gitTreeOf(root, rev) {
+  const r = git(root, ['rev-parse', '--verify', '--quiet', `${rev}^{tree}`]);
+  return r.status === 0 ? r.stdout.trim() || null : null;
+}
+
 // Where `root` sits in its repository: { top: absolute toplevel, prefix: '' | 'apps/web/' }. null outside a work tree.
 export function gitLocation(root) {
   const r = git(root, ['rev-parse', '--show-toplevel', '--show-prefix']);

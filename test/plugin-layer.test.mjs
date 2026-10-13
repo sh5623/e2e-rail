@@ -278,7 +278,7 @@ test('impact analyst: READ-ONLY agent whose body is the Codex reference, additio
 // ── docs and templates name only what the CLI accepts ──────────────────────────────────────────────────────────────
 
 const NAMES = Object.keys(USAGES);
-const SUBS = { shadow: ['record', 'status', 'promote', 'demote'], measure: ['slowest', 'retries', 'workers'], shard: ['plan', 'merge'], lock: ['status', 'reap', 'run'] };
+const SUBS = { shadow: ['record', 'status', 'promote', 'demote'], measure: ['slowest', 'retries', 'time', 'workers'], shard: ['plan', 'merge'], lock: ['status', 'reap', 'run'] };
 const flagsIn = (s) => new Set(s.match(/(?<![\w-])(?:--[a-z][a-z0-9-]*|-[a-z])(?![\w-])/gi) ?? []);
 const wordRe = (w) => new RegExp(`(^|[\\s(\\[])${w}(?=[\\s)\\]]|$)`);
 
@@ -435,12 +435,12 @@ test('README.ko.md follows README.md section by section; Limits names the known 
 
 test('F: the release names one version: package, lockfile root, both plugins, the newest CHANGELOG entry, every install ref and the status lines', () => {
   const v = JSON.parse(read('package.json')).version;
-  assert.equal(v, '0.3.3');
+  assert.equal(v, '0.4.0');
   const lock = JSON.parse(read('package-lock.json'));
   assert.equal(lock.version, v);
   assert.equal(lock.packages[''].version, v);
   assert.equal(lock.packages[''].peerDependencies['@playwright/test'], JSON.parse(read('package.json')).peerDependencies['@playwright/test']);
-  assert.match(read('CHANGELOG.md'), new RegExp(`^# Changelog\\n\\n## ${v.replace(/\./g, '\\.')} — 2026-10-12\\n`));
+  assert.match(read('CHANGELOG.md'), new RegExp(`^# Changelog\\n\\n## ${v.replace(/\./g, '\\.')} — 2026-10-14\\n`));
   for (const rel of ['README.md', 'README.ko.md', 'skills/init/SKILL.md']) {
     const refs = read(rel).match(/e2e-rail#v[^\s`]+/g) ?? [];
     assert.ok(refs.length, `${rel}: an install ref`);

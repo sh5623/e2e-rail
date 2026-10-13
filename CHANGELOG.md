@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.4.0 — 2026-10-14
+
+### Features
+
+- **A run that waited for the lock behind an identical run takes its result.** Once it holds the lock, a run reads the
+  ledger: when a request with the same app, mode, kind, code (fingerprint), test list, selection, shard, project,
+  workers, `--blob` and passthrough finished while it waited, it runs nothing, prints
+  `reused: run <id> — an identical run (same code, mode and options) finished while this one waited for the lock; nothing ran again`
+  above that run's summary and exits with its rc (a failure is passed on as it is). Nothing is written; `verify` counts
+  the line that is there. An interrupted run (rc 128 or more), a run that finished before the request, a rerun, a
+  worker measurement and a filtered run are never taken. It needs the e2e-rail lock (`--no-lock` never joins) and reads
+  this work tree's ledger only.
+- **`measure time [--last N]`** prints, per run, the lock wait, the preview build, Playwright and the total time
+  (`unknown` where a line does not say), then `full runs: <n> · repeat after a pass: <n> (<time>) · same tree, other
+  head: <n> (<time>)`: full runs of code that had already passed in full, and of a commit whose tree an earlier full
+  pass had tested under another commit. It measures what a reuse could save before anything skips a run.
+- **The ledger line records the request and its time**: `blob`, `passthrough` (as given), `build` (`{ ms, rc }` of the
+  preview build the run made, null when none) and `wallMs` (from the call to the line).
+
+### Changes
+
+- **A run holds the lock until its ledger line is written.** It gave the lock back before reading the report and
+  writing the line, so the next run could start before the result existed. `lock.releasedAt` is now the time the line
+  is written; the lock is released right after.
+
+### Upgrading
+
+- Verification policy stays 2: nothing that verified stops verifying, and no line is invalidated. Lines written before
+  0.4.0 have no passthrough, so a 0.4.0 run never joins one, and `measure time` shows their build and total as
+  `unknown`. A 0.3.x run waiting behind a 0.4.0 run still runs again.
+- Decisions on the 2026-10-14 integration-gate handoff (what was built, held and why):
+  `docs/superpowers/specs/2026-10-14-integration-gate-reuse-review.md`.
+
 ## 0.3.3 — 2026-10-12
 
 ### Security

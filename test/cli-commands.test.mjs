@@ -10,7 +10,7 @@ import { acquire } from '../src/lock.mjs';
 import { codeIdOf, testListLines } from '../src/select.mjs';
 import { sha256 } from '../src/util/hash.mjs';
 import { execCapture } from '../src/util/exec.mjs';
-import { makeTempRepo } from './helpers.mjs';
+import { GATED_STUB, makeTempRepo } from './helpers.mjs';
 
 const bin = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'e2e-rail.mjs');
 
@@ -1027,6 +1027,71 @@ test('measure slowest / retries / workers print tables from the ledger', () => w
   assert.equal(missing.code, 1, missing.out);
   assert.match(missing.stderr, /^e2e-rail: test list not found: /);
 }));
+
+test('measure time (0.4.0) prints where each run spent its time and the full runs a reuse could have saved', () => withRepo(({ run }) => {
+  const none = run(['measure', 'time']);
+  assert.equal(none.code, 0, none.out);
+  assert.match(none.stdout, /no run of app web in the ledger yet/);
+  assert.equal(run(['run', '--full', '--no-lock', '--workers', '1']).code, 0);
+  assert.equal(run(['run', '--full', '--workers', '1']).code, 0);
+  const t = run(['measure', 'time', '--last', '5']);
+  assert.equal(t.code, 0, t.out);
+  assert.match(t.stdout, /^run\s+kind\s+mode\s+rc\s+wait\s+build\s+playwright\s+total$/m);
+  assert.match(t.stdout, /^run-\S+\s+full\s+dev\s+0\s+unknown\s+none\s+\S+\s+\S+$/m, 'no e2e-rail lock: the wait is unknown');
+  assert.match(t.stdout, /^run-\S+\s+full\s+dev\s+0\s+\d\S*\s+none\s+\S+\s+\S+$/m);
+  assert.match(t.stdout, /^full runs: 2 · repeat after a pass: 1 \(\S+\) · same tree, other head: 0 \(0ms\)$/m);
+  assert.doesNotMatch(t.stdout, /not in this clone/);
+  const stray = run(['measure', 'time', '-n', '3']);
+  assert.equal(stray.code, 2);
+  assert.match(stray.out, /-n does not go with measure time/);
+}));
+
+test('W1 (0.4.0): a run that waited behind an identical run prints reused and the run it took, and exits with its rc', async () => {
+  const { root, cleanup } = makeTempRepo('sample-app');
+  const lockRoot = mkdtempSync(path.join(tmpdir(), 'e2e-rail-cli-lock-'));
+  const markers = mkdtempSync(path.join(tmpdir(), 'e2e-rail-cli-markers-'));
+  writeFileSync(path.join(root, 'node_modules/@playwright/test/cli.js'), GATED_STUB);
+  const { CI: _ci, ...base } = process.env;
+  const children = [];
+  const start = () => {
+    const child = spawn(process.execPath, [bin, 'run', '--full', '--workers', '1'], {
+      cwd: root, env: { ...base, E2E_RAIL_LOCK_DIR: lockRoot, STUB_MARKERS: markers }, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    children.push(child);
+    const r = { out: '', err: '' };
+    child.stdout.on('data', (d) => { r.out += d; });
+    child.stderr.on('data', (d) => { r.err += d; });
+    r.closed = new Promise((resolve) => child.on('close', (code) => resolve(code)));
+    return r;
+  };
+  const waitFor = async (fn, what) => {
+    for (const t0 = Date.now(); !fn();) {
+      if (Date.now() - t0 > 15_000) throw new Error(`timed out: ${what}`);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  };
+  try {
+    const first = start();
+    await waitFor(() => existsSync(path.join(markers, 'runs')), 'the first run starts Playwright');
+    const second = start();
+    await waitFor(() => /waiting for the heavy lock/.test(second.err), 'the second run waits');
+    writeFileSync(path.join(markers, 'open'), '0');
+    assert.equal(await first.closed, 0, first.err);
+    assert.equal(await second.closed, 0, second.err);
+    const lines = ledgerLines(root);
+    assert.equal(lines.length, 1);
+    assert.equal(readFileSync(path.join(markers, 'runs'), 'utf8'), 'x', 'Playwright ran once');
+    assert.match(second.out, new RegExp(`^reused: run ${lines[0].id} — `, 'm'));
+    assert.match(second.out, new RegExp(`^run-id ${lines[0].id} · kind full · rc 0 `, 'm'));
+    assert.doesNotMatch(first.out, /reused:/);
+  } finally {
+    writeFileSync(path.join(markers, 'open'), '0');
+    for (const c of children) c.kill('SIGKILL');
+    rmSync(markers, { recursive: true, force: true });
+    rmSync(lockRoot, { recursive: true, force: true });
+    cleanup();
+  }
+});
 
 test('D: an app on @playwright/test older than 1.56 is refused by map, select, run and shard plan, with the version found', () => withRepo(({ root, run, at }) => {
   const pkg = at('node_modules/@playwright/test/package.json');

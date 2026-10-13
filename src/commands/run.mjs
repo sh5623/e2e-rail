@@ -154,8 +154,10 @@ export default async function run(argv) {
     removeOwn();
     process.removeListener('exit', removeOwn);
   }
-  const { rc, entry, lastGreen } = result;
+  const { rc, entry, lastGreen, reused } = result;
   if (!entry) return rc; // refused or the preview build failed: runTests said why, no ledger line
+  // W1: nothing ran; the summary below is the identical run this one waited behind, and its rc is this run's
+  if (reused) console.log(`reused: run ${entry.id} — an identical run (same code, mode and options) finished while this one waited for the lock; nothing ran again`);
   // A narrowed or relaxed run (--project, -- --grep/-G, a file filter, --ignore-snapshots, --retries, an option
   // e2e-rail does not know) is never a verification, whatever its kind: both lines say so.
   const kind = `${entry.kind}${entry.filtered ? ' (filtered)' : ''}`;
