@@ -277,3 +277,58 @@ test('a waits for the gate', async () => {
     }
   });
 });
+
+test('real playwright (W1, 0.4.1): a run under another environment does not take the result of the run it waited behind; it runs and fails', { skip }, async () => {
+  await withContractApp(async ({ root }) => {
+    const markers = mkdtempSync(path.join(tmpdir(), 'e2e-rail-contract-markers-'));
+    const gate = path.join(markers, 'open');
+    const starts = path.join(markers, 'starts');
+    // passes only against the healthy target; holds until the gate file exists
+    writeFileSync(path.join(root, 'e2e/a.spec.ts'), `import fs from 'node:fs';
+import { test, expect } from '@playwright/test';
+test('a needs the healthy target', async () => {
+  fs.appendFileSync(process.env.CONTRACT_STARTS, process.env.PROBE_TARGET + '\\n');
+  while (!fs.existsSync(process.env.CONTRACT_GATE)) await new Promise((r) => setTimeout(r, 20));
+  expect(process.env.PROBE_TARGET).toBe('healthy');
+});
+`);
+    execCapture('git', ['commit', '-qam', 'a needs the healthy target'], { cwd: root });
+    const { CI: _ci, ...base } = process.env;
+    const children = [];
+    const start = (target) => {
+      const child = spawn(process.execPath, [bin, 'run', '--full', '--workers', '1'], {
+        cwd: root, env: { ...base, CONTRACT_STARTS: starts, CONTRACT_GATE: gate, PROBE_TARGET: target }, stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      children.push(child);
+      const r = { out: '', err: '' };
+      child.stdout.on('data', (d) => { r.out += d; });
+      child.stderr.on('data', (d) => { r.err += d; });
+      r.closed = new Promise((resolve) => child.on('close', (code) => resolve(code)));
+      return r;
+    };
+    const waitFor = async (fn, what) => {
+      for (const t0 = Date.now(); !fn();) {
+        if (Date.now() - t0 > 30_000) throw new Error(`timed out: ${what}`);
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    };
+    try {
+      const healthy = start('healthy');
+      await waitFor(() => existsSync(starts), 'Playwright starts the healthy run');
+      const broken = start('broken');
+      await waitFor(() => /waiting for the heavy lock/.test(broken.err), 'the broken run waits for the lock');
+      writeFileSync(gate, '');
+      assert.equal(await healthy.closed, 0, healthy.out + healthy.err);
+      assert.equal(await broken.closed, 1, broken.out + broken.err);
+      assert.doesNotMatch(broken.out, /reused:/);
+      assert.deepEqual(readFileSync(starts, 'utf8').trim().split('\n'), ['healthy', 'broken'], 'Playwright ran each target');
+      const runs = readRuns(await loadConfig(root));
+      assert.deepEqual(runs.map((r) => r.rc), [0, 1]);
+      assert.ok(runs.every((r) => r.fingerprint.clean === true), 'one clean tree: only the environment differs');
+    } finally {
+      writeFileSync(gate, '');
+      for (const c of children) c.kill('SIGKILL');
+      rmSync(markers, { recursive: true, force: true });
+    }
+  });
+});

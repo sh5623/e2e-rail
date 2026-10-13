@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import {
-  closeSync, constants as fsc, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmdirSync,
+  closeSync, constants as fsc, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmdirSync,
   rmSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { loadavg, tmpdir, uptime } from 'node:os';
@@ -69,6 +69,27 @@ function assertPrivateDir(dir) {
       throw new Error(`e2e-rail: lock dir ${level} ${why}; another user could block or tamper with E2E runs. Remove it, or set E2E_RAIL_LOCK_DIR to a private directory.`);
     }
   }
+}
+
+// W1 (0.4.1): this machine's join key, 32 random bytes in <dir>/env.key (0600, this user's), made once and read
+// without following a link. The lock dir is private to the user (assertPrivateDir), so the key never leaves this
+// account, and a digest made with it says nothing anywhere else. null when it cannot be had (a link or another file in
+// its place, a lock dir that is not private): nothing joins then. reap and lockStatus never look at it.
+const KEY = 'env.key';
+export function machineKey(dir) {
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    assertPrivateDir(dir);
+    const abs = path.join(dir, KEY);
+    try { writeFileSync(abs, randomBytes(32), { flag: 'wx', mode: 0o600 }); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    const fd = openSync(abs, fsc.O_RDONLY | (fsc.O_NOFOLLOW ?? 0));
+    try {
+      const st = fstatSync(fd);
+      const uid = process.getuid?.();
+      if (!st.isFile() || st.size !== 32 || (uid !== undefined && st.uid !== uid) || (st.mode & 0o077)) return null;
+      return readFileSync(fd);
+    } finally { closeSync(fd); }
+  } catch { return null; }
 }
 
 // O_NOFOLLOW: an owner.json that is a symlink reads as no owner, it is never followed.

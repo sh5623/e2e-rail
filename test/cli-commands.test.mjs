@@ -1046,16 +1046,19 @@ test('measure time (0.4.0) prints where each run spent its time and the full run
   assert.match(stray.out, /-n does not go with measure time/);
 }));
 
-test('W1 (0.4.0): a run that waited behind an identical run prints reused and the run it took, and exits with its rc', async () => {
+// W1: two (or more) `run --full --workers 1` CLI processes over the gated stub (helpers GATED_STUB), each with its own
+// extra environment; `config` rewrites the fixture's e2e-rail.config.mjs first. Cleans up after.
+async function withGatedCli(fn, { config } = {}) {
   const { root, cleanup } = makeTempRepo('sample-app');
   const lockRoot = mkdtempSync(path.join(tmpdir(), 'e2e-rail-cli-lock-'));
   const markers = mkdtempSync(path.join(tmpdir(), 'e2e-rail-cli-markers-'));
   writeFileSync(path.join(root, 'node_modules/@playwright/test/cli.js'), GATED_STUB);
+  if (config) writeFileSync(path.join(root, 'e2e-rail.config.mjs'), config(readFileSync(path.join(root, 'e2e-rail.config.mjs'), 'utf8')));
   const { CI: _ci, ...base } = process.env;
   const children = [];
-  const start = () => {
+  const start = (env = {}) => {
     const child = spawn(process.execPath, [bin, 'run', '--full', '--workers', '1'], {
-      cwd: root, env: { ...base, E2E_RAIL_LOCK_DIR: lockRoot, STUB_MARKERS: markers }, stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: root, env: { ...base, E2E_RAIL_LOCK_DIR: lockRoot, STUB_MARKERS: markers, ...env }, stdio: ['ignore', 'pipe', 'pipe'],
     });
     children.push(child);
     const r = { out: '', err: '' };
@@ -1064,26 +1067,19 @@ test('W1 (0.4.0): a run that waited behind an identical run prints reused and th
     r.closed = new Promise((resolve) => child.on('close', (code) => resolve(code)));
     return r;
   };
-  const waitFor = async (fn, what) => {
-    for (const t0 = Date.now(); !fn();) {
+  const waitFor = async (cond, what) => {
+    for (const t0 = Date.now(); !cond();) {
       if (Date.now() - t0 > 15_000) throw new Error(`timed out: ${what}`);
       await new Promise((r) => setTimeout(r, 20));
     }
   };
+  const starts = () => (existsSync(path.join(markers, 'runs')) ? readFileSync(path.join(markers, 'runs'), 'utf8').length : 0);
   try {
-    const first = start();
-    await waitFor(() => existsSync(path.join(markers, 'runs')), 'the first run starts Playwright');
-    const second = start();
-    await waitFor(() => /waiting for the heavy lock/.test(second.err), 'the second run waits');
-    writeFileSync(path.join(markers, 'open'), '0');
-    assert.equal(await first.closed, 0, first.err);
-    assert.equal(await second.closed, 0, second.err);
-    const lines = ledgerLines(root);
-    assert.equal(lines.length, 1);
-    assert.equal(readFileSync(path.join(markers, 'runs'), 'utf8'), 'x', 'Playwright ran once');
-    assert.match(second.out, new RegExp(`^reused: run ${lines[0].id} — `, 'm'));
-    assert.match(second.out, new RegExp(`^run-id ${lines[0].id} · kind full · rc 0 `, 'm'));
-    assert.doesNotMatch(first.out, /reused:/);
+    await fn({
+      root, start, waitFor, starts,
+      open: () => writeFileSync(path.join(markers, 'open'), '0'),
+      shut: () => rmSync(path.join(markers, 'open'), { force: true }),
+    });
   } finally {
     writeFileSync(path.join(markers, 'open'), '0');
     for (const c of children) c.kill('SIGKILL');
@@ -1091,7 +1087,49 @@ test('W1 (0.4.0): a run that waited behind an identical run prints reused and th
     rmSync(lockRoot, { recursive: true, force: true });
     cleanup();
   }
-});
+}
+
+test('W1 (0.4.0): a run that waited behind an identical run prints reused and the run it took, and exits with its rc', () => withGatedCli(async ({ root, start, waitFor, starts, open }) => {
+  const first = start();
+  await waitFor(() => starts() === 1, 'the first run starts Playwright');
+  const second = start();
+  await waitFor(() => /waiting for the heavy lock/.test(second.err), 'the second run waits');
+  open();
+  assert.equal(await first.closed, 0, first.err);
+  assert.equal(await second.closed, 0, second.err);
+  const lines = ledgerLines(root);
+  assert.equal(lines.length, 1);
+  assert.equal(starts(), 1, 'Playwright ran once');
+  assert.match(second.out, new RegExp(`^reused: run ${lines[0].id} — `, 'm'));
+  assert.match(second.out, new RegExp(`^run-id ${lines[0].id} · kind full · rc 0 `, 'm'));
+  assert.doesNotMatch(first.out, /reused:/);
+}));
+
+test('W1 (0.4.1): a run whose environment differs runs itself, also when the config computes run.env from it; the same environment joins', () => withGatedCli(async ({ root, start, waitFor, starts, open, shut }) => {
+  const healthy = start({ E2E_RAIL_PROBE: 'healthy' });
+  await waitFor(() => starts() === 1, 'the healthy run starts Playwright');
+  const broken = start({ E2E_RAIL_PROBE: 'broken' });
+  await waitFor(() => /waiting for the heavy lock/.test(broken.err), 'the broken run waits');
+  open();
+  assert.equal(await healthy.closed, 0, healthy.err);
+  assert.equal(await broken.closed, 0, broken.err);
+  assert.doesNotMatch(broken.out, /reused:/);
+  assert.equal(starts(), 2, 'both ran');
+  const [h, b] = ledgerLines(root);
+  assert.notEqual(h.envDigest, b.envDigest);
+
+  shut();
+  const one = start({ E2E_RAIL_PROBE: 'broken' });
+  await waitFor(() => starts() === 3, 'a third run starts Playwright');
+  const same = start({ E2E_RAIL_PROBE: 'broken' });
+  await waitFor(() => /waiting for the heavy lock/.test(same.err), 'the same environment waits');
+  open();
+  assert.equal(await one.closed, 0, one.err);
+  assert.equal(await same.closed, 0, same.err);
+  assert.match(same.out, /^reused: run /m);
+  assert.equal(starts(), 3, 'the same environment joined');
+  assert.equal(ledgerLines(root).at(-1).envDigest, b.envDigest, 'a digest is stable for one environment');
+}, { config: (text) => text.replace('run: { port: 5999,', "run: { env: { TARGET: process.env.E2E_RAIL_PROBE ?? '' }, port: 5999,") }));
 
 test('D: an app on @playwright/test older than 1.56 is refused by map, select, run and shard plan, with the version found', () => withRepo(({ root, run, at }) => {
   const pkg = at('node_modules/@playwright/test/package.json');

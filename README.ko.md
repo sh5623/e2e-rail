@@ -16,7 +16,7 @@
 **Claude Code** · **Codex** 스킬 층으로 이뤄진다. 선택·재실행·필터 실행을 전수 통과로 보고하지 않고, 선택 실행마다
 근거가 담긴 선택 블록을 붙이고, 어떤 주장 전에도 `verify` 를 거친다.
 
-**상태:** v0.4.0 (git 태그 `v0.4.0`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
+**상태:** v0.4.1 (git 태그 `v0.4.1`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
 `--test-list` 를 쓰므로 더 낮으면 e2e-rail 이 거부한다), `typescript` ≥ 5 가 필요하다(번들하지 않고 빌려 쓴다).
 
 ## 설치
@@ -24,7 +24,7 @@
 ### CLI (모든 런타임과 CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.4.0
+pnpm add -D github:sh5623/e2e-rail#v0.4.1
 ```
 
 팀과 CI 가 한 버전을 고정해 쓰는 방식(프로젝트 모드)이다. `pnpm exec e2e-rail …`(npm·yarn 이면 `npx e2e-rail …`)로
@@ -89,7 +89,7 @@ Playwright 실행 산출물은 레포 자신의 `.git/info/exclude` 에 적는�
 
 레포 하나에 약 30분.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.4.0`(개인 모드는 건너뛰고 3단계에서 `e2e-rail init --personal`)
+1. `pnpm add -D github:sh5623/e2e-rail#v0.4.1`(개인 모드는 건너뛰고 3단계에서 `e2e-rail init --personal`)
 2. Claude Code 또는 Codex 플러그인을 설치한다(위).
 3. `init` 스킬을 돌린다. 손으로는 `pnpm exec e2e-rail init`: `e2e-rail.config.mjs` 를 쓰고(찾은
    `playwright.config.*` 마다 앱 하나), `paths` 를 가진 tsconfig 를 고르고, `.gitignore` 에 `.e2e-rail/`,
@@ -277,22 +277,25 @@ heavy 드라이버가 해제 즉시 다시 요청해도 이미 기다리는 요�
 따르지 않는다. 쉬고 있는 러너부터 갱신하고 살아 있는 락은 지우지 않는다. `pnpm exec e2e-rail lock status` 는
 보유자와 대기 요청을, `lock reap` 은 고아 락과 번호표를 지우고, `lock run heavy -- <command>` 는 다른 명령을 같은 락으로 감싼다.
 
-**같은 실행에 합류(0.4.0).** 락을 기다린 실행은 락을 잡은 뒤 원장을 한 번 읽는다. 기다리는 동안 똑같은 요청 — 같은
-앱·mode·kind, 같은 코드(지문)·test list·selection·shard·project·workers·`--blob`·passthrough — 이 끝났으면 아무것도
-돌리지 않고 그 실행의 요약 줄 위에
-`reused: run <id> — an identical run (same code, mode and options) finished while this one waited for the lock; nothing ran again`
+**같은 실행에 합류(0.4.0, 환경 비교는 0.4.1 부터).** 락을 기다린 실행은 락을 잡은 뒤 원장을 한 번 읽는다. 기다리는
+동안 똑같은 요청 — 같은 앱·mode·kind, 같은 코드(지문)·test list·selection·shard·project·workers·`--blob`·passthrough,
+그리고 같은 환경 — 이 끝났으면 아무것도 돌리지 않고 그 실행의 요약 줄 위에
+`reused: run <id> — an identical run (same code, mode, options and environment) finished while this one waited for the lock; nothing ran again`
 을 찍고 그 실행의 rc 로 끝난다. 아무것도 쓰지 않는다: `verify` 는 원장에 있는 그 한 줄을 센다. 실패도 그대로
 전달한다. 중단된 실행(rc 128 이상), 요청 전에 이미 끝난 실행(다시 돌리는 것은 호출자의 선택 · 시각이 아니라 원장 순서로 가른다), `--last-failed` 재실행,
 `measure workers` 실행, filtered 실행은 받지 않는다. 실행은 원장 줄을 쓸 때까지 락을 쥐고 있으므로 다음 실행이 그 줄을
-찾는다. 합류는 이 작업 트리의 원장만 읽고 e2e-rail 락이 있어야 한다: `--no-lock` 실행(다른 락 아래)은 합류하지 않으며,
-passthrough 를 기록하지 않은 0.3.x 의 줄도 받지 않는다.
+찾는다. 합류는 이 작업 트리의 원장만 읽고 e2e-rail 락이 있어야 한다: `--no-lock` 실행(다른 락 아래)은 합류하지 않는다.
+환경은 Playwright 가 물려받는 모든 변수와 앱의 `run.env`·mode env(설정이 환경에서 계산해도 포함), Node 실행 파일이며,
+비공개 락 디렉터리의 무작위 키(`env.key`)로 만든 HMAC 으로 비교한다: 값은 기록하지 않고, 다이제스트(`envDigest`)는 다른
+머신에서 아무 의미가 없다. 키가 없으면 아무것도 합류하지 않는다. 0.4.1 이전 줄(0.3.x, 그리고 환경이 달라도 합류하던
+0.4.0)은 환경을 기록하지 않았으므로 받지 않는다.
 
 **시간.** `measure time [--last N]` 은 실행마다 락 대기·preview 빌드·Playwright·전체 시간을 출력하고, 줄에 없는 값은
 `unknown` 이다(0.4.0 이전 줄, 또는 다른 락 아래서 기다렸을 수 있는 `--no-lock` 실행). 표 아래
 `full runs: <n> · repeat after a pass: <n> (<시간>) · same tree, other head: <n> (<시간>)` 는 이미 전수 통과한 코드를
 다시 돈 전수(실행 전 `verify` 와 합류가 아끼는 것)와, 앞선 전수 통과가 다른 커밋으로 검사한 트리와 같은 트리의 커밋을
 돈 전수(커밋을 넘어 결과를 재사용하면 아낄 것 — e2e-rail 은 재사용하지 않는다)를 센다. 실행을 건너뛰는 무언가를
-만들기 전에 먼저 잰다.
+만들기 전에 먼저 잰다. 원장 줄만 잰다: 실패한 preview 빌드와 다른 실행에 합류한 실행은 줄을 남기지 않는다.
 
 **워커.** e2e-rail 은 워커 수를 정하지 않는다. `pnpm exec e2e-rail measure workers 1,2,4 --test-list <file>` 이
 같은 목록을 워커 수마다 한 번씩, 매번 배타 락 아래서 돌리고 벽시계·실패·재시도·부하를 출력한다. 이긴 값은 사람이
@@ -423,7 +426,9 @@ export default {
 지문의 `config` 필드는 `e2e-rail.config.mjs` 와 앱의 Playwright 설정만 해시하고, `playwright.config.ts` 가 import 하는
 로컬 모듈은 넣지 않는다. 그런 모듈을 고치면 `head`, `diff`, `untracked` 중 하나는 여전히 움직인다(`verify` 는 stale 이고
 `differing` 은 `config` 가 아니라 그것을 가리킨다). 설정이 읽는 gitignore 된 파일(예: env 파일)은 전혀 덮지 않는다.
-`verify` 가 볼 수 없으니 그 파일을 바꾼 뒤에는 스위트를 다시 돌린다.
+`verify` 가 볼 수 없으니 그 파일을 바꾼 뒤에는 스위트를 다시 돌린다. 프로세스 환경도 지문에 없다: 한 대상 서버·계정·
+기능 플래그에서 통과한 결과가 다른 환경의 같은 코드도 검증한다. 그것을 바꾼 뒤에는 스위트를 다시 돌린다(대기 중 합류는
+요청된 실행을 건너뛰는 것이라 환경을 비교한다).
 
 Playwright 1.56–1.57 에서는 `--test-list` 줄이 테스트의 제목 경로 전체를 적어야 하는데, `›` 나 줄바꿈이 들어 있거나,
 앞뒤에 공백 문자(whitespace)가 있거나, 빈 제목은 줄로 적을 수 없다. 그런 테스트가 있는 spec 은 목록으로는 절대 돌지 않는다: 그 spec 의 선택 실행은

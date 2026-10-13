@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "e2e-rail",
-      "description": "Change-aware Playwright E2E — an autopilot skill and hooks, a read-only impact analyst and the e2e-rail CLI on PATH (personal mode), or the CLI pinned in the repo (pnpm add -D github:sh5623/e2e-rail#v0.4.0).",
+      "description": "Change-aware Playwright E2E — an autopilot skill and hooks, a read-only impact analyst and the e2e-rail CLI on PATH (personal mode), or the CLI pinned in the repo (pnpm add -D github:sh5623/e2e-rail#v0.4.1).",
       "source": "./",
       "category": "engineering",
       "tags": [

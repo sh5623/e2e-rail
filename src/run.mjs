@@ -1,10 +1,11 @@
+import { createHmac } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { constants } from 'node:os';
 import path from 'node:path';
 import { appDir, ledgerDir, runEnv } from './config.mjs';
 import { computeFingerprint, distStale } from './fingerprint.mjs';
 import { appendRun, currentPolicy, ledgerMark, passGreen, runsSince } from './ledger.mjs';
-import { acquire, describeHolders, lockDir } from './lock.mjs';
+import { acquire, describeHolders, lockDir, machineKey } from './lock.mjs';
 import { readState } from './shadow.mjs';
 import { inCI } from './util/ci.mjs';
 import { execInherit } from './util/exec.mjs';
@@ -289,13 +290,29 @@ function shardRecord({ app, dirAbs, shard, testList }) {
 
 const refuse = (message) => { console.error(message); return { rc: 1, entry: null }; };
 
-// W1 (0.4.0): what makes two requests the same run: app, mode, kind, the code (fingerprint), the test list as read and
-// the selection it came from, the shard, the project, workers, the reporter (blob) and the passthrough as given. A line
-// written before 0.4.0 has no `passthrough` and is never the same request.
+// W1: what makes two requests the same run: app, mode, kind, the code (fingerprint), the test list as read and the
+// selection it came from, the shard, the project, workers, the reporter (blob), the passthrough as given and (0.4.1)
+// the environment (envDigest). A line without this version's join policy (0.4.0 recorded no environment) is never the
+// same request. Bump JOIN_POLICY when what the key covers changes; VERIFY_POLICY is another matter (what verifies).
+export const JOIN_POLICY = 1;
 const requestKey = (r) => JSON.stringify([
   r.app, r.mode, r.kind, r.fingerprint?.id, r.selectionId ?? null, r.testListSha ?? null, r.shard ?? null,
-  r.project ?? null, r.workers ?? null, r.blob, r.passthrough,
+  r.project ?? null, r.workers ?? null, r.blob, r.passthrough, r.envDigest,
 ]);
+
+// W1 (0.4.1): the environment Playwright is spawned with — every variable it inherits plus the app's run.env and mode
+// env (a config that computes them from the environment included), not the two report paths e2e-rail sets per run —
+// and the Node binary that spawns it, as an HMAC under the machine key (lock.mjs machineKey): no value reaches the
+// ledger, and the digest means nothing off this machine. The fingerprint does not cover the environment (verify has the
+// same limit); a join skips a run that was asked for, so it needs this to match. null without a key: no join.
+const REPORT_VARS = new Set(['PLAYWRIGHT_JSON_OUTPUT_FILE', 'PLAYWRIGHT_JSON_OUTPUT_NAME']);
+function environmentDigest(config, app, mode) {
+  const key = machineKey(lockDir(config));
+  if (!key) return null;
+  const env = { ...process.env, ...runEnv(app, mode) };
+  const vars = Object.keys(env).filter((k) => !REPORT_VARS.has(k)).sort().map((k) => [k, env[k]]);
+  return createHmac('sha256', key).update(JSON.stringify({ node: [process.execPath, process.version], env: vars })).digest('hex');
+}
 const interrupted = (rc) => typeof rc !== 'number' || rc >= 128; // no result, or ended by a signal
 
 // W1 (0.4.0): the run an identical request finished while this one waited for the lock, or null. Only a line appended
@@ -305,8 +322,10 @@ const interrupted = (rc) => typeof rc !== 'number' || rc >= 128; // no result, o
 // result the caller chose to run again, and an interrupted run is no result. Lines of an older verification policy
 // never count. Nothing is copied: the caller gets that line.
 function finishedWhileWaiting(config, request, mark) {
+  if (typeof request.envDigest !== 'string') return null;
   const key = requestKey(request);
-  return runsSince(config, mark, { app: request.app }).reverse().find((r) => Array.isArray(r.passthrough) && typeof r.blob === 'boolean'
+  return runsSince(config, mark, { app: request.app }).reverse().find((r) => r.joinPolicy === JOIN_POLICY
+    && Array.isArray(r.passthrough) && typeof r.blob === 'boolean' && typeof r.envDigest === 'string'
     && currentPolicy(r) && !r.filtered && !interrupted(r.rc) && requestKey(r) === key) ?? null;
 }
 
@@ -416,7 +435,7 @@ export async function runTests({
     const testListSha = listText === null ? null : sha256(listText);
     const request = {
       app: app.name, mode, kind, fingerprint, selectionId, testListSha, shard: shardEntry, workers: workers ?? null,
-      project: project ?? null, blob, passthrough: [...passthrough],
+      project: project ?? null, blob, passthrough: [...passthrough], envDigest: environmentDigest(config, app, mode), joinPolicy: JOIN_POLICY,
     };
     const purpose = passthrough.some((a) => a.startsWith('--e2e-rail-purpose='));
     const joined = held && kind !== 'rerun' && !filtered && !purpose ? finishedWhileWaiting(config, request, mark) : null;
