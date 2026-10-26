@@ -21,10 +21,10 @@ repositories.
 ```sh
 e2e-rail --version
 ```
-A version (`0.4.1`) → installed. Not found and the repository pins it: `pnpm exec e2e-rail --version`. For project
+A version (`0.4.2`) → installed. Not found and the repository pins it: `pnpm exec e2e-rail --version`. For project
 mode, ask the human first; on a yes:
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.4.1
+pnpm add -D github:sh5623/e2e-rail#v0.4.2
 ```
 It needs Node ≥ 20 and borrows the repo's own `@playwright/test` 1.56 or newer and `typescript`; an older
 Playwright is refused (`@playwright/test 1.56.0 or newer is required (found <x>)`): ask the human to upgrade it.

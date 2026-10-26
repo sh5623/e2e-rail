@@ -15,6 +15,9 @@ import { normalizePattern } from './pattern.mjs';
 // as a layout, wrapper or prop anywhere in the route files is dropped from the static entries. The selector treats an
 // entry as a barrier for its route-table importers, so an entry that is not really one page narrows the selection.
 //
+// A module listed in `adapter.unreadable` is not read at all: a spread or identifier that resolves to it passes, it
+// yields no entry, and config.mjs requires a `tiers.full` glob to match it, so an edit there runs the app in full.
+//
 // Everything the adapter cannot read goes to `unresolved` and the selector runs the whole app, so each guard below closes
 // a way a route could otherwise vanish: a computed path or import(); a route list element that is not an object literal,
 // a spread of a const array, or a const route object (declared in the same file or in a file `routeFiles` covers,
@@ -32,7 +35,8 @@ export const reactRouterLazy = {
   routeEntries({ config, app, ts }) {
     const dirAbs = appDir(config, app);
     const { options } = readCompilerOptions(ts, dirAbs, app.tsconfig);
-    const { basePath, routeFiles } = app.adapter;
+    const { basePath, routeFiles, unreadable = [] } = app.adapter;
+    const unreadSet = new Set(unreadable); // route modules the host lists as not to be read (config.mjs checks tiers.full covers them)
     const entries = new Map();
     const statics = new Map(); // leaf-page candidates, filtered against `nonLeaf` once every file is read
     const nonLeaf = new Set(); // modules seen as a layout, wrapper or prop in some route file
@@ -90,7 +94,7 @@ export const reactRouterLazy = {
       if (hit.length === 0) unresolved.add(`react-router-lazy: routeFiles pattern matched no file: ${glob}`);
       files.push(...hit);
     }
-    const routeSet = new Set(files);
+    const routeSet = new Set(files.filter((f) => !unreadSet.has(f))); // a listed module is never parsed, even when a glob covers it
     const parsed = new Map();
     for (const rel of routeSet) {
       try {
@@ -231,11 +235,14 @@ export const reactRouterLazy = {
 
       // Under a path prefix a spread or identifier cannot be placed: its routes are read per file, with no prefix.
       const reference = (node, name, want, prefix, what) => {
+        // A reference into a module listed in adapter.unreadable is accepted without reading it: its routes are no
+        // entries, and an edit to it (or to anything only it reaches) climbs to main and runs the app in full.
+        const imp = imports.get(name);
+        if (imp && unreadSet.has(resolveSpec(imp.spec, rel).file)) return;
         const norm = normalizePattern(prefix, basePath);
         if (norm !== '') {
           fail(node, `${what} '${name}' under route prefix '${norm}' (prefixes are not composed across files)`);
         } else if (!isConstLiteral(rel, name, want)) {
-          const imp = imports.get(name);
           const from = imp ? ` (imported from '${imp.spec}')` : '';
           fail(node, `${what} '${name}' is not a const ${want} literal declared in this file or in a file routeFiles covers${from}`);
         }

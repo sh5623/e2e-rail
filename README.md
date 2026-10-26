@@ -16,7 +16,7 @@ It is a zero-dependency Node CLI (`e2e-rail`) that your scripts and CI call, plu
 **Codex** that make agents use it honestly: no selected, rerun or filtered run reported as a full pass, a selection
 block with reasons for every selected run, and `verify` before any claim.
 
-**Status:** v0.4.1 (git tag `v0.4.1`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
+**Status:** v0.4.2 (git tag `v0.4.2`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
 `--test-list`; e2e-rail refuses an older one) and `typescript` ≥ 5 in the host repository (borrowed, not bundled).
 
 ## Install
@@ -24,7 +24,7 @@ block with reasons for every selected run, and `verify` before any claim.
 ### The CLI (every runtime and CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.4.1
+pnpm add -D github:sh5623/e2e-rail#v0.4.2
 ```
 
 This pins one version for the team and CI (project mode): they call it as `pnpm exec e2e-rail …` (`npx e2e-rail …`
@@ -91,7 +91,7 @@ existing in-repository ledger.
 
 About 30 minutes per repository.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.4.1` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
+1. `pnpm add -D github:sh5623/e2e-rail#v0.4.2` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
 2. Install the Claude Code or the Codex plugin (above).
 3. Run the `init` skill, or by hand `pnpm exec e2e-rail init`: it writes `e2e-rail.config.mjs` (one app per
    `playwright.config.*` found), picks the tsconfig that holds your `paths`, adds `.e2e-rail/`, `test-results/`,
@@ -354,6 +354,7 @@ temp dir and ledger lines into `.e2e-rail/`, which the fingerprint ignores.
 | `srcDir` · `tsconfig` · `main` | `src` · `tsconfig.json` · detected | source root; the tsconfig whose `paths` resolve aliases; the app entry when not `src/main.*` or `src/index.*` |
 | `adapter.name` | required | `react-router-lazy` or `manual` |
 | `adapter.routeFiles` · `basePath` · `map` | `[]` · `''` · `{}` | route-table globs (needed to narrow); the prefix the router adds; for `manual`: `{ '<route>': ['src/…'] }` |
+| `adapter.unreadable` | `[]` | route modules (app-relative files) the adapter must not read: a spread or identifier from one passes unread and yields no entry; each must be matched by a `tiers.full` glob, so an edit to it runs the app in full (`map --check` lists them as `~`) |
 | `apiPrefix` · `alwaysRun` | `/api` · `[]` | API URL prefix read from source literals; spec slugs that run in every selection |
 | `tiers.full` · `tiers.ignore` | support dirs, Playwright config, `package.json` · unit tests under `srcDir` (`<srcDir>/**/*.test.ts`, `*.test.tsx`, `*.spec.ts`, `*.spec.tsx`) and `**/*.md` | globs that run the app in full · that never trigger a run (a test file under `specDir` is never ignored: Playwright runs `*.test.*` too) |
 | `run.preview` | none | `{ build: '<command>', dist: '<dir>' }` for `--mode preview` |
@@ -375,6 +376,8 @@ export default {
         name: 'react-router-lazy',
         routeFiles: ['src/features/**/routes.tsx', 'src/routes/router.tsx'],
         basePath: '/app',
+        // a route group the router spreads but a helper builds (`table.map(…)`): not read, and under tiers.full
+        unreadable: ['src/routes/mps-shell-switch.tsx'],
       },
       tiers: {
         full: ['src/routes/**', 'src/components/layout/**', 'src/stores/**', 'src/lib/api/**'],
@@ -406,7 +409,9 @@ through before anyone trusts a selection.
 - **Route arrays built by helper calls** and **modules used as `errorElement`**: the adapter may not read them as
   route entries. A const set to a call of a function declared in the same route file is read when every `return` of
   that function is an array of route object literals or a `?:` of them, `[]` included (an env gate); any other
-  helper-built list is unresolved and runs the app in full until it is a const array literal. List the modules used
+  helper-built list is unresolved and runs the app in full until it is a const array literal, or until its module is
+  listed in `adapter.unreadable` (then nothing in it is read: the module must be under `tiers.full`, which is what
+  keeps its routes from vanishing, and `select` narrows every other change as usual). List the modules used
   as `errorElement` in `tiers.full`.
 - **API globs that only constrain a URL tail** (`**/items`): a source literal with a dynamic tail
   (`/api/orders/${id}/items` is read as `/api/orders/*`) is not matched against them, so a spec that mocks only the

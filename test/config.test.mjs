@@ -76,7 +76,7 @@ test('generic defaults: no repo env is injected and unset keys fall back', () =>
   assert.deepEqual(other.tiers.ignore.slice(0, 2), ['app/**/*.test.ts', 'app/**/*.test.tsx']);
   const flat = findApp(withDefaults({ apps: [{ ...manualApp('a'), srcDir: '.' }] }, '/x', { checkFiles: false }));
   assert.deepEqual(flat.tiers.ignore.slice(0, 2), ['**/*.test.ts', '**/*.test.tsx']);
-  assert.deepEqual(app.adapter, { basePath: '', routeFiles: [], map: {}, name: 'manual' });
+  assert.deepEqual(app.adapter, { basePath: '', routeFiles: [], map: {}, name: 'manual', unreadable: [] });
   assert.deepEqual(cfg.shared, []);
   assert.deepEqual(cfg.ignore, ['**/*.md', 'docs/**']);
   assert.equal(cfg.shadow.promoteAfter, 3);
@@ -155,4 +155,15 @@ test('template: each placeholder appears once and the filled-in file loads clean
 test('findApp throws ConfigError for an unknown name', () => {
   const cfg = withDefaults({ apps: [manualApp('a')] }, '/x', { checkFiles: false });
   assert.throws(() => findApp(cfg, 'zzz'), ConfigError);
+});
+
+test('adapter.unreadable: a list of app-relative route modules, each matched by a tiers.full glob; absent is []', () => {
+  const app = (adapter, full) => ({ apps: [{ name: 'a', root: '.', playwrightConfig: 'p.ts', adapter: { name: 'react-router-lazy', ...adapter }, tiers: { full } }] });
+  const ok = withDefaults(app({ unreadable: ['src/routes/group.tsx'] }, ['src/routes/**']), '/x', { checkFiles: false });
+  assert.deepEqual(ok.apps[0].adapter.unreadable, ['src/routes/group.tsx']);
+  assert.deepEqual(withDefaults(app({}, []), '/x', { checkFiles: false }).apps[0].adapter.unreadable, []);
+  // Not under tiers.full: an edit to it would not run full, so its routes could vanish; the config is refused.
+  assert.throws(() => withDefaults(app({ unreadable: ['src/routes/group.tsx'] }, ['src/stores/**']), '/x', { checkFiles: false }), /adapter\.unreadable.*src\/routes\/group\.tsx.*tiers\.full/);
+  assert.throws(() => withDefaults(app({ unreadable: 'src/routes/group.tsx' }, ['src/routes/**']), '/x', { checkFiles: false }), ConfigError);
+  assert.throws(() => withDefaults(app({ unreadable: ['src/routes/*.tsx'] }, ['src/routes/**']), '/x', { checkFiles: false }), /glob/);
 });

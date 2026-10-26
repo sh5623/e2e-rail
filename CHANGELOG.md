@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.2 — 2026-10-26
+
+### Added
+
+- **`adapter.unreadable`** (react-router-lazy): route modules the adapter must not read. A spread or identifier the
+  router takes from one passes without being read and yields no entry; the module is never parsed even when a
+  `routeFiles` glob covers it. The config is refused unless a `tiers.full` glob matches each listed file, because that
+  is what keeps its routes from vanishing: an edit to it, or to anything only it reaches, climbs to the app entry and
+  runs the app in full, while every other change narrows as before. `map --check` lists them as `~ unreadable: …`.
+  Motivation: a router that spreads a group built by a helper (`table.map(…)` under a shell gate) made the adapter
+  report `adapter-unresolved` and every change in the app ran in full; listing the files in `routeFiles` only moved
+  the problem into the helper.
+
 ## 0.4.1 — 2026-10-14
 
 ### Fixes
