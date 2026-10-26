@@ -47,7 +47,7 @@ test('registry lists both adapters and rejects unknown names', () => {
 
 // Runs react-router-lazy over one route file written into a temp copy of the sample app (basePath /app).
 // `extra` adds more files ({ rel: text }); `routeFiles` defaults to the written file only.
-async function readSource(source, { file = 'src/routes.ts', routeFiles = [file], extra = {} } = {}) {
+async function readSource(source, { file = 'src/routes.ts', routeFiles = [file], unreadable = [], extra = {} } = {}) {
   const { root, cleanup } = makeTempRepo('sample-app');
   try {
     for (const [rel, text] of Object.entries({ ...extra, [file]: source })) {
@@ -56,7 +56,7 @@ async function readSource(source, { file = 'src/routes.ts', routeFiles = [file],
     }
     const config = await loadConfig(root); const ts = await loadTypeScript(root);
     const base = findApp(config);
-    const app = { ...base, adapter: { ...base.adapter, routeFiles } };
+    const app = { ...base, adapter: { ...base.adapter, routeFiles, unreadable } };
     const { entries, unresolved } = getAdapter('react-router-lazy').routeEntries({ config, app, ts });
     return { entries: entries.sort((a, b) => a.route.localeCompare(b.route) || a.file.localeCompare(b.file)), unresolved };
   } finally { cleanup(); }
@@ -196,6 +196,36 @@ test('a spread array imported from a file routeFiles does not cover is unresolve
   assert.equal(unresolved.length, 2);
   assert.match(unresolved[0], /spread of 'ordersRoutes' is not a const array literal.*imported from '@\/features\/orders\/routes'/);
   assert.match(unresolved[1], /spread of 'cart' is not a const array literal.*imported from '@\/features\/cart\/routes'/);
+});
+
+test('I: a spread or identifier from a module listed in adapter.unreadable is accepted unread; the module itself is never parsed', async () => {
+  // A helper-built group the adapter can never read (a `.map` over a table, `children` bound to a local): the host
+  // keeps it under tiers.full, so an edit to it or to anything only it reaches climbs to main and runs full.
+  const group = "import { table } from '@/shell/table';\nconst leaves = table.map((r) => ({ path: r.path, element: null }));\nexport const groupRoutes = [{ element: null, children: leaves }];\nexport const one = groupRoutes[0];\n";
+  const extra = { 'src/shell/group.ts': group, 'src/shell/table.ts': "export const table = [{ path: 'mps' }];\n" };
+  const router = `import { groupRoutes, one } from '@/shell/group';\nimport { ordersRoutes } from '@/features/orders/routes';\nexport const router = [{ path: '/app', children: [...groupRoutes, one, ...ordersRoutes] }];\n`;
+  const opts = { file: 'src/router.ts', routeFiles: ['src/router.ts', 'src/features/orders/routes.ts'], extra };
+  // Without the listing: unresolved, as before.
+  const before = await readSource(router, opts);
+  assert.equal(before.unresolved.length, 2);
+  assert.match(before.unresolved[0], /spread of 'groupRoutes' is not a const array literal/);
+  assert.match(before.unresolved[1], /route identifier 'one' is not a const object literal/);
+  // Listed: both references pass, no entry comes from the group, the other spread is still read.
+  const after = await readSource(router, { ...opts, unreadable: ['src/shell/group.ts'] });
+  assert.deepEqual(after.unresolved, []);
+  assert.deepEqual(after.entries, [
+    { route: 'orders', file: 'src/features/orders/OrdersPage.ts' },
+    { route: 'orders/:id', file: 'src/features/orders/OrderDetailPage.ts' },
+  ]);
+  // Under a prefix too: nothing is read, so no prefix is composed.
+  const nested = `import { groupRoutes } from '@/shell/group';\nexport const router = [{ path: '/app', children: [{ path: 'x', children: [...groupRoutes] }] }];\n`;
+  assert.deepEqual((await readSource(nested, { ...opts, unreadable: ['src/shell/group.ts'] })).unresolved, []);
+  // Listed AND covered by routeFiles: the listing wins, the file is not parsed (parsing it would fail on the `.map`).
+  const covered = await readSource(router, { ...opts, routeFiles: [...opts.routeFiles, 'src/shell/group.ts'], unreadable: ['src/shell/group.ts'] });
+  assert.deepEqual(covered.unresolved, []);
+  // A listing only covers the module it names: a spread from another unreadable module stays unresolved.
+  const other = await readSource(router, { ...opts, unreadable: ['src/shell/other.ts'] });
+  assert.equal(other.unresolved.length, 2);
 });
 
 const ORDERS_IMPL = { 'src/features/orders/impl.ts': `export const ordersRoutes = [{ path: 'orders', ${page('OrdersPage')} }];\n` };

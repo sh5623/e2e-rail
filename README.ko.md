@@ -16,7 +16,7 @@
 **Claude Code** · **Codex** 스킬 층으로 이뤄진다. 선택·재실행·필터 실행을 전수 통과로 보고하지 않고, 선택 실행마다
 근거가 담긴 선택 블록을 붙이고, 어떤 주장 전에도 `verify` 를 거친다.
 
-**상태:** v0.4.1 (git 태그 `v0.4.1`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
+**상태:** v0.4.2 (git 태그 `v0.4.2`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
 `--test-list` 를 쓰므로 더 낮으면 e2e-rail 이 거부한다), `typescript` ≥ 5 가 필요하다(번들하지 않고 빌려 쓴다).
 
 ## 설치
@@ -24,7 +24,7 @@
 ### CLI (모든 런타임과 CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.4.1
+pnpm add -D github:sh5623/e2e-rail#v0.4.2
 ```
 
 팀과 CI 가 한 버전을 고정해 쓰는 방식(프로젝트 모드)이다. `pnpm exec e2e-rail …`(npm·yarn 이면 `npx e2e-rail …`)로
@@ -89,7 +89,7 @@ Playwright 실행 산출물은 레포 자신의 `.git/info/exclude` 에 적는�
 
 레포 하나에 약 30분.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.4.1`(개인 모드는 건너뛰고 3단계에서 `e2e-rail init --personal`)
+1. `pnpm add -D github:sh5623/e2e-rail#v0.4.2`(개인 모드는 건너뛰고 3단계에서 `e2e-rail init --personal`)
 2. Claude Code 또는 Codex 플러그인을 설치한다(위).
 3. `init` 스킬을 돌린다. 손으로는 `pnpm exec e2e-rail init`: `e2e-rail.config.mjs` 를 쓰고(찾은
    `playwright.config.*` 마다 앱 하나), `paths` 를 가진 tsconfig 를 고르고, `.gitignore` 에 `.e2e-rail/`,
@@ -336,6 +336,7 @@ heavy 드라이버가 해제 즉시 다시 요청해도 이미 기다리는 요�
 | `srcDir` · `tsconfig` · `main` | `src` · `tsconfig.json` · 탐지 | 소스 root, 별칭을 푸는 `paths` 의 tsconfig, `src/main.*`·`src/index.*` 가 아닐 때의 앱 엔트리 |
 | `adapter.name` | 필수 | `react-router-lazy` 또는 `manual` |
 | `adapter.routeFiles` · `basePath` · `map` | `[]` · `''` · `{}` | 라우트 표 글롭(좁히려면 필요), 라우터가 붙이는 접두, `manual` 용 `{ '<route>': ['src/…'] }` |
+| `adapter.unreadable` | `[]` | 어댑터가 읽지 않을 라우트 모듈(앱 기준 파일 경로): 거기서 온 spread·식별자는 읽지 않고 통과시키며 엔트리를 만들지 않는다. 각 파일은 `tiers.full` 글롭에 걸려야 하고(그래야 그 파일 변경이 앱 전수가 된다), `map --check` 가 `~` 로 나열한다 |
 | `apiPrefix` · `alwaysRun` | `/api` · `[]` | 소스 리터럴에서 읽는 API URL 접두, 모든 선택에 들어가는 spec slug |
 | `tiers.full` · `tiers.ignore` | support 디렉터리, Playwright 설정, `package.json` · `srcDir` 아래 단위 테스트(`<srcDir>/**/*.test.ts`, `*.test.tsx`, `*.spec.ts`, `*.spec.tsx`)와 `**/*.md` | 앱 전수로 만드는 글롭 · 실행을 일으키지 않는 글롭(`specDir` 아래 테스트 파일은 무시되지 않는다. Playwright 는 `*.test.*` 도 돌린다) |
 | `run.preview` | 없음 | `--mode preview` 용 `{ build: '<command>', dist: '<dir>' }` |
@@ -388,7 +389,9 @@ export default {
 - **헬퍼 호출로 만든 라우트 배열**과 **`errorElement` 로 쓰인 모듈**: 어댑터가 라우트 엔트리로 읽지 못할 수 있다.
   같은 라우트 파일에 선언된 함수의 호출로 초기화한 const 는, 그 함수의 모든 `return` 이 라우트 객체 리터럴 배열
   (또는 그것들의 `?:`, `[]` 포함 — env 게이트)일 때 읽는다. 다른 헬퍼로 만든 목록은 unresolved 로 남아 const 배열
-  리터럴이 될 때까지 앱 전수가 된다. `errorElement` 로 쓰인 모듈은 `tiers.full` 에 둔다.
+  리터럴이 되거나 그 모듈을 `adapter.unreadable` 에 올릴 때까지 앱 전수가 된다(올리면 그 안은 전혀 읽지 않는다 —
+  모듈이 `tiers.full` 아래여야 하고 그것이 라우트가 사라지지 않게 하는 장치다 — 다른 변경은 평소처럼 좁힌다).
+  `errorElement` 로 쓰인 모듈은 `tiers.full` 에 둔다.
 - **URL 꼬리만 제한하는 API 글롭**(`**/items`): 꼬리가 동적인 소스 리터럴(`/api/orders/${id}/items` 는
   `/api/orders/*` 로 읽힌다)과는 맞춰 보지 않으므로, 꼬리만 목으로 잡는 spec 은 API 축으로 선택되지 않는다. 목 글롭에
   경로 접두를 쓴다(`**/api/orders/**`). impact-analyst 가 서비스와 그 목을 점검한다.

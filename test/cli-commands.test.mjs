@@ -1105,6 +1105,33 @@ test('W1 (0.4.0): a run that waited behind an identical run prints reused and th
   assert.doesNotMatch(first.out, /reused:/);
 }));
 
+test('map --check: a module listed in adapter.unreadable is reported with ~, counts as no unresolved, and the config is refused when tiers.full does not cover it', () => withRepo(({ run, at }) => {
+  // A helper-built route group the adapter cannot read, spread from the router.
+  mkdirSync(at('src/shell'), { recursive: true });
+  writeFileSync(at('src/shell/group.ts'), "const leaves = [{ path: 'mps' }].map((r) => ({ path: r.path, element: null }));\nexport const groupRoutes = [{ element: null, children: leaves }];\n");
+  const router = readFileSync(at('src/router.ts'), 'utf8');
+  writeFileSync(at('src/router.ts'), `import { groupRoutes } from '@/shell/group';\n${router.replace('children: [', 'children: [...groupRoutes, ')}`);
+  const cfg = readFileSync(at('e2e-rail.config.mjs'), 'utf8');
+  assert.match(cfg, /basePath: '\/app' \}/);
+  const before = run(['map', '--check']);
+  assert.equal(before.code, 0, before.out);
+  assert.match(before.stdout, /adapter unresolved 1$/m);
+  assert.match(before.stdout, /! src\/router\.ts:\d+: spread of 'groupRoutes' is not a const array literal/);
+  // Listed, and src/shell/** is in the fixture's tiers.full: read nothing, unresolved 0, the ~ line says so.
+  writeFileSync(at('e2e-rail.config.mjs'), cfg.replace("basePath: '/app' }", "basePath: '/app', unreadable: ['src/shell/group.ts'] }"));
+  const after = run(['map', '--check']);
+  assert.equal(after.code, 0, after.out);
+  assert.match(after.stdout, /adapter unresolved 0$/m);
+  assert.match(after.stdout, /^ {2}~ unreadable: src\/shell\/group\.ts \(adapter\.unreadable: not read, no entries; tiers\.full runs the app in full when it changes\)$/m);
+  assert.doesNotMatch(after.stdout, /could not read/);
+  assert.doesNotMatch(after.out, /unknown config key/);
+  // Not under tiers.full: refused before anything runs.
+  writeFileSync(at('e2e-rail.config.mjs'), cfg.replace("basePath: '/app' }", "basePath: '/app', unreadable: ['src/lib/dead.ts'] }"));
+  const refused = run(['map', '--check']);
+  assert.notEqual(refused.code, 0);
+  assert.match(refused.out, /adapter\.unreadable lists 'src\/lib\/dead\.ts', which no tiers\.full glob matches/);
+}));
+
 test('W1 (0.4.1): a run whose environment differs runs itself, also when the config computes run.env from it; the same environment joins', () => withGatedCli(async ({ root, start, waitFor, starts, open, shut }) => {
   const healthy = start({ E2E_RAIL_PROBE: 'healthy' });
   await waitFor(() => starts() === 1, 'the healthy run starts Playwright');

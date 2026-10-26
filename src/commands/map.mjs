@@ -60,6 +60,7 @@ async function mapApp(config, app, check) {
   const { entries, unresolved } = getAdapter(app.adapter.name).routeEntries({ config, app, ts });
   console.log(`app ${app.name}: ${specs.length} specs indexed · ${entries.length} route entries · adapter unresolved ${unresolved.length}`);
   for (const u of unresolved) console.log(`  ! ${u}`);
+  for (const f of app.adapter.unreadable ?? []) console.log(`  ~ unreadable: ${f} (adapter.unreadable: not read, no entries; tiers.full runs the app in full when it changes)`);
   if (!check) return;
   // Test files Playwright lists outside specDir are indexed unmapped (never read), and the index cache does not see them
   // change: specDir should be where Playwright looks.

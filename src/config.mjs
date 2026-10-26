@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execCapture } from './util/exec.mjs';
+import { matchGlob } from './util/glob.mjs';
 import { sha256 } from './util/hash.mjs';
 
 export class ConfigError extends Error {
@@ -26,7 +27,7 @@ const APP_KEYS = [
   'name', 'root', 'playwrightConfig', 'specDir', 'supportDirs', 'srcDir', 'tsconfig',
   'adapter', 'apiPrefix', 'alwaysRun', 'tiers', 'run', 'main',
 ];
-const ADAPTER_KEYS = ['name', 'routeFiles', 'basePath', 'map'];
+const ADAPTER_KEYS = ['name', 'routeFiles', 'basePath', 'map', 'unreadable'];
 const TIERS_KEYS = ['full', 'ignore'];
 const RUN_KEYS = ['port', 'preview', 'workers', 'modeEnv', 'env'];
 
@@ -185,13 +186,24 @@ export function withDefaults(raw, root, { checkFiles = true, mode = 'project', c
     const specDir = a.specDir ?? 'e2e';
     const supportDirs = a.supportDirs ?? [`${specDir}/support`];
     const srcDir = a.srcDir ?? 'src';
+    const full = [...new Set([...supportDirs.map((d) => `${d}/**`), a.playwrightConfig, 'package.json', ...(a.tiers?.full ?? [])])];
+    // Route modules the adapter is told not to read (a helper-built group). Their routes are never entries, so the
+    // only thing that keeps them from vanishing is that an edit to such a module runs the app in full: each must be
+    // matched by a tiers.full glob, or the config is refused.
+    const unreadable = a.adapter.unreadable ?? [];
+    if (!Array.isArray(unreadable) || unreadable.some((f) => typeof f !== 'string')) throw new ConfigError(`app ${a.name}: adapter.unreadable must be an array of app-relative file paths`);
+    for (const raw of unreadable) {
+      const file = path.posix.normalize(raw.replace(/\\/g, '/'));
+      if (/[*?]/.test(file)) throw new ConfigError(`app ${a.name}: adapter.unreadable lists '${raw}': a file path, not a glob`);
+      if (!full.some((g) => matchGlob(g, file))) throw new ConfigError(`app ${a.name}: adapter.unreadable lists '${raw}', which no tiers.full glob matches (an edit to it must run the app in full, or its routes could vanish unread)`);
+    }
     return {
       ...a, specDir, supportDirs,
       srcDir, tsconfig: a.tsconfig ?? 'tsconfig.json', apiPrefix: a.apiPrefix ?? '/api',
       alwaysRun: a.alwaysRun ?? [],
-      adapter: { basePath: '', routeFiles: [], map: {}, ...a.adapter },
+      adapter: { basePath: '', routeFiles: [], map: {}, ...a.adapter, unreadable: unreadable.map((f) => path.posix.normalize(f.replace(/\\/g, '/'))) },
       tiers: {
-        full: [...new Set([...supportDirs.map((d) => `${d}/**`), a.playwrightConfig, 'package.json', ...(a.tiers?.full ?? [])])],
+        full,
         ignore: a.tiers?.ignore ?? defaultIgnore(srcDir),
       },
       run: {
