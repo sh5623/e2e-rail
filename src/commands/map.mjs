@@ -82,6 +82,15 @@ async function mapApp(config, app, check) {
   const pct = specs.length ? Math.round((unmapped.length / specs.length) * 100) : 0;
   console.log(`  unmapped: ${unmapped.length}/${specs.length} (${pct}%) — these run on every src change`);
   for (const f of unmapped) console.log(`    - ${f}`);
+  // Loops over literal arrays, array reads and coercions are read only while nothing in the e2e tree can change the
+  // builtins they run; the first place that breaks each layer says why a loop-driven spec is unmapped.
+  const b = index.builtins;
+  if (b) {
+    console.log(`  builtins: ${b.intrinsics ? `changed — ${b.intrinsics} (loops, array reads and coercions over literals are not read)` : 'intact'}`);
+    for (const g of b.globals.slice(0, 3)) console.log(`    global changed: ${g} (its read-only calls and expect are not trusted)`);
+    if (b.globals.length > 3) console.log(`    … and ${b.globals.length - 3} more`);
+    if (b.expect) console.log(`    expect changed: ${b.expect}`);
+  }
 }
 
 // (Re)builds the spec index of each app (every app unless --app); --check adds the selector's view of the app.

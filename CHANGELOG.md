@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.4.3 — 2026-11-03
+
+### Changed
+
+- **The spec index reads data-driven tests and scoped constants, and only literals nothing can change.** A `goto` /
+  `route()` argument is resolved by lexical scope: a `const` in a `describe` or test body, a `for (const … of [ … ])`
+  variable (each element, destructuring included), numeric indexes, `+`, both sides of `?:`, `??` and `||`. An object
+  or array literal is read only while every reference to the name holding it is followed and none can change it
+  (const aliases, for-of variables, never-reassigned helpers declared in the e2e tree and the callbacks of
+  `some`/`every`/`find`/`findIndex`/`forEach` are followed; any other call, a write, a return, another literal, a tag,
+  `instanceof` or another method taints it). Only plain-data object literals are read (no method, accessor, function
+  value, computed key, spread, `__proto__`, `toString`/`valueOf`/`toJSON`/`then`).
+- **Exported constants are checked against every module one worker loads**: the spec and support dirs, the Playwright
+  config and every project file they import at run time, transitively (one worker runs many spec files with the same
+  support modules). Project files outside those dirs are recorded as `treeExtra` and their content is part of the cache
+  key. Exports of a module taken whole (namespace, default, `require`, `import()`, re-export) are never read.
+- **Builtin integrity is an allow-list over syntax.** Loops and array patterns run the array iterator, array methods
+  and coercions run builtins, so they are trusted only while no module of that tree can change them: no name that
+  reaches a prototype or runs code (`prototype`, `__proto__`, `constructor`, `getPrototypeOf`,
+  `getOwnPropertyDescriptor(s)`, `__lookupGetter__`/`__lookupSetter__`, `eval`, `Function`) in any spelling, no key the
+  index cannot work out read from a global builtin or written through, no write to the global object, `Error` or an
+  undeclared name, `Object`/`Array`/`Function`/`Reflect`/`Iterator`/the global object/`require` never handed out, no
+  `this` in sloppy code, no `with` statement, no `vm`-like or computed module load and no `process.getBuiltinModule`.
+  A chain rooted at a browser-only global (`window`, `document`, `HTMLFormElement`, …) is exempt — that global does not
+  exist in the Node test process; the name of a call (`evaluate`, `addInitScript`) proves nothing. `String(x)`,
+  `JSON.stringify(x)` (one argument), `console.*` and `Object.keys` are trusted per global; `expect` only while no
+  global builtin changed. A module with `eval`, `Function` or a `with` statement is never read.
+- `map --check` prints `builtins: intact`, or the first place in the tree that breaks each layer.
+- Motivation: 22 of 247 specs were unmapped in an adopting app, most only because a test table drove `goto`; now 0 of
+  247. Four independent counter-example reviews (18 + 13 + 14 + 7 cases, each run against real visits) are safe, and a
+  mutation check shows every one of 35 guards is load-bearing.
+
+### Upgrading
+
+- The index cache key moves to version 6 and covers the project files the e2e tree imports: the first `map` /
+  `select` after the update rebuilds `.e2e-rail/map.<app>.json`. Ledger lines, the verification policy (2) and the
+  shadow state are untouched.
+- A spec that was unmapped may now be mapped and drop out of selections it was only in for being unmapped — that is the
+  point. If a data-driven spec stays unmapped, `map --explain <spec>` and the `builtins:` line of `map --check` say why.
+
 ## 0.4.2 — 2026-10-26
 
 ### Added

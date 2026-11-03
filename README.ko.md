@@ -16,7 +16,7 @@
 **Claude Code** · **Codex** 스킬 층으로 이뤄진다. 선택·재실행·필터 실행을 전수 통과로 보고하지 않고, 선택 실행마다
 근거가 담긴 선택 블록을 붙이고, 어떤 주장 전에도 `verify` 를 거친다.
 
-**상태:** v0.4.2 (git 태그 `v0.4.2`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
+**상태:** v0.4.3 (git 태그 `v0.4.3`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
 `--test-list` 를 쓰므로 더 낮으면 e2e-rail 이 거부한다), `typescript` ≥ 5 가 필요하다(번들하지 않고 빌려 쓴다).
 
 ## 설치
@@ -24,7 +24,7 @@
 ### CLI (모든 런타임과 CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.4.2
+pnpm add -D github:sh5623/e2e-rail#v0.4.3
 ```
 
 팀과 CI 가 한 버전을 고정해 쓰는 방식(프로젝트 모드)이다. `pnpm exec e2e-rail …`(npm·yarn 이면 `npx e2e-rail …`)로
@@ -89,7 +89,7 @@ Playwright 실행 산출물은 레포 자신의 `.git/info/exclude` 에 적는�
 
 레포 하나에 약 30분.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.4.2`(개인 모드는 건너뛰고 3단계에서 `e2e-rail init --personal`)
+1. `pnpm add -D github:sh5623/e2e-rail#v0.4.3`(개인 모드는 건너뛰고 3단계에서 `e2e-rail init --personal`)
 2. Claude Code 또는 Codex 플러그인을 설치한다(위).
 3. `init` 스킬을 돌린다. 손으로는 `pnpm exec e2e-rail init`: `e2e-rail.config.mjs` 를 쓰고(찾은
    `playwright.config.*` 마다 앱 하나), `paths` 를 가진 tsconfig 를 고르고, `.gitignore` 에 `.e2e-rail/`,
@@ -136,7 +136,29 @@ Playwright 실행 산출물은 레포 자신의 `.git/info/exclude` 에 적는�
 `map` 은 spec 마다(캐시 `.e2e-rail/map.<app>.json`) 라우트(`goto` 리터럴과 리터럴 접두를 가진 템플릿, `basePath` 제거),
 API 글롭(`route()` 목), import 하는 소스 파일, support 헬퍼, Playwright 프로젝트(`playwright test --list` 기준)를
 색인한다. spec 은 Playwright 가 나열하는 테스트 파일 그대로다. 이름(`*.spec.*`, `*.test.*`, 사용자 `testMatch`)이나
-`tiers.ignore` 와 상관없고, 나열되지 않는 파일은 돌 프로젝트가 없으니 색인하지 않는다. spec 이 import 하는 support
+`tiers.ignore` 와 상관없고, 나열되지 않는 파일은 돌 프로젝트가 없으니 색인하지 않는다. `goto` 인자는 렉시컬 스코프로
+읽는다: 어디의 `const` 든(모듈, `describe`·테스트 본문, e2e 트리로 import 한 단계), 객체·배열 리터럴의 정적 멤버·인덱스,
+템플릿, `+`, 그리고 데이터 주도 테스트 — `for (const … of [ … ])` 변수(구조 분해 포함)는 도는 리터럴 배열의 모든 원소를,
+`?:`·`??`·`||` 는 양쪽을 뜻한다. 매개변수, `let`/`var`, 호출 결과, 스프레드, 구조 분해 기본값은 읽지 않는다. 객체·배열
+리터럴은 아무것도 그것을 바꿀 수 없을 때만 센다: 그것을 가진 이름의 모든 참조를 따라가고(const 별칭, for-of 변수, 그것을 받는
+e2e 트리 안 헬퍼, `some`/`every`/`find`/`findIndex`/`forEach` 의 콜백), 쓰기·삭제되거나 다른 호출(`Object.assign`,
+`Reflect.set` 등)에 넘겨지거나 반환되거나 다른 리터럴에 담기거나 다른 메서드와 쓰일 수 있는 손잡이는 그 리터럴과 그 안의
+모든 것을 오염시킨다(태그드 템플릿·`instanceof` 도 같다 · 헬퍼는 이름이 재할당되지 않을 때만 따라간다). export 된 상수는 한
+워커가 싣는 모든 모듈에 대해 본다 — spec·support 디렉터리, Playwright 설정, 그리고 그것들이 import 하는 모든 프로젝트 파일(한
+워커가 같은 support 모듈로 여러 spec 파일을 돈다 · 그 파일들은 캐시 키에 들어간다). 객체 리터럴은 순수 데이터일 때만 읽는다
+(메서드·접근자·함수 값·계산된 키·스프레드·`__proto__`·`toString`/`valueOf`/`toJSON`/`then` 없음). 반복문·배열 패턴·배열
+메서드·형변환은 JavaScript 내장을 돌리므로, 그 트리 어디에서도 내장을 바꿀 수 없을 때만 읽는다 — 문법에 대한 허용 목록이다:
+프로토타입에 닿거나 코드를 돌리는 이름(`prototype`·`__proto__`·`constructor`·`getPrototypeOf`·`getOwnPropertyDescriptor(s)`·
+`__lookupGetter__`/`__lookupSetter__`·`eval`·`Function`)이 어떤 표기로도(속성, 문자열 키, 색인이 조립할 수 있는 문자열) 없고,
+풀 수 없는 키로 전역 내장을 읽거나 그 너머에 쓰지 않고, 전역 객체·`Error`·선언 없는 이름에 쓰지 않고, `Object`·`Array`·
+`Function`·`Reflect`·`Iterator`·전역 객체·`require` 를 넘기지 않고, 느슨한 모드 코드에 `this`·`with` 문이 없고, `vm` 류·계산된 모듈·
+`process.getBuiltinModule` 로 모듈을 싣지 않을 것. 브라우저 전용 전역(`window`·`document`·`HTMLFormElement` …)에 뿌리를 둔 사슬은 예외다 — 그 전역은 Node 테스트
+프로세스에 없다. 호출 이름(`evaluate`·`addInitScript`)은 그 함수가 어디서 도는지 증명하지 못한다. `String(x)`·
+`JSON.stringify(x)`(인자 1개)·`console.*(x)`·`Object.keys(x)` 는 그 전역도 쓰이거나 넘겨지지 않을 때만(`.map(Number)` 는
+`Number` 를 넘긴다), Playwright `expect` 는 어떤 전역 내장도 바뀌지 않고 `expect` 를 확장·쓰기·개명하지 않을 때만 믿는다.
+`map --check` 가 층마다 처음 깨는 위치를 출력한다. 검사 밖: 실행 중에만 생기는 위험 이름이 호출·매개변수를 거쳐 키가 되는 경우,
+앱 루트 밖 코드. `eval`·`Function` 을 부르거나 `with` 문이 있는 모듈과, 통째로 가져가는(namespace·default·`require`·`import()`·재-export) 모듈의
+export 는 읽지 않는다. spec 이 import 하는 support
 헬퍼 안의 리터럴 `goto` 는 그 spec 의 라우트에 합쳐지지만, 자기 navigation 을 읽을 수 없는 spec 을 구해 주지는
 않는다. 그런 spec 은 **unmapped** 이고 모든 src 변경마다 돈다. unmapped 비율이 선택이 아낄 수 있는 상한이다.
 

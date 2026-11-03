@@ -16,7 +16,7 @@ It is a zero-dependency Node CLI (`e2e-rail`) that your scripts and CI call, plu
 **Codex** that make agents use it honestly: no selected, rerun or filtered run reported as a full pass, a selection
 block with reasons for every selected run, and `verify` before any claim.
 
-**Status:** v0.4.2 (git tag `v0.4.2`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
+**Status:** v0.4.3 (git tag `v0.4.3`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
 `--test-list`; e2e-rail refuses an older one) and `typescript` ≥ 5 in the host repository (borrowed, not bundled).
 
 ## Install
@@ -24,7 +24,7 @@ block with reasons for every selected run, and `verify` before any claim.
 ### The CLI (every runtime and CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.4.2
+pnpm add -D github:sh5623/e2e-rail#v0.4.3
 ```
 
 This pins one version for the team and CI (project mode): they call it as `pnpm exec e2e-rail …` (`npx e2e-rail …`
@@ -91,7 +91,7 @@ existing in-repository ledger.
 
 About 30 minutes per repository.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.4.2` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
+1. `pnpm add -D github:sh5623/e2e-rail#v0.4.3` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
 2. Install the Claude Code or the Codex plugin (above).
 3. Run the `init` skill, or by hand `pnpm exec e2e-rail init`: it writes `e2e-rail.config.mjs` (one app per
    `playwright.config.*` found), picks the tsconfig that holds your `paths`, adds `.e2e-rail/`, `test-results/`,
@@ -140,7 +140,33 @@ spec and every `alwaysRun` spec ride along. The app runs in full instead when th
 literal prefix, `basePath` removed), its API globs (`route()` mocks), the source files it imports, its support helpers
 and its Playwright projects (from `playwright test --list`). The specs are exactly the test files Playwright lists,
 whatever their name (`*.spec.*`, `*.test.*`, a custom `testMatch`) and whatever `tiers.ignore` says; a file it does not
-list has no project to run in and is not indexed. Literal `goto` calls inside the support helpers a spec
+list has no project to run in and is not indexed. A `goto` argument is read by lexical scope: a `const` anywhere
+(module, `describe` or test body, or one import hop into the e2e tree), a static member or index of an object or array
+literal, a template, `+`, and data-driven tests — a `for (const … of [ … ])` variable (destructuring included) stands
+for every element of the literal array it walks, and `?:`, `??`, `||` for both sides. Parameters, `let`/`var`, call
+results, spreads and destructuring defaults are never read. An object or array literal counts only while nothing can
+change it: every reference to the name holding it is followed (a const alias, a for-of variable, a helper declared in
+the e2e tree that receives it and whose name is never reassigned, the callback of `some`/`every`/`find`/`findIndex`/
+`forEach`), and a handle that can be written, deleted, passed to any other call (`Object.assign`, `Reflect.set`, …),
+returned, stored in another literal, tagged or tested with `instanceof`, or used with another method taints the literal
+and everything it holds. An exported constant is checked against every module one worker loads: the spec and support dirs, the Playwright
+config and every project file they import (one worker runs many spec files with the same support modules; those files
+are part of the cache key). Only plain-data object literals are read (no method, accessor, function value, computed
+key, spread, `__proto__`, `toString`/`valueOf`/`toJSON`/`then`). Loops, array patterns, array methods and coercions run
+JavaScript's builtins, so they are read only while nothing in that tree can change them — an allow-list over syntax:
+no name that reaches a prototype or runs code (`prototype`, `__proto__`, `constructor`, `getPrototypeOf`,
+`getOwnPropertyDescriptor(s)`, `__lookupGetter__`/`__lookupSetter__`, `eval`, `Function`) in any spelling (a property,
+a string key, a string the index can assemble); no key it cannot work out read from a global builtin or written
+through; no write to the global object, `Error` or an undeclared name; `Object`, `Array`, `Function`, `Reflect`,
+`Iterator`, the global object and `require` never handed out; no `this` in sloppy code or `with` statement; no `vm`-like or
+computed module load, no `process.getBuiltinModule`. A chain rooted at a browser-only global (`window`, `document`, `HTMLFormElement`, …) is exempt: that global does
+not exist in the Node test process. The name of a call (`evaluate`, `addInitScript`) proves nothing about where its
+function runs. `String(x)`, `JSON.stringify(x)` (one argument), `console.*(x)` and `Object.keys(x)` are trusted while
+their global is also never written or handed out (`.map(Number)` hands `Number` out); Playwright's `expect` while no
+global builtin is changed at all and `expect` is never extended, written or renamed. `map --check` prints the first
+place that breaks each layer. Outside the check: a dangerous name that exists only at run time and reaches a key
+through a call or a parameter, and code outside the app root. A module that calls `eval` or `Function` or has a `with` statement,
+and the exports of a module taken whole (namespace, default, `require`, `import()`, re-export), are never read. Literal `goto` calls inside the support helpers a spec
 imports are merged into its routes, but they never rescue a spec whose own navigation cannot be read: that spec is
 **unmapped** and runs on every src change. The unmapped share is the ceiling of what selection can save.
 
