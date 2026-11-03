@@ -21,10 +21,10 @@ repositories.
 ```sh
 e2e-rail --version
 ```
-A version (`0.4.2`) → installed. Not found and the repository pins it: `pnpm exec e2e-rail --version`. For project
+A version (`0.4.3`) → installed. Not found and the repository pins it: `pnpm exec e2e-rail --version`. For project
 mode, ask the human first; on a yes:
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.4.2
+pnpm add -D github:sh5623/e2e-rail#v0.4.3
 ```
 It needs Node ≥ 20 and borrows the repo's own `@playwright/test` 1.56 or newer and `typescript`; an older
 Playwright is refused (`@playwright/test 1.56.0 or newer is required (found <x>)`): ask the human to upgrade it.
@@ -77,8 +77,14 @@ Per app, read:
 
 Why one spec maps as it does: `e2e-rail map --app <app> --explain e2e/<spec>.spec.ts` prints its routes,
 apis, imports, supports, projects and `unmapped`. A spec is unmapped when its own `goto` calls cannot be read as a
-literal route (a computed URL, a bare `goto(…)` helper) or it has none, or when it or a helper it imports has an import
-inside the app that does not resolve.
+literal route (a call result, a helper parameter, a `let`, a bare `goto(…)` helper) or it has none, or when it or a
+helper it imports has an import inside the app that does not resolve. Loop variables over literal arrays, scoped consts
+and both sides of `?:` / `??` are read (README «Spec index»), so a data-driven test needs no unrolling — unless the
+array or an element is handed to code the index cannot follow (then it stays unmapped, by design).
+`map --check` also prints `builtins:` — `intact`, or the first place in the e2e tree that could change JavaScript's
+builtins; then loops over literal arrays are not read and every data-driven spec is unmapped, so report that line and
+the file it names. `global changed:` lines (a builtin like `Number` handed out, a global written) only stop trusting
+that global's read-only calls and `expect`.
 
 ## 5. Report
 ```
