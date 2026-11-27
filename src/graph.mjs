@@ -85,7 +85,7 @@ const templatePattern = (t) => (t.head.text + t.templateSpans.map((s) => `*${s.l
 //   contexts   `require.context(dir, recursive)`
 //   urls       `new URL('<literal>', import.meta.url)`
 //   opaque     an argument that is not a literal: the file may depend on anything
-function scanModule(ts, sf) {
+export function scanModule(ts, sf) {
   const out = { specs: [], globs: [], templates: [], contexts: [], urls: [], opaque: false };
   const visit = (n) => {
     if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) out.specs.push(n.moduleSpecifier.text);
@@ -260,7 +260,7 @@ export async function loadOrBuildGraph({ config, app, ts }) {
 // Cases where the graph cannot judge, each of which widens:
 //   graph.missing is non-empty   an internal import is unresolved, so no edge can be trusted: everything is unresolved
 //   no main (null, or not a node of the graph)   shell coupling cannot be told: every changed graph file is shell
-export function affectedEntries(graph, changedRel, entryRel, mainRel, boundaryRel = []) {
+export function affectedEntries(graph, changedRel, entryRel, mainRel, boundaryRel = [], wrapperBoundaries = new Map()) {
   const starts = [...new Set(changedRel)];
   const entries = new Set();
   const unresolved = [];
@@ -282,7 +282,8 @@ export function affectedEntries(graph, changedRel, entryRel, mainRel, boundaryRe
       if (isEntry) { entries.add(f); hitEntry = true; }
       if (f === mainRel) hitMain = true;
       for (const importer of graph.reverse[f] ?? []) {
-        if (seen.has(importer) || (isEntry && boundarySet.has(importer))) continue;
+        if (seen.has(importer)) continue;
+        if (isEntry && boundarySet.has(importer) && (!wrapperBoundaries.has(f) || wrapperBoundaries.get(f).has(importer))) continue;
         seen.add(importer);
         queue.push(importer);
       }

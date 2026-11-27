@@ -16,7 +16,7 @@ It is a zero-dependency Node CLI (`e2e-rail`) that your scripts and CI call, plu
 **Codex** that make agents use it honestly: no selected, rerun or filtered run reported as a full pass, a selection
 block with reasons for every selected run, and `verify` before any claim.
 
-**Status:** v0.4.3 (git tag `v0.4.3`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
+**Status:** v0.4.4 (git tag `v0.4.4`). Requires Node ≥ 20, `@playwright/test` ≥ 1.56 (selected and shard runs use
 `--test-list`; e2e-rail refuses an older one) and `typescript` ≥ 5 in the host repository (borrowed, not bundled).
 
 ## Install
@@ -24,7 +24,7 @@ block with reasons for every selected run, and `verify` before any claim.
 ### The CLI (every runtime and CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.4.3
+pnpm add -D github:sh5623/e2e-rail#v0.4.4
 ```
 
 This pins one version for the team and CI (project mode): they call it as `pnpm exec e2e-rail …` (`npx e2e-rail …`
@@ -91,7 +91,7 @@ existing in-repository ledger.
 
 About 30 minutes per repository.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.4.3` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
+1. `pnpm add -D github:sh5623/e2e-rail#v0.4.4` (personal mode: skip this and run `e2e-rail init --personal` in step 3)
 2. Install the Claude Code or the Codex plugin (above).
 3. Run the `init` skill, or by hand `pnpm exec e2e-rail init`: it writes `e2e-rail.config.mjs` (one app per
    `playwright.config.*` found), picks the tsconfig that holds your `paths`, adds `.e2e-rail/`, `test-results/`,
@@ -175,6 +175,14 @@ exact path; a route with `children` is a layout and maps its module to `<path>/*
 layout affects every route below it. The `manual` adapter takes `adapter.map`. Either adapter narrows only when
 `adapter.routeFiles` lists the route-table files: they bound the climb, otherwise every page reaches the app entry
 through the router. The entry is `src/main.*` or `src/index.*`, or `main` when set.
+
+A route table can be mounted through a local or directly imported wrapper, for example
+`children: frame(pages)` or `...choose(preview, pages)`. The adapter follows a covered literal table
+through identity returns and one-to-one maps that copy the matching fields. Each mount retains the
+original page modules, including when a wrapper consumes `lazy` and renders a component.
+Dependencies of a replacement view or guard cover the wrapped table, including both outcomes of a
+conditional replacement. A dependency also used by the shell can still trigger a full run.
+Filters, path rewrites and other unproven transforms appear in `map --check` as unresolved.
 
 ### Fingerprint, ledger, verify
 

@@ -32,8 +32,8 @@ const write = (root, rel, text) => {
 function realCtx(config, ts) {
   return {
     forApp: async (app) => {
-      const { entries, unresolved } = getAdapter(app.adapter.name).routeEntries({ config, app, ts });
-      return { index: await loadOrBuildSpecIndex({ config, app, ts }), graph: await loadOrBuildGraph({ config, app, ts }), entries, unresolvedEntries: unresolved, main: findMain(config, app) };
+      const { entries, unresolved, wrapperBoundaries } = getAdapter(app.adapter.name).routeEntries({ config, app, ts });
+      return { index: await loadOrBuildSpecIndex({ config, app, ts }), graph: await loadOrBuildGraph({ config, app, ts }), entries, unresolvedEntries: unresolved, wrapperBoundaries, main: findMain(config, app) };
     },
   };
 }
@@ -561,4 +561,50 @@ test('apiMatches: a dynamic literal tail may be anything, but a leading ** never
   assert.ok(!apiMatches('**/api/o*', '/api/orders/*'), '`*` does not cross a slash');
   assert.ok(apiMatches('http://localhost:5203/api/orders/list', '/api/orders/list'));
   assert.ok(apiMatches('**', '/api/x/*'));
+});
+
+test('select follows original pages and both conditional views, and keeps a shared shell dependency full', async () => {
+  const { root, config, cleanup } = await setup();
+  try {
+    const guard = 'src/components/Frame.ts';
+    const helper = 'src/decorate.ts';
+    write(root, guard, 'export const Frame = () => null;');
+    write(root, helper, `
+      import { Frame } from './components/Frame';
+      export function frame(enabled, routes) {
+        if (!enabled) return routes;
+        return routes.map(r => r.path === 'orders' ? { ...r, Component: Frame } : r);
+      }
+    `);
+    const router = `
+      import { ordersRoutes } from '@/features/orders/routes';
+      import { cartRoutes } from '@/features/cart/routes';
+      import { frame } from './decorate';
+      export const router = [{path: '/app', children: [...frame(true, ordersRoutes), ...cartRoutes]}];
+    `;
+    write(root, 'src/router.ts', router);
+    const git = args => assert.equal(execCapture('git', args, { cwd: root }).status, 0);
+    git(['add', '.']);
+    git(['commit', '-qm', 'synthetic route table']);
+    async function edit(file) {
+      const original = readFileSync(path.join(root, file), 'utf8');
+      write(root, file, original + '\n// edit\n');
+      try { return await select({ config, base: 'HEAD', includeUncommitted: true }); }
+      finally { write(root, file, original); }
+    }
+    const pageChange = await edit('src/features/orders/OrdersPage.ts');
+    assert.equal(pageChange.apps.web.mode, 'partial');
+    assert.deepEqual(files(pageChange), ['e2e/orders.spec.ts', 'e2e/smoke.spec.ts']);
+    for (const file of [guard, helper]) {
+      const change = await edit(file);
+      assert.equal(change.apps.web.mode, 'partial');
+      assert.deepEqual(files(change), ['e2e/order-detail.spec.ts', 'e2e/orders.spec.ts', 'e2e/smoke.spec.ts']);
+    }
+    write(root, 'src/router.ts', router + "\nimport { Frame } from './components/Frame'; export const shell = Frame;\n");
+    git(['add', 'src/router.ts']);
+    git(['commit', '-qm', 'render frame in shell too']);
+    const shared = await edit(guard);
+    assert.equal(shared.apps.web.mode, 'full');
+    assert.ok(shared.apps.web.reasons.includes('graph-shell:' + guard));
+  } finally { cleanup(); }
 });

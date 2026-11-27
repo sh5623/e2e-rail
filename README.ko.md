@@ -16,7 +16,7 @@
 **Claude Code** · **Codex** 스킬 층으로 이뤄진다. 선택·재실행·필터 실행을 전수 통과로 보고하지 않고, 선택 실행마다
 근거가 담긴 선택 블록을 붙이고, 어떤 주장 전에도 `verify` 를 거친다.
 
-**상태:** v0.4.3 (git 태그 `v0.4.3`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
+**상태:** v0.4.4 (git 태그 `v0.4.4`). 호스트 레포에 Node ≥ 20, `@playwright/test` ≥ 1.56(선택·샤드 실행이
 `--test-list` 를 쓰므로 더 낮으면 e2e-rail 이 거부한다), `typescript` ≥ 5 가 필요하다(번들하지 않고 빌려 쓴다).
 
 ## 설치
@@ -24,7 +24,7 @@
 ### CLI (모든 런타임과 CI)
 
 ```sh
-pnpm add -D github:sh5623/e2e-rail#v0.4.3
+pnpm add -D github:sh5623/e2e-rail#v0.4.4
 ```
 
 팀과 CI 가 한 버전을 고정해 쓰는 방식(프로젝트 모드)이다. `pnpm exec e2e-rail …`(npm·yarn 이면 `npx e2e-rail …`)로
@@ -89,7 +89,7 @@ Playwright 실행 산출물은 레포 자신의 `.git/info/exclude` 에 적는�
 
 레포 하나에 약 30분.
 
-1. `pnpm add -D github:sh5623/e2e-rail#v0.4.3`(개인 모드는 건너뛰고 3단계에서 `e2e-rail init --personal`)
+1. `pnpm add -D github:sh5623/e2e-rail#v0.4.4`(개인 모드는 건너뛰고 3단계에서 `e2e-rail init --personal`)
 2. Claude Code 또는 Codex 플러그인을 설치한다(위).
 3. `init` 스킬을 돌린다. 손으로는 `pnpm exec e2e-rail init`: `e2e-rail.config.mjs` 를 쓰고(찾은
    `playwright.config.*` 마다 앱 하나), `paths` 를 가진 tsconfig 를 고르고, `.gitignore` 에 `.e2e-rail/`,
@@ -167,6 +167,13 @@ export 는 읽지 않는다. spec 이 import 하는 support
 라우트에 영향을 주기 때문이다. `manual` 어댑터는 `adapter.map` 을 받는다. 어느 어댑터든 `adapter.routeFiles` 가
 라우트 표 파일을 나열할 때만 좁힌다. 그 파일이 위로 오르기를 멈추게 하고, 없으면 모든 페이지가 라우터를 거쳐 앱
 엔트리에 닿는다. 엔트리는 `src/main.*` 또는 `src/index.*`, 지정하면 `main` 이다.
+
+`children: frame(pages)`, `...choose(preview, pages)`처럼 같은 파일의 함수나 직접 임포트한 함수로도
+라우트 표를 장착할 수 있다. 어댑터는 `routeFiles`에 포함된 리터럴 표를 그대로 반환하거나 매칭 속성을
+복사하는 1:1 map을 읽는다. `lazy`를 꺼내 컴포넌트로 감싸도 각 장착 경로에 원래 화면 모듈을 연결한다.
+대체 화면과 가드의 의존성은 감싼 표 전체에 연결하며, 조건에 따라 화면을 교체하면 양쪽을 포함한다.
+셸에서도 쓰는 의존성이 바뀌면 전수가 될 수 있다. 필터, 경로 변경 등 보존을 확인할 수 없는 변환은
+`map --check`에 미해석으로 표시한다.
 
 ### 지문 · 원장 · verify
 

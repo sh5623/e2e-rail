@@ -350,3 +350,130 @@ test('manual adapter normalizes routes and files, and flags an unreadable map en
   assert.equal(unresolved.length, 1);
   assert.match(unresolved[0], /manual map 'broken'/);
 });
+
+test('a view wrapper retains the original pages at each mount and adds the guard to each wrapped route', async () => {
+  const { entries, unresolved } = await readSource(`
+    import { defer } from 'fake-router';
+    import { Header as Frame } from '@/shell/Header';
+    import { ordersRoutes as pages } from '@/features/orders/routes';
+    function framed(input) {
+      return input.map(({ lazy: load, ...route }) => {
+        if (typeof load !== 'function') throw new Error('missing view');
+        const Page = defer(async () => ({ default: (await load()).Component }));
+        return { ...route, element: <Frame><Page /></Frame> };
+      });
+    }
+    export const routes = [
+      { path: 'one', children: framed(pages) },
+      { path: 'two', children: framed(pages) },
+    ];
+  `, { file: 'src/router.tsx', routeFiles: ['src/router.tsx', 'src/features/orders/routes.ts'],
+    extra: FAKE_ROUTER });
+  assert.deepEqual(unresolved, []);
+  for (const prefix of ['one', 'two']) {
+    for (const [segment, name] of [['orders', 'OrdersPage'], ['orders/:id', 'OrderDetailPage']]) {
+      assert.ok(entries.some(e => e.route === `${prefix}/${segment}` && e.file.endsWith('/' + name + '.ts')));
+      assert.ok(entries.some(e => e.route === `${prefix}/${segment}` && e.file === 'src/shell/Header.ts'));
+    }
+  }
+});
+
+test('spread of an imported conditional wrapper reads its declaration outside routeFiles', async () => {
+  const { entries, unresolved } = await readSource(`
+    import { choose as decorate } from './views';
+    const list = [{ path: 'inbox', ${page('OrdersPage')} }];
+    export const routes = [...decorate(true, list)];
+  `, { extra: { 'src/views.tsx': `
+    import { HomePage } from '@/features/home/HomePage';
+    export function choose(flag, rows) {
+      if (!flag) return rows;
+      return rows.map(row => {
+        if (row.path !== 'inbox') return row;
+        const { lazy, ...rest } = row;
+        return { ...rest, handle: { ...rest.handle }, Component: HomePage };
+      });
+    }
+    export const unrelated = unknown([{path: 'unmounted'}]);
+  ` } });
+  assert.deepEqual(unresolved, []);
+  for (const file of ['src/features/orders/OrdersPage.ts', 'src/features/home/HomePage.ts', 'src/views.tsx']) {
+    assert.ok(entries.some(e => e.route === 'inbox' && e.file === file), file);
+  }
+});
+
+test('wrapper proofs fail closed on changed matching fields, cardinality, aliases and unknown inputs', async () => {
+  const rejects = [
+    'rows.filter(r => r.path)',
+    'rows.flatMap(r => [r, r])',
+    'rows.map(r => ({ ...r, path: "moved" }))',
+    'rows.map(r => ({ ...r, children: [] }))',
+    'rows.map(r => ({ ...r, [field]: null }))',
+    'rows.map(({ path, ...rest }) => ({ ...rest, element: null }))',
+    'rows.map(r => { r.path = "moved"; return r; })',
+    'rows.map(r => { const alias = r; return { ...alias, element: null }; })',
+    'rows.map(r => { if (r.path) return r; })',
+    'rows.map(async r => ({ ...r, element: null }))',
+    'rows.map(r => ({ ...r, element: localView() }))',
+  ];
+  for (const expression of rejects) {
+    const { unresolved } = await readSource(`
+      const localView = () => null;
+      function wrap(rows) { return ${expression}; }
+      const pages = [{ path: 'inbox', ${page('OrdersPage')} }];
+      export const router = [{ children: wrap(pages) }];
+    `);
+    assert.ok(unresolved.length, expression);
+  }
+});
+
+test('a path preceding the copy requires an own path on every input, including across an empty-list gate', async () => {
+  const source = item => `
+    function wrap(flag, rows) {
+      return flag ? [] : rows.map(row => ({ path: 'fallback', ...row, element: null }));
+    }
+    const pages = [${item}];
+    export const router = [{ path: 'outer', children: wrap(true, pages) }];
+  `;
+  const ok = await readSource(source(`{ path: 'inbox', ${page('OrdersPage')} }`));
+  assert.deepEqual(ok.unresolved, []);
+  assert.ok(ok.entries.some(e => e.route === 'outer/inbox'));
+  const bad = await readSource(source(`{ index: true, ${page('OrdersPage')} }`));
+  assert.ok(bad.unresolved.length);
+});
+
+test('uncovered input tables, unreadable wrapper modules, recursive mounts and mutated bindings stay unresolved', async () => {
+  const source = `
+    import { pages } from './table';
+    import { decorate } from './decorate';
+    export const router = [{ children: decorate(pages) }];
+  `;
+  const extra = {
+    'src/table.ts': `export const pages = [{ path: 'inbox', ${page('OrdersPage')} }];`,
+    'src/decorate.ts': 'export const decorate = rows => rows.map(row => ({ ...row, element: null }));',
+  };
+  assert.ok((await readSource(source, { extra })).unresolved.length);
+  assert.ok((await readSource(source, { extra, unreadable: ['src/decorate.ts'], routeFiles: ['src/routes.ts', 'src/table.ts'] })).unresolved.length);
+  const local = 'function decorate(rows) { return rows.map(r => ({ ...r, element: null })); }';
+  for (const setup of [
+    "const pages = [{ path: 'loop', children: decorate(pages) }];",
+    "const pages = [{ path: 'old' }]; pages[0].path = 'new';",
+    "const pages = [{ path: 'old' }]; decorate = rows => [];",
+  ]) {
+    assert.ok((await readSource(local + setup + 'export const router = [{ children: decorate(pages) }];')).unresolved.length, setup);
+  }
+});
+
+test('environment gates take the union of identity, empty and conditional map outcomes', async () => {
+  for (const body of [
+    'if (enabled) return rows; return [];',
+    'return rows.map(row => enabled && row.path === "inbox" ? { ...row, element: null } : row);',
+  ]) {
+    const result = await readSource(`
+      function gate(enabled, rows) { ${body} }
+      const pages = [{ path: 'inbox', ${page('OrdersPage')} }];
+      export const routes = [{ path: 'team', children: gate(false, pages) }];
+    `);
+    assert.deepEqual(result.unresolved, [], body);
+    assert.ok(result.entries.some(e => e.route === 'team/inbox' && e.file.endsWith('OrdersPage.ts')), body);
+  }
+});

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.4 — 2026-11-27
+
+### Changed
+
+- The React Router adapter follows a covered route table through a local or directly imported wrapper in
+  `children` or a route-list spread. It recognizes identity returns, empty-list gates and one-to-one maps
+  that preserve route matching fields.
+- Each mount keeps the original page dependency when a wrapper converts `lazy` into an `element` or
+  `Component`. Changes to a conditional replacement or guard select the wrapped routes. A dependency
+  shared with the application shell can still require a full run.
+- `map --check` reports path rewrites, filters and other transforms the adapter cannot prove safe as
+  unresolved. List the input route tables in `adapter.routeFiles` to enable wrapper recognition.
+
 ## 0.4.3 — 2026-11-03
 
 ### Changed

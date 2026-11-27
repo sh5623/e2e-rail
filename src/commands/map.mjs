@@ -29,7 +29,7 @@ async function explain(config, app, raw) {
 
 // Would any src change of this app narrow, and if not, why. It asks the selector's own question for each route entry
 // file: does a change to that page reach only route entries (narrow) or also main / nothing (the app runs in full)?
-function verdict({ app, graph, entries, unresolved, main, boundary }) {
+function verdict({ app, graph, entries, unresolved, main, boundary, wrapperBoundaries }) {
   const full = (why) => `every src change will run full: ${why}`;
   if (unresolved.length) return full(`the ${app.adapter.name} adapter could not read ${unresolved.length} route definition(s) (the ! lines above)`);
   if (graph.missing.length) return full(`${graph.missing.length} internal import(s) do not resolve, so no import edge can be trusted (check tsconfig paths)`);
@@ -40,7 +40,7 @@ function verdict({ app, graph, entries, unresolved, main, boundary }) {
   let narrow = 0;
   let shell = 0;
   for (const f of files) {
-    const r = affectedEntries(graph, [f], files, main, boundary);
+    const r = affectedEntries(graph, [f], files, main, boundary, wrapperBoundaries);
     if (r.shell.length) shell += 1;
     else if (!r.unresolved.length) narrow += 1;
   }
@@ -57,7 +57,7 @@ async function mapApp(config, app, check) {
   const ts = await loadTypeScript(dirAbs);
   const index = await loadOrBuildSpecIndex({ config, app, ts });
   const specs = Object.entries(index.specs);
-  const { entries, unresolved } = getAdapter(app.adapter.name).routeEntries({ config, app, ts });
+  const { entries, unresolved, wrapperBoundaries } = getAdapter(app.adapter.name).routeEntries({ config, app, ts });
   console.log(`app ${app.name}: ${specs.length} specs indexed · ${entries.length} route entries · adapter unresolved ${unresolved.length}`);
   for (const u of unresolved) console.log(`  ! ${u}`);
   for (const f of app.adapter.unreadable ?? []) console.log(`  ~ unreadable: ${f} (adapter.unreadable: not read, no entries; tiers.full runs the app in full when it changes)`);
@@ -77,7 +77,7 @@ async function mapApp(config, app, check) {
   for (const m of graph.missing.slice(0, 5)) console.log(`    missing: ${m.from} → ${m.spec}`);
   if (graph.missing.length > 5) console.log(`    … and ${graph.missing.length - 5} more`);
   const boundary = walk(dirAbs).filter((rel) => matchAny(app.adapter.routeFiles, rel));
-  console.log(`  verdict: ${verdict({ app, graph, entries, unresolved, main, boundary })}`);
+  console.log(`  verdict: ${verdict({ app, graph, entries, unresolved, main, boundary, wrapperBoundaries })}`);
   const unmapped = specs.filter(([, s]) => s.unmapped).map(([f]) => f);
   const pct = specs.length ? Math.round((unmapped.length / specs.length) * 100) : 0;
   console.log(`  unmapped: ${unmapped.length}/${specs.length} (${pct}%) — these run on every src change`);

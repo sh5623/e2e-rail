@@ -3,6 +3,8 @@ import { appDir } from '../config.mjs';
 import { expandGlob } from '../util/glob.mjs';
 import { toAppRel } from '../util/playwright.mjs';
 import { parseFile, readCompilerOptions } from '../util/ts.mjs';
+import { scanModule } from '../graph.mjs';
+import { readRouteWrapper, wrapperBindings, wrapperCondition } from './route-wrapper.mjs';
 import { normalizePattern } from './pattern.mjs';
 
 // Reads react-router route objects `{ path: '<literal>', lazy: async () => ({ Component: (await import('<module>')).X }),
@@ -111,6 +113,7 @@ export const reactRouterLazy = {
     };
 
     // Module-level facts of a route file: its imports, its top-level consts and what it exports (and re-exports).
+    const helperFiles = new Map(); // Only a directly imported function is inspected outside routeFiles.
     const factsCache = new Map();
     const factsOf = (rel) => {
       if (factsCache.has(rel)) return factsCache.get(rel);
@@ -119,7 +122,7 @@ export const reactRouterLazy = {
       const functions = new Map(); // top-level function declaration name -> declaration
       const exportedAs = new Map(); // export name -> local name
       const reexports = []; // { spec, names: Map<export name, original name> | null (`export *`) }
-      for (const st of parsed.get(rel).statements) {
+      for (const st of (parsed.get(rel) ?? helperFiles.get(rel)).statements) {
         if (ts.isImportDeclaration(st) && st.importClause && ts.isStringLiteral(st.moduleSpecifier)) {
           const spec = st.moduleSpecifier.text;
           const { name, namedBindings } = st.importClause;
@@ -136,6 +139,9 @@ export const reactRouterLazy = {
           }
         } else if (ts.isFunctionDeclaration(st) && st.name && st.body) {
           functions.set(st.name.text, st);
+          if (st.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
+            exportedAs.set(st.modifiers.some(m => m.kind === ts.SyntaxKind.DefaultKeyword) ? 'default' : st.name.text, st.name.text);
+          }
         } else if (ts.isExportDeclaration(st) && !st.isTypeOnly) {
           const spec = st.moduleSpecifier && ts.isStringLiteral(st.moduleSpecifier) ? st.moduleSpecifier.text : null;
           if (!st.exportClause) {
@@ -205,11 +211,48 @@ export const reactRouterLazy = {
       });
     };
 
-    for (const [rel, sf] of parsed) {
+    // Resolve only a top-level declaration or a direct named import. Route tables
+    // still have to be covered even when the wrapper lives in a helper module.
+    function binding(rel, name, helper) {
+      const imp = factsOf(rel).imports.get(name);
+      if (!imp) return { rel, name };
+      const { file } = resolveSpec(imp.spec, rel);
+      if (!file || file.startsWith('../') || unreadSet.has(file)) return null;
+      if (!parsed.has(file) && !helperFiles.has(file)) {
+        const relative = path.posix.relative(app.srcDir, file);
+        if (!helper || relative.startsWith('../') || !/\.[cm]?[jt]sx?$/.test(file)) return null;
+        try { helperFiles.set(file, parseFile(ts, path.join(dirAbs, file))); }
+        catch { return null; }
+      }
+      if (!helper && !parsed.has(file)) return null;
+      const local = factsOf(file).exportedAs.get(imp.name);
+      return local ? { rel: file, name: local } : null;
+    }
+
+    const activeTables = new Set();
+    const listReferences = new Set();
+    const readers = new Map();
+    const checkedMaps = new Set();
+    const binders = new Map();
+    const unknownCalls = new Map();
+    const wrapperBoundaries = new Map(); // dependency file -> proven route-table importers
+    const permittedUses = new Map(); // by source file, AST regions accounted for at mounted sites
+    function permit(rel, node) {
+      if (!permittedUses.has(rel)) permittedUses.set(rel, new Set());
+      permittedUses.get(rel).add(node);
+    }
+    const mountedTables = new Map(); // uses of each input binding, in the declaring and consuming modules
+    function tableUses(rel, name) {
+      const key = `${rel}\0${name}`;
+      if (!mountedTables.has(key)) mountedTables.set(key, { rel, name, uses: new Set() });
+      return mountedTables.get(key).uses;
+    }
+    const mountedFunctions = new Map(); // local helper body -> verified references
+    const addEntry = (route, file) => entries.set(`${route}\0${file}`, { route, file });
+    function readModule(rel, sf) {
       const { imports } = factsOf(rel);
       const fail = (node, message) => unresolved.add(`${rel}:${sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1}: ${message}`);
       const importedFile = (name) => resolveSpec(imports.get(name).spec, rel);
-      const addEntry = (route, file) => entries.set(`${route}\0${file}`, { route, file });
 
       // Imported names mentioned below `node`, except the identifier nodes in `skip`: none of them is a leaf page.
       const markNonLeaf = (node, skip = new Set()) => {
@@ -238,6 +281,7 @@ export const reactRouterLazy = {
         // A reference into a module listed in adapter.unreadable is accepted without reading it: its routes are no
         // entries, and an edit to it (or to anything only it reaches) climbs to main and runs the app in full.
         const imp = imports.get(name);
+        if (ts.isSpreadElement(node)) listReferences.add(unwrap(node.expression));
         if (imp && unreadSet.has(resolveSpec(imp.spec, rel).file)) return;
         const norm = normalizePattern(prefix, basePath);
         if (norm !== '') {
@@ -248,6 +292,98 @@ export const reactRouterLazy = {
         }
       };
 
+      function wrapped(call, prefix) {
+        if (!ts.isCallExpression(call) || !ts.isIdentifier(call.expression) || call.questionDotToken) return false;
+        // The resolver uses module bindings. Never guess through a local scope.
+        for (let p = call.parent; p && p !== sf; p = p.parent) {
+          if (p.parent === sf && !(ts.isVariableStatement(p) || ts.isExpressionStatement(p) || ts.isExportAssignment(p))) return false;
+          if (ts.isFunctionLike(p) || ts.isBlock(p) || ts.isModuleBlock(p) || ts.isClassLike(p)) return false;
+        }
+        const target = binding(rel, call.expression.text, true);
+        if (!target) return false;
+        const facts = factsOf(target.rel);
+        const fn = facts.functions.get(target.name) ?? facts.consts.get(target.name);
+        if (!fn || !(ts.isFunctionDeclaration(fn) || ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) return false;
+        const proof = readRouteWrapper(ts, fn, unwrap, keyOf);
+        if (!proof || call.arguments.length !== fn.parameters.length || !call.arguments.every(arg => wrapperCondition(ts, arg, unwrap))) return false;
+        const source = fn.getSourceFile();
+        if (source.parseDiagnostics.length || sf.parseDiagnostics.length) return false;
+        const argument = unwrap(call.arguments[proof.input]);
+        if (!ts.isIdentifier(argument)) return false;
+        const table = binding(rel, argument.text, false);
+        const array = table && factsOf(table.rel).consts.get(table.name);
+        if (!array || array.getSourceFile().parseDiagnostics.length || !ts.isArrayLiteralExpression(array) || !array.elements.every(e => isRouteObject(unwrap(e)))) return false;
+
+        // Computed/duplicate keys or a prototype can hide a matching field.
+        if (!array.elements.every(item => {
+          const keys = unwrap(item).properties.map(keyOf);
+          return keys.every(key => key && key !== '__proto__') && new Set(keys).size === keys.length;
+        })) return false;
+        if (activeTables.has(array) || [...proof.requiredKeys].some(key => array.elements.some(e => !propOf(unwrap(e), key)))) return false;
+        const deps = new Set();
+        if (target.rel !== rel) deps.add(target.rel);
+        if (!binders.has(source)) binders.set(source, wrapperBindings(ts, source));
+        const names = binders.get(source)(fn);
+        if (!names) return false;
+        for (const name of names) {
+          const { file, external } = resolveSpec(facts.imports.get(name).spec, target.rel);
+          if (file) deps.add(file);
+          else if (!external) return false;
+        }
+        for (const spec of dynamicImports(fn.body)) {
+          const file = spec && resolveSpec(spec, target.rel).file;
+          if (!file) return false;
+          deps.add(file);
+        }
+        // A condition selects between views at the mount as well. Only direct
+        // reads of imported values and literal constants have known dependencies.
+        function argumentDeps(n, seen) {
+          n = unwrap(n);
+          if (ts.isPropertyAccessExpression(n) || ts.isTypeOfExpression(n)) return argumentDeps(n.expression, seen);
+          if (ts.isIdentifier(n)) {
+            if (n.text === 'undefined') return true;
+            const imp = imports.get(n.text);
+            if (imp) {
+              const { file, external } = importedFile(n.text);
+              if (file) deps.add(file);
+              return Boolean(file || external);
+            }
+            const init = factsOf(rel).consts.get(n.text);
+            return init && !seen.has(init) && wrapperCondition(ts, init, unwrap) && argumentDeps(init, new Set([...seen, init]));
+          }
+          return !ts.forEachChild(n, child => !argumentDeps(child, seen) || undefined);
+        }
+        for (const [i, arg] of call.arguments.entries()) {
+          if (i !== proof.input && !argumentDeps(arg, new Set())) return false;
+        }
+        tableUses(rel, argument.text).add(argument);
+        let declaration = array.parent;
+        while (!ts.isVariableDeclaration(declaration)) declaration = declaration.parent;
+        tableUses(table.rel, table.name).add(declaration.name);
+        for (const dep of deps) if (!wrapperBoundaries.has(dep)) wrapperBoundaries.set(dep, new Set());
+        for (const map of proof.maps) checkedMaps.add(map);
+        permit(rel, call.expression);
+        for (const [i, arg] of call.arguments.entries()) if (i !== proof.input) permit(rel, arg);
+        if (!mountedFunctions.has(fn)) mountedFunctions.set(fn, { rel: target.rel, name: target.name, uses: new Set() });
+        mountedFunctions.get(fn).uses.add(call.expression);
+
+        activeTables.add(array);
+        for (const item of array.elements) {
+          const obj = unwrap(item);
+          const raw = propOf(obj, 'path');
+          if (raw !== undefined && !isLiteral(raw)) {
+            fail(call, 'wrapper input has a non-literal path');
+            continue;
+          }
+          const full = normalizePattern(raw ? joinPath(prefix, raw.text) : prefix, basePath);
+          const scope = propOf(obj, 'children') === undefined ? full : (full ? `${full}/*` : '*');
+          for (const dep of deps) addEntry(scope, dep);
+          readers.get(table.rel).route(obj, prefix);
+        }
+        activeTables.delete(array);
+        return true;
+      }
+
       // Every element of a route list is an object literal (a route), a spread of a const array, or a const route object.
       const routeList = (arr, prefix) => {
         for (const raw of arr.elements) {
@@ -257,7 +393,7 @@ export const reactRouterLazy = {
           } else if (ts.isSpreadElement(el)) {
             const expr = unwrap(el.expression);
             if (ts.isIdentifier(expr)) reference(el, expr.text, 'array', prefix, 'spread of');
-            else fail(el, 'spread of a non-identifier expression');
+            else if (!wrapped(expr, prefix)) fail(el, 'spread of a non-identifier expression');
           } else if (ts.isIdentifier(el)) {
             reference(el, el.text, 'object', prefix, 'route identifier');
           } else {
@@ -305,7 +441,7 @@ export const reactRouterLazy = {
         }
         if (children === undefined) return;
         if (ts.isArrayLiteralExpression(children)) routeList(children, abs);
-        else fail(children, `children is not an array literal (route '${full}')`);
+        else if (!wrapped(children, abs)) fail(children, `children is not an array literal (route '${full}')`);
       };
 
       // A route list handed to `createBrowserRouter(...)` and friends.
@@ -335,13 +471,13 @@ export const reactRouterLazy = {
         } else if (ts.isCallExpression(node)) {
           const callee = unwrap(node.expression);
           if (ts.isIdentifier(callee) && ROUTER_FNS.has(callee.text)) routerCall(node);
-          else if (node.arguments.some(hasRouteObject)) fail(node, `route objects passed to ${callee.getText(sf)}(...) cannot be read`);
+          else if (node.arguments.some(hasRouteObject)) unknownCalls.set(node, () => fail(node, `route objects passed to ${callee.getText(sf)}(...) cannot be read`));
           else ts.forEachChild(node, (c) => walk(c, prefix));
         } else {
           ts.forEachChild(node, (c) => walk(c, prefix));
         }
       };
-      walk(sf, '/');
+      readers.set(rel, { route, walk });
 
       let jsxRoute = null;
       const scan = (n) => {
@@ -352,7 +488,62 @@ export const reactRouterLazy = {
       if (jsxRoute) fail(jsxRoute, 'JSX <Route> is not supported by this adapter (use the manual adapter)');
     }
 
+    for (const [rel, sf] of parsed) readModule(rel, sf);
+    for (const [rel, sf] of parsed) readers.get(rel).walk(sf, '/');
+    for (const [call, report] of unknownCalls) if (!checkedMaps.has(call)) report();
+
+    // An entry normally stops climbing at a route table. A guard or helper can
+    // also serve the shell. Only stop this particular edge if every import and
+    // every use of the module in that table belongs to a recognized mount.
+    function allUsesCovered(sf, names, allowed, extra = () => false) {
+      function outside(n) {
+        if (allowed.has(n) || ts.isImportDeclaration(n) || ts.isTypeNode(n)) return false;
+        if (ts.isIdentifier(n) && names.has(n.text)) {
+          if (n.parent.name === n && (ts.isPropertyAccessExpression(n.parent) || ts.isPropertyAssignment(n.parent))) return false;
+          return !extra(n);
+        }
+        return ts.forEachChild(n, outside);
+      }
+      return !outside(sf);
+    }
+    for (const { rel, name, uses } of mountedTables.values()) {
+      const safeReference = n => listReferences.has(n) || ts.isExportSpecifier(n.parent);
+      if (!allUsesCovered(parsed.get(rel), new Set([name]), uses, safeReference)) {
+        unresolved.add(`${rel}: wrapped input '${name}' has a use outside a route list or proven wrapper`);
+      }
+    }
+    for (const [fn, { rel, name, uses }] of mountedFunctions) {
+      const source = parsed.get(rel) ?? helperFiles.get(rel);
+      let declaration = fn;
+      while (declaration && !ts.isVariableDeclaration(declaration) && !ts.isFunctionDeclaration(declaration)) declaration = declaration.parent;
+      const allowed = new Set([...uses, declaration?.name]);
+      if (!allUsesCovered(source, new Set([name]), allowed, n => ts.isExportSpecifier(n.parent))) {
+        unresolved.add(`${rel}: wrapper '${name}' has a use outside a proven mount`);
+      } else if (parsed.has(rel) && ![...factsOf(rel).exportedAs.values()].includes(name)) {
+        permit(rel, fn.body);
+      }
+    }
+    for (const [rel, allowed] of permittedUses) {
+      const sf = parsed.get(rel);
+      const edges = scanModule(ts, sf);
+      if (edges.opaque || edges.globs.length || edges.templates.length || edges.contexts.length || edges.urls.length) continue;
+      const importsByFile = new Map();
+      for (const st of sf.statements) {
+        if (!ts.isImportDeclaration(st) || !st.importClause) continue;
+        const { file } = resolveSpec(st.moduleSpecifier.text, rel);
+        if (!wrapperBoundaries.has(file)) continue;
+        if (!importsByFile.has(file)) importsByFile.set(file, { names: new Set(), count: 0 });
+        const group = importsByFile.get(file);
+        group.count++;
+        for (const [name, imp] of factsOf(rel).imports) if (imp.spec === st.moduleSpecifier.text) group.names.add(name);
+      }
+      for (const [file, { names, count }] of importsByFile) {
+        if (edges.specs.filter(s => resolveSpec(s.split('?')[0], rel).file === file).length === count
+          && allUsesCovered(sf, names, allowed)) wrapperBoundaries.get(file).add(rel);
+      }
+    }
+
     for (const e of statics.values()) if (!nonLeaf.has(e.file)) entries.set(`${e.route}\0${e.file}`, e);
-    return { entries: [...entries.values()], unresolved: [...unresolved] };
+    return { entries: [...entries.values()], unresolved: [...unresolved], wrapperBoundaries };
   },
 };

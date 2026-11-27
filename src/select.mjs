@@ -137,7 +137,7 @@ function narrow(config, app, p, c) {
 
   for (const u of unresolvedEntries) widen(`adapter-unresolved:${u}`);
   const boundary = walk(dirAbs).filter((rel) => matchAny(app.adapter.routeFiles, rel)); // R28: the route tables
-  const { entries: hit, unresolved, shell } = affectedEntries(graph, p.src, entries.map((e) => e.file), main, boundary);
+  const { entries: hit, unresolved, shell } = affectedEntries(graph, p.src, entries.map((e) => e.file), main, boundary, c.wrapperBoundaries);
   for (const f of unresolved) widen(`graph-unresolved:${f}`);
   for (const f of shell) widen(`graph-shell:${f}`);
   if (p.mode === 'full') return;
@@ -220,10 +220,10 @@ function appContext({ config, ts }) {
   return {
     forApp: async (app) => {
       const t = ts ?? await loadTypeScript(appDir(config, app));
-      const { entries, unresolved } = getAdapter(app.adapter.name).routeEntries({ config, app, ts: t });
+      const { entries, unresolved, wrapperBoundaries } = getAdapter(app.adapter.name).routeEntries({ config, app, ts: t });
       const index = await loadOrBuildSpecIndex({ config, app, ts: t });
       const graph = await loadOrBuildGraph({ config, app, ts: t });
-      return { index, graph, entries, unresolvedEntries: unresolved, main: findMain(config, app) };
+      return { index, graph, entries, unresolvedEntries: unresolved, wrapperBoundaries, main: findMain(config, app) };
     },
   };
 }
